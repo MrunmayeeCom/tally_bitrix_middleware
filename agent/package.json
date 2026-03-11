@@ -55,18 +55,18 @@
 
     "extraResources": [
       {
-        "from":   "../src",
-        "to":     "middleware/src",
+        "from": "../src",
+        "to": "middleware/src",
         "filter": ["**/*"]
       },
       {
-        "from":   "../node_modules",
-        "to":     "middleware/node_modules",
+        "from": "../node_modules",
+        "to": "middleware/node_modules",
         "filter": ["**/*"]
       },
       {
-        "from":   "../package.json",
-        "to":     "middleware/package.json"
+        "from": "../package.json",
+        "to": "middleware/package.json"
       }
     ]
   }
