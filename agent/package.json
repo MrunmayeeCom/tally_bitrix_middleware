@@ -3,11 +3,15 @@
   "version": "1.0.0",
   "description": "TallyBitrixSync — Tally ERP ↔ Bitrix24 CRM Desktop Agent",
   "main": "main.js",
-  "author": "Rajlaxmi Solutions",
-  "license": "MIT",
+  "author": {
+    "name":  "Rajlaxmi Solutions Private Limited",
+    "email": "support@rajlaxmi.com",
+    "url":   "https://rajlaxmi.com"
+  },
+  "license": "UNLICENSED",
   "scripts": {
-    "start":   "electron .",
-    "build":   "electron-builder --win --x64",
+    "start":           "electron .",
+    "build":           "electron-builder --win --x64",
     "build:installer": "electron-builder --win nsis --x64"
   },
   "dependencies": {
@@ -18,41 +22,51 @@
     "electron-builder": "^24.0.0"
   },
   "build": {
-    "appId":       "com.rajlaxmi.tallybитрикссync",
-    "productName": "TallyBitrixSync",
-    "copyright":   "© 2026 Rajlaxmi Solutions",
+    "appId":            "com.rajlaxmi.tallybitrixsync",
+    "productName":      "TallyBitrixSync",
+    "copyright":        "© 2026 Rajlaxmi Solutions Private Limited. All rights reserved.",
+    "forceCodeSigning": false,
+
     "directories": {
       "output": "dist"
     },
+
     "win": {
-      "target":         "nsis",
-      "icon":           "assets/icon.ico",
-      "requestedExecutionLevel": "requireAdministrator"
+      "target":                  "nsis",
+      "icon":                    "assets/icon.ico",
+      "requestedExecutionLevel": "requireAdministrator",
+      "publisherName":           "Rajlaxmi Solutions Private Limited",
+      "legalTrademarks":         "TallyBitrixSync is a trademark of Rajlaxmi Solutions Pvt Ltd",
+      "fileAssociations":        [],
+      "sign":                    null,
+      "signingHashAlgorithms":   null
     },
+
     "nsis": {
-      "oneClick":           false,
+      "oneClick":                           false,
       "allowToChangeInstallationDirectory": true,
-      "installerIcon":      "assets/icon.ico",
-      "uninstallerIcon":    "assets/icon.ico",
-      "installerHeaderIcon":"assets/icon.ico",
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName":       "TallyBitrixSync"
+      "installerIcon":                      "assets/icon.ico",
+      "uninstallerIcon":                    "assets/icon.ico",
+      "installerHeaderIcon":                "assets/icon.ico",
+      "createDesktopShortcut":              true,
+      "createStartMenuShortcut":            true,
+      "shortcutName":                       "TallyBitrixSync"
     },
+
     "extraResources": [
       {
-        "from": "../src",
-        "to":   "middleware/src",
+        "from":   "../src",
+        "to":     "middleware/src",
         "filter": ["**/*"]
       },
       {
-        "from": "../node_modules",
-        "to":   "middleware/node_modules",
+        "from":   "../node_modules",
+        "to":     "middleware/node_modules",
         "filter": ["**/*"]
       },
       {
-        "from": "../package.json",
-        "to":   "middleware/package.json"
+        "from":   "../package.json",
+        "to":     "middleware/package.json"
       }
     ]
   }
