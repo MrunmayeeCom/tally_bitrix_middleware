@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>TallyBitrixSync</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+
+  *{margin:0;padding:0;box-sizing:border-box;}
+
+  :root{
+    --bg:        #0d0f14;
+    --surface:   #141720;
+    --border:    #1e2330;
+    --border2:   #252a3a;
+    --text:      #e8ecf4;
+    --muted:     #5a6278;
+    --accent:    #4f7bff;
+    --accent2:   #38d9a9;
+    --danger:    #ff5c6a;
+    --warn:      #ffb347;
+    --radius:    12px;
+  }
+
+  html,body{
+    width:520px;height:680px;overflow:hidden;
+    background:var(--bg);color:var(--text);
+    font-family:'DM Sans',sans-serif;font-size:14px;
+    user-select:none;
+  }
+
+  /* titlebar */
+  .titlebar{
+    height:40px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 16px;-webkit-app-region:drag;
+    border-bottom:1px solid var(--border);
+    background:var(--surface);
+  }
+  .titlebar-logo{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;letter-spacing:.3px;}
+  .titlebar-logo .dot{width:8px;height:8px;border-radius:50%;background:var(--accent2);box-shadow:0 0 8px var(--accent2);}
+  .titlebar-actions{display:flex;gap:6px;-webkit-app-region:no-drag;}
+  .tb-btn{width:12px;height:12px;border-radius:50%;border:none;cursor:pointer;transition:.2s;}
+  .tb-close{background:#ff5f57;} .tb-close:hover{background:#ff3b30;}
+  .tb-min{background:#febc2e;}   .tb-min:hover{background:#f5a623;}
+
+  /* pages */
+  .page{display:none;height:640px;overflow:hidden;}
+  .page.active{display:flex;flex-direction:column;}
+
+  /* ── SETUP PAGE ── */
+  .setup-hero{
+    padding:32px 32px 20px;text-align:center;
+    background:linear-gradient(160deg,#0d1526 0%,#0d0f14 60%);
+    border-bottom:1px solid var(--border);
+  }
+  .setup-hero .logo-ring{
+    width:64px;height:64px;border-radius:50%;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    display:flex;align-items:center;justify-content:center;
+    margin:0 auto 16px;font-size:28px;
+    box-shadow:0 0 32px rgba(79,123,255,.3);
+  }
+  .setup-hero h1{font-size:20px;font-weight:600;margin-bottom:6px;}
+  .setup-hero p{color:var(--muted);font-size:13px;line-height:1.5;}
+
+  .setup-body{padding:24px 32px;flex:1;overflow-y:auto;}
+
+  .steps{display:flex;gap:0;margin-bottom:28px;}
+  .step{flex:1;text-align:center;position:relative;}
+  .step::after{content:'';position:absolute;top:14px;left:50%;width:100%;height:1px;background:var(--border2);z-index:0;}
+  .step:last-child::after{display:none;}
+  .step-dot{
+    width:28px;height:28px;border-radius:50%;
+    background:var(--border2);border:2px solid var(--border2);
+    display:flex;align-items:center;justify-content:center;
+    margin:0 auto 6px;font-size:11px;font-weight:600;
+    position:relative;z-index:1;transition:.3s;
+  }
+  .step.active .step-dot{background:var(--accent);border-color:var(--accent);box-shadow:0 0 12px rgba(79,123,255,.4);}
+  .step.done .step-dot{background:var(--accent2);border-color:var(--accent2);}
+  .step-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;}
+  .step.active .step-label{color:var(--accent);}
+  .step.done .step-label{color:var(--accent2);}
+
+  /* step panels */
+  .step-panel{display:none;} .step-panel.active{display:block;}
+
+  .field{margin-bottom:16px;}
+  .field label{display:block;font-size:12px;font-weight:500;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;}
+  .field input{
+    width:100%;padding:10px 14px;
+    background:var(--surface);border:1px solid var(--border2);
+    border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;
+    outline:none;transition:.2s;
+  }
+  .field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(79,123,255,.1);}
+  .field input::placeholder{color:var(--muted);}
+  .field-row{display:grid;grid-template-columns:1fr 100px;gap:12px;}
+
+  .hint{font-size:11px;color:var(--muted);margin-top:4px;}
+
+  /* test results */
+  .test-results{
+    border-radius:8px;border:1px solid var(--border2);
+    overflow:hidden;margin-bottom:16px;display:none;
+  }
+  .test-results.visible{display:block;}
+  .test-row{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:10px 14px;border-bottom:1px solid var(--border);
+  }
+  .test-row:last-child{border-bottom:none;}
+  .test-label{font-size:13px;display:flex;align-items:center;gap:8px;}
+  .test-status{font-size:12px;font-family:'DM Mono',monospace;padding:2px 8px;border-radius:4px;}
+  .test-status.ok{background:rgba(56,217,169,.15);color:var(--accent2);}
+  .test-status.fail{background:rgba(255,92,106,.15);color:var(--danger);}
+  .test-status.checking{background:rgba(79,123,255,.15);color:var(--accent);}
+
+  /* buttons */
+  .btn{
+    width:100%;padding:12px;border-radius:8px;border:none;
+    font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;
+    cursor:pointer;transition:.2s;margin-bottom:8px;
+  }
+  .btn-primary{background:var(--accent);color:#fff;}
+  .btn-primary:hover{background:#3d6be0;box-shadow:0 4px 16px rgba(79,123,255,.3);}
+  .btn-primary:disabled{background:var(--border2);color:var(--muted);cursor:not-allowed;box-shadow:none;}
+  .btn-outline{background:transparent;color:var(--text);border:1px solid var(--border2);}
+  .btn-outline:hover{border-color:var(--accent);color:var(--accent);}
+  .btn-success{background:var(--accent2);color:#0d0f14;}
+  .btn-success:hover{background:#2ec99a;}
+
+  .btn-loader{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  /* success */
+  .success-screen{text-align:center;padding:40px 32px;}
+  .success-icon{font-size:56px;margin-bottom:16px;animation:pop .5s cubic-bezier(.34,1.56,.64,1);}
+  @keyframes pop{from{transform:scale(0);opacity:0;}to{transform:scale(1);opacity:1;}}
+  .success-screen h2{font-size:22px;font-weight:600;margin-bottom:8px;}
+  .success-screen p{color:var(--muted);line-height:1.6;margin-bottom:24px;}
+  .feature-list{text-align:left;background:var(--surface);border-radius:8px;padding:16px;border:1px solid var(--border2);}
+  .feature-item{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13px;}
+  .feature-item .fi{color:var(--accent2);}
+
+  /* ── DASHBOARD PAGE ── */
+  .dash-body{padding:20px 24px;flex:1;overflow-y:auto;}
+
+  .status-card{
+    background:var(--surface);border:1px solid var(--border2);
+    border-radius:var(--radius);padding:20px;margin-bottom:16px;
+    display:flex;align-items:center;justify-content:space-between;
+  }
+  .status-left{display:flex;align-items:center;gap:14px;}
+  .status-indicator{
+    width:48px;height:48px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;font-size:22px;
+  }
+  .status-indicator.running{background:rgba(56,217,169,.15);box-shadow:0 0 16px rgba(56,217,169,.2);}
+  .status-indicator.stopped{background:rgba(255,92,106,.15);}
+  .status-title{font-weight:600;font-size:15px;margin-bottom:2px;}
+  .status-sub{font-size:12px;color:var(--muted);}
+
+  .action-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+  .action-card{
+    background:var(--surface);border:1px solid var(--border2);
+    border-radius:var(--radius);padding:16px;cursor:pointer;
+    transition:.2s;text-align:center;
+  }
+  .action-card:hover{border-color:var(--accent);background:#141d30;}
+  .action-card .ac-icon{font-size:24px;margin-bottom:8px;}
+  .action-card .ac-label{font-size:13px;font-weight:500;}
+  .action-card .ac-sub{font-size:11px;color:var(--muted);margin-top:2px;}
+
+  .section-title{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:10px;font-weight:500;}
+
+  .log-box{
+    background:var(--surface);border:1px solid var(--border2);
+    border-radius:var(--radius);padding:14px;
+    font-family:'DM Mono',monospace;font-size:11px;
+    color:#7a8aaa;line-height:1.7;max-height:180px;overflow-y:auto;
+  }
+  .log-line.info{color:#5a7aaa;}
+  .log-line.error{color:var(--danger);}
+  .log-line.success{color:var(--accent2);}
+
+  /* ── SETTINGS PAGE ── */
+  .settings-body{padding:24px 32px;flex:1;overflow-y:auto;}
+
+  /* scrollbar */
+  ::-webkit-scrollbar{width:4px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px;}
+
+  /* notifications */
+  .toast{
+    position:fixed;bottom:16px;left:50%;transform:translateX(-50%) translateY(100px);
+    background:#1e2a3a;border:1px solid var(--border2);border-radius:8px;
+    padding:10px 18px;font-size:13px;transition:.3s;z-index:999;white-space:nowrap;
+  }
+  .toast.show{transform:translateX(-50%) translateY(0);}
+  .toast.success{border-color:var(--accent2);color:var(--accent2);}
+  .toast.error{border-color:var(--danger);color:var(--danger);}
+</style>
+</head>
+<body>
+
+<!-- Titlebar -->
+<div class="titlebar">
+  <div class="titlebar-logo">
+    <div class="dot"></div>
+    TallyBitrixSync
+  </div>
+  <div class="titlebar-actions">
+    <button class="tb-btn tb-min"  onclick="ipcRenderer.send('minimize-window')"></button>
+    <button class="tb-btn tb-close" onclick="ipcRenderer.send('close-window')"></button>
+  </div>
+</div>
+
+<!-- ══════════════════ SETUP PAGE ══════════════════ -->
+<div class="page active" id="page-setup">
+  <div class="setup-hero">
+    <div class="logo-ring">⚡</div>
+    <h1>Welcome to TallyBitrixSync</h1>
+    <p>Connect your Tally ERP with Bitrix24 CRM in minutes.<br/>Syncs run automatically in the background.</p>
+  </div>
+
+  <div class="setup-body">
+    <!-- Step indicator -->
+    <div class="steps">
+      <div class="step active" id="step-ind-1"><div class="step-dot">1</div><div class="step-label">Bitrix24</div></div>
+      <div class="step"        id="step-ind-2"><div class="step-dot">2</div><div class="step-label">Tally</div></div>
+      <div class="step"        id="step-ind-3"><div class="step-dot">3</div><div class="step-label">Test</div></div>
+      <div class="step"        id="step-ind-4"><div class="step-dot">✓</div><div class="step-label">Install</div></div>
+    </div>
+
+    <!-- Step 1: Bitrix24 -->
+    <div class="step-panel active" id="panel-1">
+      <div class="field">
+        <label>Bitrix24 Webhook URL</label>
+        <input id="bitrixUrl" type="text" placeholder="https://yourcompany.bitrix24.com/rest/USER/TOKEN/" autocomplete="off"/>
+        <div class="hint">Find this in Bitrix24 → Developer Resources → Other → Inbound Webhook</div>
+      </div>
+      <button class="btn btn-primary" onclick="goStep(2)">Continue →</button>
+    </div>
+
+    <!-- Step 2: Tally -->
+    <div class="step-panel" id="panel-2">
+      <div class="field-row">
+        <div class="field">
+          <label>Tally Host</label>
+          <input id="tallyHost" type="text" placeholder="localhost" value="localhost"/>
+        </div>
+        <div class="field">
+          <label>Port</label>
+          <input id="tallyPort" type="number" placeholder="9000" value="9000"/>
+        </div>
+      </div>
+      <div class="field">
+        <label>Tally Company Name</label>
+        <input id="tallyCompany" type="text" placeholder="Exact name as shown in Tally"/>
+        <div class="hint">Must match exactly — case sensitive</div>
+      </div>
+      <button class="btn btn-primary" onclick="goStep(3)">Continue →</button>
+      <button class="btn btn-outline" onclick="goStep(1)">← Back</button>
+    </div>
+
+    <!-- Step 3: Test -->
+    <div class="step-panel" id="panel-3">
+      <p style="color:var(--muted);font-size:13px;margin-bottom:16px;line-height:1.5;">
+        Let's verify both connections before installing. Make sure Tally is open with your company loaded.
+      </p>
+      <div class="test-results" id="test-results">
+        <div class="test-row">
+          <span class="test-label">🌐 Bitrix24</span>
+          <span class="test-status" id="t-bitrix">—</span>
+        </div>
+        <div class="test-row">
+          <span class="test-label">📊 Tally ERP</span>
+          <span class="test-status" id="t-tally">—</span>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btn-test" onclick="runTests()">Run Connection Test</button>
+      <button class="btn btn-success" id="btn-install" style="display:none" onclick="goStep(4)">All Good — Install Now ✓</button>
+      <button class="btn btn-outline" onclick="goStep(2)">← Back</button>
+    </div>
+
+    <!-- Step 4: Installing -->
+    <div class="step-panel" id="panel-4">
+      <div class="success-screen" id="installing-screen">
+        <div style="font-size:48px;margin-bottom:16px;">⚙️</div>
+        <h2>Installing Service…</h2>
+        <p style="color:var(--muted);">Setting up Windows Service and creating Bitrix24 pipeline. This may take a moment.</p>
+        <div style="margin-top:20px;"><span class="btn-loader"></span> Please wait…</div>
+      </div>
+      <div class="success-screen" id="success-screen" style="display:none">
+        <div class="success-icon">🎉</div>
+        <h2>You're All Set!</h2>
+        <p>TallyBitrixSync is now running silently in the background. You'll see it in your system tray.</p>
+        <div class="feature-list">
+          <div class="feature-item"><span class="fi">✅</span> Windows Service registered</div>
+          <div class="feature-item"><span class="fi">✅</span> Tally Outstanding pipeline created</div>
+          <div class="feature-item"><span class="fi">✅</span> Webhooks configured</div>
+          <div class="feature-item"><span class="fi">✅</span> Auto-sync at 9 AM &amp; 11 PM IST</div>
+          <div class="feature-item"><span class="fi">✅</span> Starts automatically with Windows</div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:20px" onclick="showDashboard()">Open Dashboard →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════ DASHBOARD PAGE ══════════════════ -->
+<div class="page" id="page-dashboard">
+  <div class="dash-body">
+    <div class="status-card" id="status-card">
+      <div class="status-left">
+        <div class="status-indicator running" id="status-icon">⚡</div>
+        <div>
+          <div class="status-title" id="status-title">Service Running</div>
+          <div class="status-sub"   id="status-sub">Syncing automatically</div>
+        </div>
+      </div>
+      <div id="status-badge" style="font-size:11px;padding:4px 10px;border-radius:20px;background:rgba(56,217,169,.15);color:#38d9a9;font-weight:500;">LIVE</div>
+    </div>
+
+    <div class="action-grid">
+      <div class="action-card" onclick="syncNow()">
+        <div class="ac-icon">🔄</div>
+        <div class="ac-label">Sync Now</div>
+        <div class="ac-sub">Trigger manual sync</div>
+      </div>
+      <div class="action-card" onclick="refreshLogs()">
+        <div class="ac-icon">📋</div>
+        <div class="ac-label">Refresh Logs</div>
+        <div class="ac-sub">View latest activity</div>
+      </div>
+      <div class="action-card" onclick="navigateTo('settings')">
+        <div class="ac-icon">⚙️</div>
+        <div class="ac-label">Settings</div>
+        <div class="ac-sub">Change configuration</div>
+      </div>
+      <div class="action-card" id="svc-toggle-card" onclick="toggleService()">
+        <div class="ac-icon" id="svc-icon">⏹</div>
+        <div class="ac-label" id="svc-label">Stop Service</div>
+        <div class="ac-sub" id="svc-sub">Pause all syncing</div>
+      </div>
+    </div>
+
+    <div class="section-title">Recent Logs</div>
+    <div class="log-box" id="log-box">Loading logs…</div>
+  </div>
+</div>
+
+<!-- ══════════════════ SETTINGS PAGE ══════════════════ -->
+<div class="page" id="page-settings">
+  <div class="settings-body">
+    <div style="margin-bottom:24px;">
+      <div style="font-size:16px;font-weight:600;margin-bottom:4px;">Settings</div>
+      <div style="font-size:13px;color:var(--muted);">Update your connection details. Requires service restart.</div>
+    </div>
+    <div class="field">
+      <label>Bitrix24 Webhook URL</label>
+      <input id="s-bitrixUrl" type="text"/>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Tally Host</label><input id="s-tallyHost" type="text"/></div>
+      <div class="field"><label>Port</label><input id="s-tallyPort" type="number"/></div>
+    </div>
+    <div class="field">
+      <label>Tally Company</label>
+      <input id="s-tallyCompany" type="text"/>
+    </div>
+    <button class="btn btn-primary" onclick="saveSettings()">Save & Restart Service</button>
+    <button class="btn btn-outline" onclick="navigateTo('dashboard')">← Back</button>
+
+    <div style="margin-top:24px;padding-top:24px;border-top:1px solid var(--border2);">
+      <div class="section-title">Danger Zone</div>
+      <button class="btn btn-outline" style="color:var(--danger);border-color:var(--danger);" onclick="uninstallService()">Uninstall Windows Service</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+const { ipcRenderer } = require('electron');
+
+// ── navigation ────────────────────────────────────────────────────────────────
+function navigateTo(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  if (page === 'dashboard') loadDashboard();
+  if (page === 'settings')  loadSettings();
+}
+
+ipcRenderer.on('navigate', (_, page) => navigateTo(page));
+ipcRenderer.on('config',   (_, cfg)  => { if (cfg) prefillSetup(cfg); });
+
+function prefillSetup(cfg) {
+  if (cfg.bitrixUrl)     document.getElementById('bitrixUrl').value     = cfg.bitrixUrl;
+  if (cfg.tallyHost)     document.getElementById('tallyHost').value     = cfg.tallyHost;
+  if (cfg.tallyPort)     document.getElementById('tallyPort').value     = cfg.tallyPort;
+  if (cfg.tallyCompany)  document.getElementById('tallyCompany').value  = cfg.tallyCompany;
+}
+
+// ── setup wizard ──────────────────────────────────────────────────────────────
+let currentStep = 1;
+
+function goStep(n) {
+  // Validate current step
+  if (n === 2) {
+    const url = document.getElementById('bitrixUrl').value.trim();
+    if (!url || !url.includes('bitrix24')) { showToast('Please enter a valid Bitrix24 webhook URL', 'error'); return; }
+  }
+  if (n === 3) {
+    const host    = document.getElementById('tallyHost').value.trim();
+    const port    = document.getElementById('tallyPort').value.trim();
+    const company = document.getElementById('tallyCompany').value.trim();
+    if (!host || !port || !company) { showToast('Please fill all Tally fields', 'error'); return; }
+  }
+  if (n === 4) { installService(); return; }
+
+  document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + n).classList.add('active');
+
+  // Update step indicators
+  for (let i = 1; i <= 4; i++) {
+    const ind = document.getElementById('step-ind-' + i);
+    ind.classList.remove('active','done');
+    if (i < n)  ind.classList.add('done');
+    if (i === n) ind.classList.add('active');
+  }
+  currentStep = n;
+}
+
+async function runTests() {
+  const cfg = getFormConfig();
+  document.getElementById('test-results').classList.add('visible');
+  document.getElementById('btn-test').innerHTML = '<span class="btn-loader"></span> Testing…';
+  document.getElementById('btn-test').disabled = true;
+
+  const tb = document.getElementById('t-bitrix');
+  const tt = document.getElementById('t-tally');
+  tb.textContent = 'Checking…'; tb.className = 'test-status checking';
+  tt.textContent = 'Checking…'; tt.className = 'test-status checking';
+
+  try {
+    const results = await ipcRenderer.invoke('test-connections', cfg);
+
+    tb.textContent = results.bitrix ? 'Connected ✓' : `Failed: ${results.bitrixError||'Error'}`;
+    tb.className   = 'test-status ' + (results.bitrix ? 'ok' : 'fail');
+
+    tt.textContent = results.tally  ? 'Connected ✓' : `Failed: ${results.tallyError||'Error'}`;
+    tt.className   = 'test-status ' + (results.tally  ? 'ok' : 'fail');
+
+    if (results.bitrix && results.tally) {
+      document.getElementById('btn-install').style.display = 'block';
+      showToast('Both connections successful!', 'success');
+    } else {
+      showToast('Check your connection details and try again', 'error');
+    }
+  } catch(e) {
+    showToast('Test failed: ' + e.message, 'error');
+  }
+
+  document.getElementById('btn-test').innerHTML = 'Run Connection Test Again';
+  document.getElementById('btn-test').disabled = false;
+}
+
+async function installService() {
+  document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-4').classList.add('active');
+
+  const cfg = getFormConfig();
+  try {
+    const result = await ipcRenderer.invoke('install-service', cfg);
+    document.getElementById('installing-screen').style.display = 'none';
+    document.getElementById('success-screen').style.display    = 'block';
+  } catch(e) {
+    showToast('Install failed: ' + e.message, 'error');
+  }
+}
+
+function showDashboard() { navigateTo('dashboard'); }
+
+function getFormConfig() {
+  return {
+    bitrixUrl:    document.getElementById('bitrixUrl').value.trim(),
+    tallyHost:    document.getElementById('tallyHost').value.trim()   || 'localhost',
+    tallyPort:    parseInt(document.getElementById('tallyPort').value) || 9000,
+    tallyCompany: document.getElementById('tallyCompany').value.trim(),
+  };
+}
+
+// ── dashboard ─────────────────────────────────────────────────────────────────
+async function loadDashboard() {
+  const status = await ipcRenderer.invoke('get-status');
+  const running = status.running;
+
+  document.getElementById('status-icon').textContent  = running ? '⚡' : '⏸';
+  document.getElementById('status-icon').className    = 'status-indicator ' + (running ? 'running' : 'stopped');
+  document.getElementById('status-title').textContent = running ? 'Service Running' : 'Service Stopped';
+  document.getElementById('status-sub').textContent   = running ? 'Syncing at 9 AM & 11 PM IST' : 'Click Start Service to resume';
+  document.getElementById('status-badge').textContent = running ? 'LIVE' : 'OFFLINE';
+  document.getElementById('status-badge').style.background = running ? 'rgba(56,217,169,.15)' : 'rgba(255,92,106,.15)';
+  document.getElementById('status-badge').style.color      = running ? '#38d9a9' : '#ff5c6a';
+
+  document.getElementById('svc-icon').textContent  = running ? '⏹' : '▶';
+  document.getElementById('svc-label').textContent = running ? 'Stop Service' : 'Start Service';
+  document.getElementById('svc-sub').textContent   = running ? 'Pause all syncing' : 'Resume syncing';
+
+  refreshLogs();
+}
+
+async function refreshLogs() {
+  const logs = await ipcRenderer.invoke('get-logs');
+  const box = document.getElementById('log-box');
+  const lines = logs.split('\n').filter(Boolean).slice(-50);
+  box.innerHTML = lines.map(line => {
+    let cls = 'log-line';
+    if (line.includes('ERROR')) cls += ' error';
+    else if (line.includes('synced') || line.includes('created') || line.includes('complete')) cls += ' success';
+    else cls += ' info';
+    return `<div class="${cls}">${escapeHtml(line)}</div>`;
+  }).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+async function syncNow() {
+  showToast('Sync triggered…', 'success');
+  await ipcRenderer.invoke('trigger-sync');
+  setTimeout(refreshLogs, 3000);
+}
+
+let svcRunning = true;
+async function toggleService() {
+  const status = await ipcRenderer.invoke('get-status');
+  if (status.running) {
+    await ipcRenderer.invoke('stop-service');
+    showToast('Service stopped', 'error');
+  } else {
+    await ipcRenderer.invoke('start-service');
+    showToast('Service started', 'success');
+  }
+  setTimeout(loadDashboard, 1500);
+}
+
+// ── settings ──────────────────────────────────────────────────────────────────
+async function loadSettings() {
+  const status = await ipcRenderer.invoke('get-status');
+  const cfg = status.config || {};
+  document.getElementById('s-bitrixUrl').value    = cfg.bitrixUrl    || '';
+  document.getElementById('s-tallyHost').value    = cfg.tallyHost    || 'localhost';
+  document.getElementById('s-tallyPort').value    = cfg.tallyPort    || 9000;
+  document.getElementById('s-tallyCompany').value = cfg.tallyCompany || '';
+}
+
+async function saveSettings() {
+  const cfg = {
+    bitrixUrl:    document.getElementById('s-bitrixUrl').value.trim(),
+    tallyHost:    document.getElementById('s-tallyHost').value.trim(),
+    tallyPort:    parseInt(document.getElementById('s-tallyPort').value),
+    tallyCompany: document.getElementById('s-tallyCompany').value.trim(),
+  };
+  await ipcRenderer.invoke('install-service', cfg);
+  showToast('Settings saved — service restarting…', 'success');
+  setTimeout(() => navigateTo('dashboard'), 2000);
+}
+
+async function uninstallService() {
+  if (!confirm('Are you sure? This will stop and remove the Windows Service.')) return;
+  await ipcRenderer.invoke('uninstall-service');
+  showToast('Service uninstalled', 'error');
+}
+
+// ── utils ─────────────────────────────────────────────────────────────────────
+function showToast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast ${type} show`;
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>

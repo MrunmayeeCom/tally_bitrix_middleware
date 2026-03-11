@@ -35,34 +35,64 @@ function mapCompanyToLedger(company) {
 }
 
 // Map Bitrix24 Invoice → Tally Voucher
+// Handles crm.item.get (camelCase) and legacy crm.invoice.get (UPPERCASE)
 function mapInvoiceToVoucher(invoice) {
+  const isCamel = invoice.id !== undefined;
+
+  const id           = isCamel ? invoice.id           : invoice.ID;
+  const dateRaw      = isCamel ? invoice.createdTime   : invoice.DATE_CREATE;
+  const closeDateRaw = isCamel ? invoice.closeDate     : invoice.CLOSEDATE;
+  const amount       = isCamel ? invoice.opportunity   : invoice.OPPORTUNITY;
+  const currency     = isCamel ? invoice.currencyId    : invoice.CURRENCY_ID;
+
+  // accountNumber is the Tally-facing invoice number (e.g. "81")
+  // fall back to Bitrix id if not present
+  const voucherNumber = invoice.accountNumber || invoice.ACCOUNT_NUMBER || String(id);
+
+  // partyName: try all known locations; if contactId/companyId > 0
+  // those IDs are available for an enrichment call if needed
+  const partyName =
+    invoice.CLIENT_TITLE  ||
+    invoice.clientTitle   ||
+    (invoice.contactId  > 0 ? `Contact#${invoice.contactId}`  : null) ||
+    (invoice.companyId  > 0 ? `Company#${invoice.companyId}`  : null) ||
+    invoice.title         ||   // e.g. "Invoice #164" as last resort
+    '';
+
   return {
     voucherType:   'Sales',
-    voucherNumber: invoice.ID,
-    date:          invoice.DATE_CREATE?.split('T')[0] || '',
-    partyName:     invoice.CLIENT_TITLE || '',
-    amount:        parseFloat(invoice.OPPORTUNITY) || 0,
-    currency:      invoice.CURRENCY_ID || 'INR',
-    narration:     `Bitrix24 Invoice #${invoice.ID}`,
-    dueDate:       invoice.CLOSEDATE?.split('T')[0] || '',
-    bitrixId:      invoice.ID
+    voucherNumber,
+    date:          dateRaw?.split('T')[0]      || '',
+    partyName,
+    amount:        parseFloat(amount)          || 0,
+    currency:      currency                    || 'INR',
+    narration:     `Bitrix24 Invoice #${id}`,
+    dueDate:       closeDateRaw?.split('T')[0] || '',
+    bitrixId:      String(id)
   };
 }
 
 // Map Tally Outstanding → Bitrix24 Deal fields
 function mapOutstandingToDeal(outstanding) {
-  return {
-    TITLE:          `Invoice - ${outstanding.voucherNumber}`,
-    OPPORTUNITY:    outstanding.pendingAmount,
-    CURRENCY_ID:    outstanding.currency || 'INR',
-    CLOSEDATE:      outstanding.dueDate || '',
-    COMMENTS:       `Bill Date: ${outstanding.billDate} | Days Pending: ${outstanding.daysPending}`,
-    UF_BILL_DATE:   outstanding.billDate,
-    UF_DUE_DATE:    outstanding.dueDate,
-    UF_BILL_AMOUNT: outstanding.billAmount,
-    UF_OUTSTANDING: outstanding.pendingAmount,
+  const fields = {
+    TITLE:           outstanding.partyName
+                       ? `${outstanding.partyName} - ${outstanding.voucherNumber}`
+                       : `Invoice - ${outstanding.voucherNumber}`,
+    OPPORTUNITY:     outstanding.pendingAmount,
+    CURRENCY_ID:     outstanding.currency || 'INR',
+    CLOSEDATE:       outstanding.dueDate || '',
+    COMMENTS:        `Bill Date: ${outstanding.billDate} | Days Pending: ${outstanding.daysPending}`,
+    UF_BILL_DATE:    outstanding.billDate,
+    UF_DUE_DATE:     outstanding.dueDate,
+    UF_BILL_AMOUNT:  outstanding.billAmount,
+    UF_OUTSTANDING:  outstanding.pendingAmount,
     UF_DAYS_PENDING: outstanding.daysPending
   };
+
+  if (outstanding.bitrixContactId) fields.CONTACT_ID = outstanding.bitrixContactId;
+  if (outstanding.bitrixCompanyId) fields.COMPANY_ID = outstanding.bitrixCompanyId;
+
+  return fields;
 }
 
 module.exports = {

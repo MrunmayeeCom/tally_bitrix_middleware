@@ -1,4 +1,5 @@
 const { callBitrix } = require('../connectors/bitrixConnector');
+const { getTallyPipelineCategoryId } = require('./pipelineService');
 const logger = require('../utils/logger');
 
 // ── Contacts ──────────────────────────────
@@ -33,7 +34,12 @@ async function getCompanies() {
 
 // ── Deals ─────────────────────────────────
 async function createDeal(fields) {
-  logger.info('Creating deal in Bitrix24', { title: fields.TITLE });
+  // Inject Tally pipeline category if available
+  const categoryId = await getTallyPipelineCategoryId();
+  if (categoryId) {
+    fields.CATEGORY_ID = categoryId;
+  }
+  logger.info('Creating deal in Bitrix24', { title: fields.TITLE, categoryId: categoryId || 'default' });
   const result = await callBitrix('crm.deal.add', { fields });
   logger.info('Deal created in Bitrix24', { dealId: result });
   return result;
@@ -65,7 +71,32 @@ async function getInvoice(id) {
     entityTypeId: 31,
     id 
   });
-  return data.result?.item || data.result || data;
+  const item = data.result?.item || data.result || data;
+
+  // Enrich partyName — fetch real contact/company name if linked
+  if (!item.clientTitle && !item.CLIENT_TITLE) {
+    if (item.contactId > 0) {
+      try {
+        const contactData = await callBitrix('crm.contact.get', { id: item.contactId });
+        const c = contactData.result || contactData;
+        item.clientTitle = `${c.NAME || ''} ${c.LAST_NAME || ''}`.trim();
+        logger.info('Invoice contact enriched', { contactId: item.contactId, name: item.clientTitle });
+      } catch (e) {
+        logger.warn('Could not enrich invoice contact', { contactId: item.contactId });
+      }
+    } else if (item.companyId > 0) {
+      try {
+        const companyData = await callBitrix('crm.company.get', { id: item.companyId });
+        const co = companyData.result || companyData;
+        item.clientTitle = co.TITLE || '';
+        logger.info('Invoice company enriched', { companyId: item.companyId, name: item.clientTitle });
+      } catch (e) {
+        logger.warn('Could not enrich invoice company', { companyId: item.companyId });
+      }
+    }
+  }
+
+  return item;
 }
 
 // ── Quotes (entityTypeId 7) ────────────────────────────────────────────
@@ -78,6 +109,13 @@ async function getQuote(id) {
   return data.result?.item || data.result || data;
 }
 
+// ── Pipeline ──────────────────────────────
+async function getPipelines() {
+  logger.info('Fetching pipelines from Bitrix24');
+  const data = await callBitrix('crm.category.list', { entityTypeId: 2 });
+  return data.result?.categories || data.result || [];
+}
+
 module.exports = {
   getContact,
   getContacts,
@@ -88,5 +126,6 @@ module.exports = {
   getDeal,
   getDeals,
   getInvoice,
-  getQuote
+  getQuote,
+  getPipelines
 };

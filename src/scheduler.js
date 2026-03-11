@@ -23,7 +23,7 @@ function startScheduler() {
 
   // Run every day at 9:00 AM as well
   cron.schedule('0 9 * * *', async () => {
-    logger.info('Morning outstanding sync triggered');
+    logger.info('Scheduled outstanding sync triggered');
     try {
       const result = await processOutstanding();
       logger.info('Morning sync completed', result);

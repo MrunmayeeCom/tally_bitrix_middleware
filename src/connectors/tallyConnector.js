@@ -14,8 +14,11 @@ async function sendToTally(xml) {
     logger.info('Tally response received');
     return response.data;
   } catch (error) {
-    logger.error('Tally API error', { message: error.message });
-    throw error;
+    const reason = error.code || error.message || 'unknown';
+    const status = error.response?.status || 'no response';
+    const body   = error.response?.data   || '';
+    logger.error('Tally API error', { code: reason, status, body });
+    throw new Error(`Tally unreachable: ${reason}`);
   }
 }
 

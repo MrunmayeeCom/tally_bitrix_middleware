@@ -1,0 +1,59 @@
+{
+  "name": "tally-bitrix-sync-agent",
+  "version": "1.0.0",
+  "description": "TallyBitrixSync — Tally ERP ↔ Bitrix24 CRM Desktop Agent",
+  "main": "main.js",
+  "author": "Rajlaxmi Solutions",
+  "license": "MIT",
+  "scripts": {
+    "start":   "electron .",
+    "build":   "electron-builder --win --x64",
+    "build:installer": "electron-builder --win nsis --x64"
+  },
+  "dependencies": {
+    "node-windows": "^1.0.0-beta.8"
+  },
+  "devDependencies": {
+    "electron":         "^28.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId":       "com.rajlaxmi.tallybитрикссync",
+    "productName": "TallyBitrixSync",
+    "copyright":   "© 2026 Rajlaxmi Solutions",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target":         "nsis",
+      "icon":           "assets/icon.ico",
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "nsis": {
+      "oneClick":           false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon":      "assets/icon.ico",
+      "uninstallerIcon":    "assets/icon.ico",
+      "installerHeaderIcon":"assets/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName":       "TallyBitrixSync"
+    },
+    "extraResources": [
+      {
+        "from": "../src",
+        "to":   "middleware/src",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../node_modules",
+        "to":   "middleware/node_modules",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../package.json",
+        "to":   "middleware/package.json"
+      }
+    ]
+  }
+}

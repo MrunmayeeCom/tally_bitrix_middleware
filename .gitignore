@@ -1,3 +1,14 @@
 .env
 logs/
+*.log
 node_modules/
+agent/node_modules/
+agent/dist/
+dist/
+
+# Windows Service daemon files
+src/daemon/
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,14 +1,50 @@
 const { getOutstanding } = require('../services/tallyService');
 const { mapOutstandingToDeal } = require('../utils/mapper');
 const { createDeal, updateDeal } = require('../services/bitrixService');
+const { callBitrix } = require('../connectors/bitrixConnector');
 const { daysPending, formatAmount } = require('../utils/helpers');
 const logger = require('../utils/logger');
+
+
+// Match a Tally party name to a Bitrix24 contact or company
+async function findBitrixParty(partyName) {
+  if (!partyName) return {};
+
+  try {
+    // Search contacts first
+    const contactData = await callBitrix('crm.contact.list', {
+      filter: { '%NAME': partyName },
+      select: ['ID', 'NAME', 'LAST_NAME']
+    });
+    const contacts = contactData.result || contactData;
+    if (contacts.length > 0) {
+      logger.info('Matched party to contact', { partyName, contactId: contacts[0].ID });
+      return { bitrixContactId: contacts[0].ID };
+    }
+
+    // Search companies
+    const companyData = await callBitrix('crm.company.list', {
+      filter: { '%TITLE': partyName },
+      select: ['ID', 'TITLE']
+    });
+    const companies = companyData.result || companyData;
+    if (companies.length > 0) {
+      logger.info('Matched party to company', { partyName, companyId: companies[0].ID });
+      return { bitrixCompanyId: companies[0].ID };
+    }
+
+  } catch (e) {
+    logger.warn('Party name lookup failed', { partyName, message: e.message });
+  }
+
+  return {};
+}
 
 async function processOutstanding() {
   try {
     logger.info('Outstanding sync started');
 
-    // Step 1: Fetch outstanding bills from Tally (mock for now)
+    // Step 1: Fetch outstanding bills from Tally
     const outstandingList = await getOutstanding();
 
     if (!outstandingList || outstandingList.length === 0) {
@@ -24,9 +60,13 @@ async function processOutstanding() {
     for (const outstanding of outstandingList) {
       try {
         // Step 2: Enrich with calculated fields
-        outstanding.daysPending  = daysPending(outstanding.dueDate);
+        outstanding.daysPending   = daysPending(outstanding.dueDate);
         outstanding.pendingAmount = formatAmount(outstanding.pendingAmount);
         outstanding.billAmount    = formatAmount(outstanding.billAmount);
+
+        // Step 2b: Match partyName to Bitrix24 contact/company
+        const partyMatch = await findBitrixParty(outstanding.partyName);
+        Object.assign(outstanding, partyMatch);
 
         // Step 3: Map to Bitrix24 deal format
         const dealFields = mapOutstandingToDeal(outstanding);
