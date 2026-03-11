@@ -1,5 +1,7 @@
 const cron = require('node-cron');
 const { processOutstanding } = require('./processors/outstandingProcessor');
+const { processDueDates } = require('./processors/dueDateProcessor');
+const { processTallyToContact } = require('./processors/tallyToContactProcessor');
 const logger = require('./utils/logger');
 
 // ─────────────────────────────────────────
@@ -34,7 +36,31 @@ function startScheduler() {
     timezone: 'Asia/Kolkata'
   });
 
-  logger.info('Scheduler started — Outstanding sync at 9:00 AM and 11:00 PM IST daily');
+  // Run due date automation daily at 9:30 AM
+  cron.schedule('30 9 * * *', async () => {
+    logger.info('Scheduled due date automation triggered');
+    try {
+      await processDueDates();
+    } catch (error) {
+      logger.error('Due date automation failed', { message: error.message });
+    }
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
+  // Tally → Bitrix24 ledger sync every 2 hours
+  cron.schedule('0 */2 * * *', async () => {
+    logger.info('Scheduled Tally → Bitrix24 ledger sync triggered');
+    try {
+      await processTallyToContact();
+    } catch (error) {
+      logger.error('Tally → Bitrix24 sync failed', { message: error.message });
+    }
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
+  logger.info('Scheduler started — Outstanding sync at 9:00 AM and 11:00 PM IST | Due date check at 9:30 AM IST | Tally→Bitrix24 ledger sync every 2 hours');
 }
 
 module.exports = { startScheduler };

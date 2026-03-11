@@ -1,0 +1,115 @@
+const { getDealsInPipeline, getStages, updateDeal, sendNotification } = require('../services/bitrixService');
+const { getTallyPipelineCategoryId } = require('../services/pipelineService');
+const logger = require('../utils/logger');
+
+// ─────────────────────────────────────────
+// Due Date Automation Processor
+// Runs daily — checks all deals in Tally Outstanding pipeline
+// and moves/notifies based on due date
+// ─────────────────────────────────────────
+
+async function processDueDates() {
+  try {
+    logger.info('Due date automation started');
+
+    const categoryId = await getTallyPipelineCategoryId();
+    if (!categoryId) {
+      logger.warn('No Tally pipeline found — skipping due date check');
+      return;
+    }
+
+    // Get all stage IDs for this pipeline
+    const stages = await getStages(categoryId);
+    const stageMap = {};
+    stages.forEach(s => {
+      stageMap[(s.NAME || s.name).toLowerCase()] = s.STATUS_ID || s.id;
+    });
+
+    logger.info('Pipeline stages loaded', { stageMap });
+
+    const overdueStageId    = stageMap['overdue'];
+    const followUpStageId   = stageMap['follow up'];
+
+    if (!overdueStageId) {
+      logger.warn('Overdue stage not found in pipeline — check stage names');
+      return;
+    }
+
+    // Fetch all deals in the pipeline
+    const deals = await getDealsInPipeline(categoryId);
+    logger.info(`Checking ${deals.length} deals for due date automation`);
+
+    const today    = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let movedToOverdue  = 0;
+    let notified7Days   = 0;
+    let escalated       = 0;
+
+    for (const deal of deals) {
+      try {
+        if (!deal.CLOSEDATE) continue;
+
+        const closeDate = new Date(deal.CLOSEDATE);
+        closeDate.setHours(0, 0, 0, 0);
+
+        const diffDays = Math.floor((closeDate - today) / (1000 * 60 * 60 * 24));
+        const currentStage = deal.STAGE_ID;
+
+        // Already closed/won — skip
+        if (currentStage === 'WON' || currentStage === 'LOSE') continue;
+
+        // 1 — Move to Overdue if past due date and not already overdue
+        if (diffDays < 0 && currentStage !== overdueStageId) {
+          await updateDeal(deal.ID, { STAGE_ID: overdueStageId });
+          logger.info('Deal moved to Overdue', {
+            dealId: deal.ID,
+            title:  deal.TITLE,
+            daysOverdue: Math.abs(diffDays)
+          });
+          movedToOverdue++;
+        }
+
+        // 2 — Send 7-day reminder notification
+        if (diffDays === 7 && deal.ASSIGNED_BY_ID) {
+          await sendNotification(
+            deal.ASSIGNED_BY_ID,
+            `⚠️ Bill due in 7 days: ${deal.TITLE}\nAmount: ₹${deal.OPPORTUNITY}\nDue: ${deal.CLOSEDATE}`,
+            deal.ID
+          );
+          logger.info('7-day reminder sent', { dealId: deal.ID, title: deal.TITLE });
+          notified7Days++;
+        }
+
+        // 3 — Escalation: 30+ days overdue, notify responsible person again
+        if (diffDays < -30 && deal.ASSIGNED_BY_ID) {
+          await sendNotification(
+            deal.ASSIGNED_BY_ID,
+            `🚨 OVERDUE 30+ days: ${deal.TITLE}\nAmount: ₹${deal.OPPORTUNITY}\nWas due: ${deal.CLOSEDATE}`,
+            deal.ID
+          );
+          logger.info('30-day escalation sent', { dealId: deal.ID, title: deal.TITLE });
+          escalated++;
+        }
+
+      } catch (dealError) {
+        logger.error('Failed to process due date for deal', {
+          dealId:  deal.ID,
+          message: dealError.message
+        });
+      }
+    }
+
+    logger.info('Due date automation completed', {
+      movedToOverdue,
+      notified7Days,
+      escalated
+    });
+
+  } catch (error) {
+    logger.error('Due date processor failed', { message: error.message });
+    throw error;
+  }
+}
+
+module.exports = { processDueDates };

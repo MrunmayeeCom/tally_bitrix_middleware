@@ -64,6 +64,37 @@ async function getDeals(filter = {}) {
   return data.result || data;
 }
 
+async function getDealsInPipeline(categoryId) {
+  logger.info('Fetching all deals in pipeline', { categoryId });
+  const data = await callBitrix('crm.deal.list', {
+    filter: { CATEGORY_ID: categoryId },
+    select: ['ID', 'TITLE', 'CLOSEDATE', 'STAGE_ID', 'ASSIGNED_BY_ID', 'OPPORTUNITY']
+  });
+  return data.result || [];
+}
+
+async function getStages(categoryId) {
+  logger.info('Fetching stages for pipeline', { categoryId });
+  const data = await callBitrix('crm.dealcategory.stage.list', { id: categoryId });
+  return data.result || [];
+}
+
+async function sendNotification(userId, message, dealId = null) {
+  logger.info('Sending notification', { userId, dealId, message });
+
+  if (dealId) {
+    // Add a timeline comment on the deal — works with standard CRM webhook
+    await callBitrix('crm.timeline.comment.add', {
+      fields: {
+        ENTITY_TYPE: 'deal',
+        ENTITY_ID:   dealId,
+        COMMENT:     message,
+        AUTHOR_ID:   userId
+      }
+    });
+  }
+}
+
 // ── Invoices (Smart Invoice = entityTypeId 31) ──────────────────────────
 async function getInvoice(id) {
   logger.info('Fetching invoice:', id);
@@ -125,6 +156,9 @@ module.exports = {
   updateDeal,
   getDeal,
   getDeals,
+  getDealsInPipeline,
+  getStages,
+  sendNotification,
   getInvoice,
   getQuote,
   getPipelines

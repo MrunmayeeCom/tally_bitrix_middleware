@@ -87,6 +87,7 @@ async function getLedgers() {
             <REPORTNAME>List of Accounts</REPORTNAME>
             <STATICVARIABLES>
               <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
             </STATICVARIABLES>
           </REQUESTDESC>
         </EXPORTDATA>
@@ -95,7 +96,53 @@ async function getLedgers() {
   `.trim();
 
   const response = await sendToTally(xml);
-  return response;
+  return parseLedgersXml(response);
+}
+
+// Parse Tally List of Accounts XML into structured array
+function parseLedgersXml(xml) {
+  try {
+    const ledgers = [];
+
+    // Match each LEDGER block
+    const ledgerRegex = /<LEDGER\b[^>]*>([\s\S]*?)<\/LEDGER>/gi;
+    let match;
+
+    while ((match = ledgerRegex.exec(xml)) !== null) {
+      const block = match[1];
+
+      const get = (tag) => {
+        const m = new RegExp(`<${tag}>(.*?)</${tag}>`, 'i').exec(block);
+        return m ? m[1].trim() : '';
+      };
+
+      // Also try to get NAME from the LEDGER tag attribute
+      const nameAttr = /NAME="([^"]+)"/i.exec(match[0]);
+      const name     = get('NAME') || (nameAttr ? nameAttr[1].trim() : '');
+      const parent   = get('PARENT');
+
+      if (!name) continue;
+
+      // Only sync Sundry Debtors and Sundry Creditors ledgers
+      // Skip system ledgers like Cash, Bank, Tax accounts etc.
+      const syncGroups = ['sundry debtors', 'sundry creditors'];
+      if (!syncGroups.includes(parent.toLowerCase())) continue;
+
+      ledgers.push({
+        ledgerName: name,
+        groupName:  parent,
+        phone:      get('LEDPHONE')    || get('PHONE')    || '',
+        email:      get('LEDEMAIL')    || get('EMAIL')    || '',
+      });
+    }
+
+    logger.info(`Parsed ${ledgers.length} ledgers from Tally`);
+    return ledgers;
+
+  } catch (err) {
+    logger.error('Failed to parse Tally ledgers XML', { message: err.message });
+    return [];
+  }
 }
 
 // Create Voucher in Tally (Invoice)
@@ -245,6 +292,7 @@ function escapeXml(str) {
 module.exports = {
   createLedger,
   getLedgers,
+  parseLedgersXml,
   createVoucher,
   getOutstanding,
   parseOutstandingXml

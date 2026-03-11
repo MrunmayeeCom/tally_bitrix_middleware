@@ -1,8 +1,10 @@
 const { getOutstanding } = require('../services/tallyService');
 const { mapOutstandingToDeal } = require('../utils/mapper');
-const { createDeal, updateDeal } = require('../services/bitrixService');
+const { createDeal, updateDeal, getDeals } = require('../services/bitrixService');
 const { callBitrix } = require('../connectors/bitrixConnector');
+const { getTallyPipelineCategoryId } = require('../services/pipelineService');
 const { daysPending, formatAmount } = require('../utils/helpers');
+const { recordSync } = require('../utils/syncHistory');
 const logger = require('../utils/logger');
 
 
@@ -40,6 +42,28 @@ async function findBitrixParty(partyName) {
   return {};
 }
 
+async function findExistingDeal(partyName, voucherNumber) {
+  try {
+    const categoryId = await getTallyPipelineCategoryId();
+    const fullTitle = `${partyName} - ${voucherNumber}`;
+    const data = await callBitrix('crm.deal.list', {
+      filter: {
+        TITLE:       fullTitle,
+        CATEGORY_ID: categoryId
+      },
+      select: ['ID', 'TITLE']
+    });
+    const deals = data.result || [];
+    if (deals.length > 0) {
+      logger.info('Existing deal found', { dealId: deals[0].ID, title: fullTitle });
+      return deals[0].ID;
+    }
+  } catch (e) {
+    logger.warn('Existing deal lookup failed', { voucherNumber, message: e.message });
+  }
+  return null;
+}
+
 async function processOutstanding() {
   try {
     logger.info('Outstanding sync started');
@@ -71,15 +95,26 @@ async function processOutstanding() {
         // Step 3: Map to Bitrix24 deal format
         const dealFields = mapOutstandingToDeal(outstanding);
 
-        // Step 4: Create deal in Bitrix24
-        const result = await createDeal(dealFields);
+        // Step 4: Create or Update deal in Bitrix24
+        const existingDealId = await findExistingDeal(outstanding.partyName, outstanding.voucherNumber);
+        let result;
+        let action;
 
-        logger.info('Outstanding bill synced to Bitrix24', {
+        if (existingDealId) {
+          result = await updateDeal(existingDealId, dealFields);
+          action = 'updated';
+        } else {
+          result = await createDeal(dealFields);
+          action = 'created';
+        }
+
+        logger.info(`Outstanding bill ${action} in Bitrix24`, {
           voucherNumber: outstanding.voucherNumber,
           partyName:     outstanding.partyName,
           pendingAmount: outstanding.pendingAmount,
           daysPending:   outstanding.daysPending,
-          dealResult:    result
+          action,
+          dealId:        existingDealId || result
         });
 
         processed++;
@@ -93,8 +128,10 @@ async function processOutstanding() {
       }
     }
 
+    const syncResult = { success: true, processed, failed, trigger: 'scheduled' };
+    recordSync(syncResult);
     logger.info('Outstanding sync completed', { processed, failed });
-    return { success: true, processed, failed };
+    return syncResult;
 
   } catch (error) {
     logger.error('Outstanding processor failed', { message: error.message });
