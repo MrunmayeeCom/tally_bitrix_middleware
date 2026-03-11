@@ -605,21 +605,35 @@ async function loadDashboard() {
   updateNextSync();
 }
 
-function loadStats() {
+async function loadStats() {
   try {
-    const history = JSON.parse(localStorage.getItem('syncHistory') || '[]');
-    const total   = history.reduce((s, r) => s + (r.processed || 0), 0);
-    const failed  = history.reduce((s, r) => s + (r.failed    || 0), 0);
+    const logs = await ipcRenderer.invoke('get-logs');
+    const lines = logs.split('\n').filter(Boolean);
 
-    // today's syncs
+    let total = 0, todayCount = 0, failed = 0;
     const today = new Date().toDateString();
-    const todayCount = history
-      .filter(r => new Date(r.timestamp).toDateString() === today)
-      .reduce((s, r) => s + (r.processed || 0), 0);
 
-    document.getElementById('stat-synced').textContent = total   || '0';
-    document.getElementById('stat-today').textContent  = todayCount || '0';
-    document.getElementById('stat-failed').textContent = failed  || '0';
+    lines.forEach(line => {
+      // Count processed bills from "Outstanding sync completed {"processed":N,"failed":N}"
+      const completedMatch = line.match(/"processed":(\d+),"failed":(\d+)/);
+      if (completedMatch) {
+        const processed = parseInt(completedMatch[1]);
+        const failedN   = parseInt(completedMatch[2]);
+        total  += processed;
+        failed += failedN;
+
+        // Check if this log line is from today
+        const timeMatch = line.match(/\[([^\]]+)\]/);
+        if (timeMatch) {
+          const lineDate = new Date(timeMatch[1]).toDateString();
+          if (lineDate === today) todayCount += processed;
+        }
+      }
+    });
+
+    document.getElementById('stat-synced').textContent = total;
+    document.getElementById('stat-today').textContent  = todayCount;
+    document.getElementById('stat-failed').textContent = failed;
   } catch {
     document.getElementById('stat-synced').textContent = '—';
     document.getElementById('stat-today').textContent  = '—';
