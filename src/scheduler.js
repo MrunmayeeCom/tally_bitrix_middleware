@@ -2,7 +2,12 @@ const cron = require('node-cron');
 const { processOutstanding } = require('./processors/outstandingProcessor');
 const { processDueDates } = require('./processors/dueDateProcessor');
 const { processTallyToContact } = require('./processors/tallyToContactProcessor');
+const { recordSync } = require('./utils/syncHistory');
 const logger = require('./utils/logger');
+
+function recordSyncFailure(trigger, message) {
+  recordSync({ success: false, processed: 0, failed: 1, trigger, error: message });
+}
 
 // ─────────────────────────────────────────
 // Scheduler — Runs outstanding sync nightly
@@ -11,13 +16,14 @@ const logger = require('./utils/logger');
 function startScheduler() {
 
   // Run every night at 11:00 PM
-  cron.schedule('0 23 * * *', async () => {
+cron.schedule('0 23 * * *', async () => {
     logger.info('Scheduled outstanding sync triggered');
     try {
       const result = await processOutstanding();
       logger.info('Scheduled sync completed', result);
     } catch (error) {
       logger.error('Scheduled sync failed', { message: error.message });
+      recordSyncFailure('11PM scheduled sync', error.message);
     }
   }, {
     timezone: 'Asia/Kolkata'
@@ -31,6 +37,7 @@ function startScheduler() {
       logger.info('Morning sync completed', result);
     } catch (error) {
       logger.error('Morning sync failed', { message: error.message });
+      recordSyncFailure('9AM scheduled sync', error.message);
     }
   }, {
     timezone: 'Asia/Kolkata'
@@ -43,6 +50,7 @@ function startScheduler() {
       await processDueDates();
     } catch (error) {
       logger.error('Due date automation failed', { message: error.message });
+      recordSyncFailure('Due date automation', error.message);
     }
   }, {
     timezone: 'Asia/Kolkata'
@@ -55,6 +63,7 @@ function startScheduler() {
       await processTallyToContact();
     } catch (error) {
       logger.error('Tally → Bitrix24 sync failed', { message: error.message });
+      recordSyncFailure('Tally→Bitrix24 ledger sync', error.message);
     }
   }, {
     timezone: 'Asia/Kolkata'

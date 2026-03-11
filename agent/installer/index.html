@@ -301,6 +301,10 @@
       </p>
       <div class="test-results" id="test-results">
         <div class="test-row">
+          <span class="test-label">🟢 Node.js</span>
+          <span class="test-status" id="t-node">—</span>
+        </div>
+        <div class="test-row">
           <span class="test-label">🌐 Bitrix24</span>
           <span class="test-status" id="t-bitrix">—</span>
         </div>
@@ -356,9 +360,9 @@
 
     <!-- Tabs -->
     <div class="dash-tabs">
-      <button class="dash-tab active" onclick="switchTab('overview')">Overview</button>
-      <button class="dash-tab"        onclick="switchTab('history')">Sync History</button>
-      <button class="dash-tab"        onclick="switchTab('logs')">Live Logs</button>
+      <button class="dash-tab active" onclick="switchTab('overview', this)">Overview</button>
+      <button class="dash-tab"        onclick="switchTab('history', this)">Sync History</button>
+      <button class="dash-tab"        onclick="switchTab('logs', this)">Live Logs</button>
     </div>
 
     <!-- OVERVIEW TAB -->
@@ -396,7 +400,7 @@
           <div class="ac-label">Sync Now</div>
           <div class="ac-sub">Trigger manual sync</div>
         </div>
-        <div class="action-card" onclick="switchTab('logs');refreshLogs()">
+        <div class="action-card" onclick="switchTab('logs', this)">
           <div class="ac-icon">📋</div>
           <div class="ac-label">View Logs</div>
           <div class="ac-sub">Live activity feed</div>
@@ -457,6 +461,7 @@
       <input id="s-tallyCompany" type="text"/>
     </div>
     <button class="btn btn-primary" onclick="saveSettings()">Save & Restart Service</button>
+    <button class="btn btn-outline" id="btn-test-settings" onclick="testSettingsConnection()">Test Connection</button>
     <button class="btn btn-outline" onclick="navigateTo('dashboard')">← Back to Dashboard</button>
 
     <div style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border2);">
@@ -489,12 +494,14 @@ function navigateTo(page) {
   if (page === 'settings')  loadSettings();
 }
 
-function switchTab(tab) {
+function switchTab(tab, btn) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.dash-tab').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + tab).classList.add('active');
-  event.target.classList.add('active');
-  if (tab === 'logs')    refreshLogs();
+  const activeBtn = btn || document.querySelector(`.dash-tab[onclick*="'${tab}'"]`);
+  if (activeBtn) activeBtn.classList.add('active');
+  if (tab === 'logs')    startLogAutoRefresh();
+  else                   stopLogAutoRefresh();
   if (tab === 'history') loadHistory();
 }
 
@@ -541,20 +548,35 @@ async function runTests() {
   document.getElementById('btn-test').innerHTML = '<span class="btn-loader"></span> Testing…';
   document.getElementById('btn-test').disabled = true;
 
+  const tn = document.getElementById('t-node');
   const tb = document.getElementById('t-bitrix');
   const tt = document.getElementById('t-tally');
+  tn.textContent = 'Checking…'; tn.className = 'test-status checking';
   tb.textContent = 'Checking…'; tb.className = 'test-status checking';
   tt.textContent = 'Checking…'; tt.className = 'test-status checking';
 
   try {
     const results = await ipcRenderer.invoke('test-connections', cfg);
+
+    if (results.nodeError) {
+      tn.textContent = `Not found`; tn.className = 'test-status fail';
+      tb.textContent = 'Skipped';   tb.className = 'test-status checking';
+      tt.textContent = 'Skipped';   tt.className = 'test-status checking';
+      showToast('Node.js not installed — download from nodejs.org', 'error');
+      document.getElementById('btn-test').innerHTML = 'Run Connection Test Again';
+      document.getElementById('btn-test').disabled = false;
+      return;
+    }
+
+    tn.textContent = 'Installed ✓'; tn.className = 'test-status ok';
     tb.textContent = results.bitrix ? 'Connected ✓' : `Failed: ${results.bitrixError||'Error'}`;
     tb.className   = 'test-status ' + (results.bitrix ? 'ok' : 'fail');
     tt.textContent = results.tally  ? 'Connected ✓' : `Failed: ${results.tallyError||'Error'}`;
     tt.className   = 'test-status ' + (results.tally  ? 'ok' : 'fail');
+
     if (results.bitrix && results.tally) {
       document.getElementById('btn-install').style.display = 'block';
-      showToast('Both connections successful!', 'success');
+      showToast('All checks passed!', 'success');
     } else {
       showToast('Check your connection details and try again', 'error');
     }
@@ -607,30 +629,13 @@ async function loadDashboard() {
 
 async function loadStats() {
   try {
-    const logs = await ipcRenderer.invoke('get-logs');
-    const lines = logs.split('\n').filter(Boolean);
-
-    let total = 0, todayCount = 0, failed = 0;
+    const history = await ipcRenderer.invoke('get-sync-history');
     const today = new Date().toDateString();
-
-    lines.forEach(line => {
-      // Count processed bills from "Outstanding sync completed {"processed":N,"failed":N}"
-      const completedMatch = line.match(/"processed":(\d+),"failed":(\d+)/);
-      if (completedMatch) {
-        const processed = parseInt(completedMatch[1]);
-        const failedN   = parseInt(completedMatch[2]);
-        total  += processed;
-        failed += failedN;
-
-        // Check if this log line is from today
-        const timeMatch = line.match(/\[([^\]]+)\]/);
-        if (timeMatch) {
-          const lineDate = new Date(timeMatch[1]).toDateString();
-          if (lineDate === today) todayCount += processed;
-        }
-      }
-    });
-
+    const total      = history.reduce((s, r) => s + (r.processed || 0), 0);
+    const failed     = history.reduce((s, r) => s + (r.failed    || 0), 0);
+    const todayCount = history
+      .filter(r => new Date(r.timestamp).toDateString() === today)
+      .reduce((s, r) => s + (r.processed || 0), 0);
     document.getElementById('stat-synced').textContent = total;
     document.getElementById('stat-today').textContent  = todayCount;
     document.getElementById('stat-failed').textContent = failed;
@@ -642,13 +647,18 @@ async function loadStats() {
 }
 
 function updateNextSync() {
-  const now  = new Date();
-  const next9  = new Date(); next9.setHours(9,0,0,0);
-  const next23 = new Date(); next23.setHours(23,0,0,0);
-  if (now > next9)  next9.setDate(next9.getDate() + 1);
-  if (now > next23) next23.setDate(next23.getDate() + 1);
+  const now = new Date();
+  // Convert current time to IST (UTC+5:30)
+  const istOffset = 5.5 * 60 * 60000;
+  const nowIST = new Date(now.getTime() + istOffset - (now.getTimezoneOffset() * 60000));
+
+  const next9  = new Date(nowIST); next9.setHours(9,0,0,0);
+  const next23 = new Date(nowIST); next23.setHours(23,0,0,0);
+  if (nowIST > next9)  next9.setDate(next9.getDate() + 1);
+  if (nowIST > next23) next23.setDate(next23.getDate() + 1);
+
   const nextSync = next9 < next23 ? next9 : next23;
-  const diff = nextSync - now;
+  const diff = nextSync - nowIST;
   const h = Math.floor(diff / 3600000);
   const m = Math.floor((diff % 3600000) / 60000);
   const label = nextSync.getHours() === 9 ? '9:00 AM IST' : '11:00 PM IST';
@@ -658,28 +668,27 @@ function updateNextSync() {
 async function loadHistory() {
   const box = document.getElementById('history-list');
   try {
-    // Try to get from sync history API
-    const logs = await ipcRenderer.invoke('get-logs');
-    const lines = logs.split('\n').filter(l => l.includes('sync completed') || l.includes('sync failed') || l.includes('Morning sync') || l.includes('Scheduled sync'));
+    const history = await ipcRenderer.invoke('get-sync-history');
 
-    if (lines.length === 0) {
-      box.innerHTML = `<div class="empty-state"><div class="es-icon">📭</div>No sync runs yet.<br/>Sync history will appear here after first run.</div>`;
+    if (!history || history.length === 0) {
+      box.innerHTML = `<div class="empty-state"><div class="es-icon">📭</div>No sync runs yet.<br/>History will appear here after first run.</div>`;
       return;
     }
 
-    box.innerHTML = lines.slice(-20).reverse().map(line => {
-      const isError = line.includes('ERROR') || 
-                (line.includes('failed') && !line.includes('failed: 0') && !line.includes('"failed":0'));
-      const timeMatch = line.match(/\[([^\]]+)\]/);
-      const time      = timeMatch ? new Date(timeMatch[1]).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' }) : '—';
-      const isOutstanding = line.includes('outstanding') || line.includes('Outstanding');
-      const isDueDate     = line.includes('due date') || line.includes('Due date');
-      const isTally       = line.includes('Tally →') || line.includes('tally-to-bitrix');
-
-      const label = isOutstanding ? '📊 Outstanding Sync'
-                  : isDueDate     ? '⏰ Due Date Check'
-                  : isTally       ? '🔄 Tally → Bitrix24'
-                  :                 '🔄 Sync Run';
+    box.innerHTML = history.slice(0, 20).map(record => {
+      const isError = !record.success || record.failed > 0;
+      const time    = new Date(record.timestamp).toLocaleString('en-IN', {
+        day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
+      });
+      const trigger = record.trigger || 'scheduled';
+      const label   = trigger.includes('9AM')       ? '📊 Morning Sync'
+                    : trigger.includes('11PM')       ? '📊 Night Sync'
+                    : trigger.includes('due')        ? '⏰ Due Date Check'
+                    : trigger === 'manual'           ? '🖱️ Manual Sync'
+                    :                                  '🔄 Sync Run';
+      const detail  = isError
+                    ? (record.error || `${record.failed} failed`)
+                    : `${record.processed} bills synced`;
 
       return `
         <div class="history-item">
@@ -687,7 +696,7 @@ async function loadHistory() {
             <div class="history-dot ${isError ? 'error' : 'success'}"></div>
             <div class="history-info">
               <div class="history-title">${label}</div>
-              <div class="history-time">${time}</div>
+              <div class="history-time">${time} — ${detail}</div>
             </div>
           </div>
           <div class="history-badge ${isError ? 'err' : 'ok'}">${isError ? 'FAILED' : 'OK'}</div>
@@ -698,25 +707,65 @@ async function loadHistory() {
   }
 }
 
+let _logRefreshInterval = null;
+
 async function refreshLogs() {
   const logs = await ipcRenderer.invoke('get-logs');
   const box  = document.getElementById('log-box');
   const lines = logs.split('\n').filter(Boolean).slice(-100);
   box.innerHTML = lines.map(line => {
     let cls = 'log-line';
-    if (line.includes('ERROR'))                                          cls += ' error';
-    else if (line.includes('WARN'))                                      cls += ' warn';
+    if (line.includes('ERROR'))                                                              cls += ' error';
+    else if (line.includes('WARN'))                                                          cls += ' warn';
     else if (line.includes('synced') || line.includes('completed') || line.includes('created')) cls += ' success';
-    else                                                                 cls += ' info';
+    else                                                                                     cls += ' info';
     return `<div class="${cls}">${escapeHtml(line)}</div>`;
   }).join('');
   box.scrollTop = box.scrollHeight;
 }
 
+// Auto-refresh logs every 5s when tab is active
+function startLogAutoRefresh() {
+  stopLogAutoRefresh();
+  refreshLogs();
+  _logRefreshInterval = setInterval(refreshLogs, 5000);
+}
+
+function stopLogAutoRefresh() {
+  if (_logRefreshInterval) { clearInterval(_logRefreshInterval); _logRefreshInterval = null; }
+}
+
 async function syncNow() {
+  const card = document.querySelector('.action-card');
+  const icon = document.getElementById('sync-icon');
+  if (window._syncInProgress) return;
+  window._syncInProgress = true;
+  document.querySelectorAll('.action-card').forEach(c => {
+    if (c.querySelector('.ac-label')?.textContent === 'Sync Now') {
+      c.style.opacity = '0.5';
+      c.style.pointerEvents = 'none';
+      c.querySelector('.ac-icon').textContent = '⏳';
+    }
+  });
   showToast('Sync triggered…', 'success');
-  await ipcRenderer.invoke('trigger-sync');
-  setTimeout(() => { refreshLogs(); loadStats(); }, 3000);
+  try {
+    await ipcRenderer.invoke('trigger-sync');
+    setTimeout(() => {
+      refreshLogs();
+      loadStats();
+      document.querySelectorAll('.action-card').forEach(c => {
+        if (c.querySelector('.ac-label')?.textContent === 'Sync Now') {
+          c.style.opacity = '1';
+          c.style.pointerEvents = 'auto';
+          c.querySelector('.ac-icon').textContent = '🔄';
+        }
+      });
+      window._syncInProgress = false;
+    }, 4000);
+  } catch(e) {
+    showToast('Sync failed: ' + e.message, 'error');
+    window._syncInProgress = false;
+  }
 }
 
 async function toggleService() {
@@ -740,6 +789,30 @@ async function loadSettings() {
   document.getElementById('s-tallyHost').value    = cfg.tallyHost    || 'localhost';
   document.getElementById('s-tallyPort').value    = cfg.tallyPort    || 9000;
   document.getElementById('s-tallyCompany').value = cfg.tallyCompany || '';
+}
+
+async function testSettingsConnection() {
+  const cfg = {
+    bitrixUrl:    document.getElementById('s-bitrixUrl').value.trim(),
+    tallyHost:    document.getElementById('s-tallyHost').value.trim(),
+    tallyPort:    parseInt(document.getElementById('s-tallyPort').value),
+    tallyCompany: document.getElementById('s-tallyCompany').value.trim(),
+  };
+  const btn = document.getElementById('btn-test-settings');
+  btn.textContent = 'Testing…';
+  btn.disabled = true;
+  try {
+    const results = await ipcRenderer.invoke('test-connections', cfg);
+    if (results.bitrix && results.tally) {
+      showToast('Both connections OK ✓', 'success');
+    } else {
+      showToast(`Bitrix: ${results.bitrix ? 'OK' : results.bitrixError} | Tally: ${results.tally ? 'OK' : results.tallyError}`, 'error');
+    }
+  } catch(e) {
+    showToast('Test failed: ' + e.message, 'error');
+  }
+  btn.textContent = 'Test Connection';
+  btn.disabled = false;
 }
 
 async function saveSettings() {

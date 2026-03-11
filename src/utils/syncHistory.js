@@ -25,7 +25,8 @@ function recordSync(result) {
     processed:  result.processed  || 0,
     failed:     result.failed     || 0,
     success:    result.success    || false,
-    trigger:    result.trigger    || 'scheduled'
+    trigger:    result.trigger    || 'scheduled',
+    error:      result.error      || null
   });
   saveHistory(history);
 }

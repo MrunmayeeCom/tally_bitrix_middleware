@@ -64,6 +64,41 @@ async function findExistingDeal(partyName, voucherNumber) {
   return null;
 }
 
+async function closePaidDeals(currentVoucherNumbers) {
+  try {
+    const categoryId = await getTallyPipelineCategoryId();
+    if (!categoryId) return;
+
+    const { getDealsInPipeline } = require('../services/bitrixService');
+    const { getStages } = require('../services/bitrixService');
+
+    const deals = await getDealsInPipeline(categoryId);
+    const stages = await getStages(categoryId);
+    const stageMap = {};
+    stages.forEach(s => { stageMap[(s.NAME||s.name).toLowerCase()] = s.STATUS_ID || s.id; });
+    const paidStageId = stageMap['payment received'];
+
+    for (const deal of deals) {
+      // Skip already closed/won deals
+      if (deal.STAGE_ID === 'WON' || deal.STAGE_ID === paidStageId) continue;
+
+      // Check if this deal's voucher is still outstanding
+      const titleParts = (deal.TITLE || '').split(' - ');
+      const voucherNum = titleParts[titleParts.length - 1];
+      const stillOutstanding = currentVoucherNumbers.includes(voucherNum);
+
+      if (!stillOutstanding && paidStageId) {
+        await updateDeal(deal.ID, { STAGE_ID: paidStageId });
+        logger.info('Deal moved to Payment Received — bill cleared in Tally', {
+          dealId: deal.ID, title: deal.TITLE
+        });
+      }
+    }
+  } catch (e) {
+    logger.warn('closePaidDeals check failed', { message: e.message });
+  }
+}
+
 async function processOutstanding() {
   try {
     logger.info('Outstanding sync started');
@@ -128,11 +163,13 @@ async function processOutstanding() {
       }
     }
 
+   const currentVoucherNumbers = outstandingList.map(o => String(o.voucherNumber));
+    await closePaidDeals(currentVoucherNumbers);
+
     const syncResult = { success: true, processed, failed, trigger: 'scheduled' };
     recordSync(syncResult);
     logger.info('Outstanding sync completed', { processed, failed });
     return syncResult;
-
   } catch (error) {
     logger.error('Outstanding processor failed', { message: error.message });
     throw error;

@@ -10,9 +10,30 @@ function getTimestamp() {
   return new Date().toISOString();
 }
 
+const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB
+
 function writeToFile(filename, message) {
   const filePath = path.join(logDir, filename);
-  fs.appendFileSync(filePath, message + '\n');
+  try {
+    // Rotate if over 5MB
+    if (fs.existsSync(filePath)) {
+      const size = fs.statSync(filePath).size;
+      if (size > MAX_LOG_SIZE) {
+        const archivePath = filePath.replace('.log', `-${Date.now()}.log`);
+        fs.renameSync(filePath, archivePath);
+        // Keep only last 3 archives
+        const dir = path.dirname(filePath);
+        const base = path.basename(filePath, '.log');
+        const archives = fs.readdirSync(dir)
+          .filter(f => f.startsWith(base + '-') && f.endsWith('.log'))
+          .sort();
+        while (archives.length > 3) {
+          fs.unlinkSync(path.join(dir, archives.shift()));
+        }
+      }
+    }
+    fs.appendFileSync(filePath, message + '\n');
+  } catch {}
 }
 
 const logger = {
