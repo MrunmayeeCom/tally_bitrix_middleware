@@ -12,6 +12,7 @@
   :root{
     --bg:        #0d0f14;
     --surface:   #141720;
+    --surface2:  #181c28;
     --border:    #1e2330;
     --border2:   #252a3a;
     --text:      #e8ecf4;
@@ -38,7 +39,8 @@
     background:var(--surface);
   }
   .titlebar-logo{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;letter-spacing:.3px;}
-  .titlebar-logo .dot{width:8px;height:8px;border-radius:50%;background:var(--accent2);box-shadow:0 0 8px var(--accent2);}
+  .titlebar-logo .dot{width:8px;height:8px;border-radius:50%;background:var(--accent2);box-shadow:0 0 8px var(--accent2);animation:pulse 2s infinite;}
+  @keyframes pulse{0%,100%{box-shadow:0 0 8px var(--accent2);}50%{box-shadow:0 0 16px var(--accent2);}}
   .titlebar-actions{display:flex;gap:6px;-webkit-app-region:no-drag;}
   .tb-btn{width:12px;height:12px;border-radius:50%;border:none;cursor:pointer;transition:.2s;}
   .tb-close{background:#ff5f57;} .tb-close:hover{background:#ff3b30;}
@@ -50,23 +52,23 @@
 
   /* ── SETUP PAGE ── */
   .setup-hero{
-    padding:32px 32px 20px;text-align:center;
+    padding:28px 32px 16px;text-align:center;
     background:linear-gradient(160deg,#0d1526 0%,#0d0f14 60%);
     border-bottom:1px solid var(--border);
   }
   .setup-hero .logo-ring{
-    width:64px;height:64px;border-radius:50%;
+    width:60px;height:60px;border-radius:50%;
     background:linear-gradient(135deg,var(--accent),var(--accent2));
     display:flex;align-items:center;justify-content:center;
-    margin:0 auto 16px;font-size:28px;
+    margin:0 auto 14px;font-size:26px;
     box-shadow:0 0 32px rgba(79,123,255,.3);
   }
-  .setup-hero h1{font-size:20px;font-weight:600;margin-bottom:6px;}
-  .setup-hero p{color:var(--muted);font-size:13px;line-height:1.5;}
+  .setup-hero h1{font-size:18px;font-weight:600;margin-bottom:4px;}
+  .setup-hero p{color:var(--muted);font-size:12px;line-height:1.5;}
 
-  .setup-body{padding:24px 32px;flex:1;overflow-y:auto;}
+  .setup-body{padding:20px 32px;flex:1;overflow-y:auto;}
 
-  .steps{display:flex;gap:0;margin-bottom:28px;}
+  .steps{display:flex;gap:0;margin-bottom:24px;}
   .step{flex:1;text-align:center;position:relative;}
   .step::after{content:'';position:absolute;top:14px;left:50%;width:100%;height:1px;background:var(--border2);z-index:0;}
   .step:last-child::after{display:none;}
@@ -83,11 +85,10 @@
   .step.active .step-label{color:var(--accent);}
   .step.done .step-label{color:var(--accent2);}
 
-  /* step panels */
   .step-panel{display:none;} .step-panel.active{display:block;}
 
-  .field{margin-bottom:16px;}
-  .field label{display:block;font-size:12px;font-weight:500;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:11px;font-weight:500;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;}
   .field input{
     width:100%;padding:10px 14px;
     background:var(--surface);border:1px solid var(--border2);
@@ -97,19 +98,11 @@
   .field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(79,123,255,.1);}
   .field input::placeholder{color:var(--muted);}
   .field-row{display:grid;grid-template-columns:1fr 100px;gap:12px;}
-
   .hint{font-size:11px;color:var(--muted);margin-top:4px;}
 
-  /* test results */
-  .test-results{
-    border-radius:8px;border:1px solid var(--border2);
-    overflow:hidden;margin-bottom:16px;display:none;
-  }
+  .test-results{border-radius:8px;border:1px solid var(--border2);overflow:hidden;margin-bottom:14px;display:none;}
   .test-results.visible{display:block;}
-  .test-row{
-    display:flex;align-items:center;justify-content:space-between;
-    padding:10px 14px;border-bottom:1px solid var(--border);
-  }
+  .test-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border);}
   .test-row:last-child{border-bottom:none;}
   .test-label{font-size:13px;display:flex;align-items:center;gap:8px;}
   .test-status{font-size:12px;font-family:'DM Mono',monospace;padding:2px 8px;border-radius:4px;}
@@ -117,12 +110,7 @@
   .test-status.fail{background:rgba(255,92,106,.15);color:var(--danger);}
   .test-status.checking{background:rgba(79,123,255,.15);color:var(--accent);}
 
-  /* buttons */
-  .btn{
-    width:100%;padding:12px;border-radius:8px;border:none;
-    font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;
-    cursor:pointer;transition:.2s;margin-bottom:8px;
-  }
+  .btn{width:100%;padding:11px;border-radius:8px;border:none;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:.2s;margin-bottom:8px;}
   .btn-primary{background:var(--accent);color:#fff;}
   .btn-primary:hover{background:#3d6be0;box-shadow:0 4px 16px rgba(79,123,255,.3);}
   .btn-primary:disabled{background:var(--border2);color:var(--muted);cursor:not-allowed;box-shadow:none;}
@@ -130,74 +118,126 @@
   .btn-outline:hover{border-color:var(--accent);color:var(--accent);}
   .btn-success{background:var(--accent2);color:#0d0f14;}
   .btn-success:hover{background:#2ec99a;}
-
   .btn-loader{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px;}
   @keyframes spin{to{transform:rotate(360deg);}}
 
-  /* success */
-  .success-screen{text-align:center;padding:40px 32px;}
-  .success-icon{font-size:56px;margin-bottom:16px;animation:pop .5s cubic-bezier(.34,1.56,.64,1);}
+  .success-screen{text-align:center;padding:32px 32px;}
+  .success-icon{font-size:52px;margin-bottom:14px;animation:pop .5s cubic-bezier(.34,1.56,.64,1);}
   @keyframes pop{from{transform:scale(0);opacity:0;}to{transform:scale(1);opacity:1;}}
-  .success-screen h2{font-size:22px;font-weight:600;margin-bottom:8px;}
-  .success-screen p{color:var(--muted);line-height:1.6;margin-bottom:24px;}
-  .feature-list{text-align:left;background:var(--surface);border-radius:8px;padding:16px;border:1px solid var(--border2);}
-  .feature-item{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13px;}
+  .success-screen h2{font-size:20px;font-weight:600;margin-bottom:6px;}
+  .success-screen p{color:var(--muted);line-height:1.6;margin-bottom:20px;}
+  .feature-list{text-align:left;background:var(--surface);border-radius:8px;padding:14px;border:1px solid var(--border2);}
+  .feature-item{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:13px;}
   .feature-item .fi{color:var(--accent2);}
 
-  /* ── DASHBOARD PAGE ── */
-  .dash-body{padding:20px 24px;flex:1;overflow-y:auto;}
+  /* ══════════════════ DASHBOARD ══════════════════ */
+  .dash-body{padding:16px 20px;flex:1;overflow-y:auto;}
 
-  .status-card{
+  /* top nav tabs */
+  .dash-tabs{display:flex;gap:4px;margin-bottom:16px;background:var(--surface);border-radius:10px;padding:4px;}
+  .dash-tab{flex:1;padding:7px;border-radius:7px;border:none;background:transparent;color:var(--muted);font-family:'DM Sans',sans-serif;font-size:12px;font-weight:500;cursor:pointer;transition:.2s;}
+  .dash-tab.active{background:var(--border2);color:var(--text);}
+  .dash-tab:hover:not(.active){color:var(--text);}
+
+  .tab-panel{display:none;} .tab-panel.active{display:block;}
+
+  /* status bar */
+  .status-bar{
     background:var(--surface);border:1px solid var(--border2);
-    border-radius:var(--radius);padding:20px;margin-bottom:16px;
+    border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;
     display:flex;align-items:center;justify-content:space-between;
   }
-  .status-left{display:flex;align-items:center;gap:14px;}
-  .status-indicator{
-    width:48px;height:48px;border-radius:50%;
-    display:flex;align-items:center;justify-content:center;font-size:22px;
-  }
-  .status-indicator.running{background:rgba(56,217,169,.15);box-shadow:0 0 16px rgba(56,217,169,.2);}
-  .status-indicator.stopped{background:rgba(255,92,106,.15);}
-  .status-title{font-weight:600;font-size:15px;margin-bottom:2px;}
-  .status-sub{font-size:12px;color:var(--muted);}
+  .status-left{display:flex;align-items:center;gap:12px;}
+  .status-dot{width:10px;height:10px;border-radius:50%;background:var(--accent2);box-shadow:0 0 8px var(--accent2);animation:pulse 2s infinite;}
+  .status-dot.stopped{background:var(--danger);box-shadow:0 0 8px var(--danger);animation:none;}
+  .status-info{}
+  .status-title{font-weight:600;font-size:14px;}
+  .status-sub{font-size:11px;color:var(--muted);margin-top:1px;}
+  .status-badge{font-size:10px;padding:3px 8px;border-radius:20px;font-weight:600;letter-spacing:.5px;}
+  .status-badge.live{background:rgba(56,217,169,.15);color:var(--accent2);}
+  .status-badge.offline{background:rgba(255,92,106,.15);color:var(--danger);}
 
-  .action-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+  /* stats row */
+  .stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;}
+  .stat-card{background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:12px 14px;}
+  .stat-value{font-size:22px;font-weight:600;font-family:'DM Mono',monospace;margin-bottom:2px;}
+  .stat-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;}
+  .stat-card.green .stat-value{color:var(--accent2);}
+  .stat-card.blue .stat-value{color:var(--accent);}
+  .stat-card.warn .stat-value{color:var(--warn);}
+
+  /* action grid */
+  .action-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;}
   .action-card{
     background:var(--surface);border:1px solid var(--border2);
-    border-radius:var(--radius);padding:16px;cursor:pointer;
+    border-radius:var(--radius);padding:14px;cursor:pointer;
     transition:.2s;text-align:center;
   }
-  .action-card:hover{border-color:var(--accent);background:#141d30;}
-  .action-card .ac-icon{font-size:24px;margin-bottom:8px;}
-  .action-card .ac-label{font-size:13px;font-weight:500;}
-  .action-card .ac-sub{font-size:11px;color:var(--muted);margin-top:2px;}
+  .action-card:hover{border-color:var(--accent);background:#141d30;transform:translateY(-1px);}
+  .action-card:active{transform:translateY(0);}
+  .action-card .ac-icon{font-size:22px;margin-bottom:6px;}
+  .action-card .ac-label{font-size:12px;font-weight:600;}
+  .action-card .ac-sub{font-size:10px;color:var(--muted);margin-top:2px;}
 
-  .section-title{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:10px;font-weight:500;}
+  /* sync history */
+  .section-title{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:8px;font-weight:600;}
 
+  .history-list{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto;}
+  .history-item{
+    background:var(--surface);border:1px solid var(--border2);
+    border-radius:8px;padding:10px 14px;
+    display:flex;align-items:center;justify-content:space-between;
+    transition:.2s;
+  }
+  .history-item:hover{border-color:var(--border);}
+  .history-left{display:flex;align-items:center;gap:10px;}
+  .history-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+  .history-dot.success{background:var(--accent2);}
+  .history-dot.error{background:var(--danger);}
+  .history-info{}
+  .history-title{font-size:12px;font-weight:500;}
+  .history-time{font-size:10px;color:var(--muted);margin-top:1px;}
+  .history-badge{font-size:10px;font-family:'DM Mono',monospace;padding:2px 7px;border-radius:4px;}
+  .history-badge.ok{background:rgba(56,217,169,.1);color:var(--accent2);}
+  .history-badge.err{background:rgba(255,92,106,.1);color:var(--danger);}
+
+  .empty-state{text-align:center;padding:32px 0;color:var(--muted);font-size:12px;}
+  .empty-state .es-icon{font-size:32px;margin-bottom:8px;opacity:.5;}
+
+  /* log tab */
   .log-box{
     background:var(--surface);border:1px solid var(--border2);
-    border-radius:var(--radius);padding:14px;
-    font-family:'DM Mono',monospace;font-size:11px;
-    color:#7a8aaa;line-height:1.7;max-height:180px;overflow-y:auto;
+    border-radius:var(--radius);padding:12px 14px;
+    font-family:'DM Mono',monospace;font-size:10.5px;
+    color:#7a8aaa;line-height:1.8;height:480px;overflow-y:auto;
   }
   .log-line.info{color:#5a7aaa;}
   .log-line.error{color:var(--danger);}
   .log-line.success{color:var(--accent2);}
+  .log-line.warn{color:var(--warn);}
+
+  /* next sync countdown */
+  .next-sync{
+    background:linear-gradient(135deg,rgba(79,123,255,.08),rgba(56,217,169,.05));
+    border:1px solid rgba(79,123,255,.2);
+    border-radius:8px;padding:10px 14px;margin-bottom:12px;
+    display:flex;align-items:center;justify-content:space-between;
+  }
+  .next-sync-label{font-size:11px;color:var(--muted);}
+  .next-sync-time{font-size:12px;font-weight:600;color:var(--accent);font-family:'DM Mono',monospace;}
 
   /* ── SETTINGS PAGE ── */
-  .settings-body{padding:24px 32px;flex:1;overflow-y:auto;}
+  .settings-body{padding:20px 28px;flex:1;overflow-y:auto;}
 
   /* scrollbar */
-  ::-webkit-scrollbar{width:4px;}
+  ::-webkit-scrollbar{width:3px;}
   ::-webkit-scrollbar-track{background:transparent;}
   ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px;}
 
-  /* notifications */
   .toast{
-    position:fixed;bottom:16px;left:50%;transform:translateX(-50%) translateY(100px);
+    position:fixed;bottom:14px;left:50%;transform:translateX(-50%) translateY(100px);
     background:#1e2a3a;border:1px solid var(--border2);border-radius:8px;
-    padding:10px 18px;font-size:13px;transition:.3s;z-index:999;white-space:nowrap;
+    padding:9px 16px;font-size:12px;transition:.3s;z-index:999;white-space:nowrap;
   }
   .toast.show{transform:translateX(-50%) translateY(0);}
   .toast.success{border-color:var(--accent2);color:var(--accent2);}
@@ -206,7 +246,6 @@
 </head>
 <body>
 
-<!-- Titlebar -->
 <div class="titlebar">
   <div class="titlebar-logo">
     <div class="dot"></div>
@@ -225,9 +264,7 @@
     <h1>Welcome to TallyBitrixSync</h1>
     <p>Connect your Tally ERP with Bitrix24 CRM in minutes.<br/>Syncs run automatically in the background.</p>
   </div>
-
   <div class="setup-body">
-    <!-- Step indicator -->
     <div class="steps">
       <div class="step active" id="step-ind-1"><div class="step-dot">1</div><div class="step-label">Bitrix24</div></div>
       <div class="step"        id="step-ind-2"><div class="step-dot">2</div><div class="step-label">Tally</div></div>
@@ -235,7 +272,6 @@
       <div class="step"        id="step-ind-4"><div class="step-dot">✓</div><div class="step-label">Install</div></div>
     </div>
 
-    <!-- Step 1: Bitrix24 -->
     <div class="step-panel active" id="panel-1">
       <div class="field">
         <label>Bitrix24 Webhook URL</label>
@@ -245,17 +281,10 @@
       <button class="btn btn-primary" onclick="goStep(2)">Continue →</button>
     </div>
 
-    <!-- Step 2: Tally -->
     <div class="step-panel" id="panel-2">
       <div class="field-row">
-        <div class="field">
-          <label>Tally Host</label>
-          <input id="tallyHost" type="text" placeholder="localhost" value="localhost"/>
-        </div>
-        <div class="field">
-          <label>Port</label>
-          <input id="tallyPort" type="number" placeholder="9000" value="9000"/>
-        </div>
+        <div class="field"><label>Tally Host</label><input id="tallyHost" type="text" placeholder="localhost" value="localhost"/></div>
+        <div class="field"><label>Port</label><input id="tallyPort" type="number" placeholder="9000" value="9000"/></div>
       </div>
       <div class="field">
         <label>Tally Company Name</label>
@@ -266,9 +295,8 @@
       <button class="btn btn-outline" onclick="goStep(1)">← Back</button>
     </div>
 
-    <!-- Step 3: Test -->
     <div class="step-panel" id="panel-3">
-      <p style="color:var(--muted);font-size:13px;margin-bottom:16px;line-height:1.5;">
+      <p style="color:var(--muted);font-size:12px;margin-bottom:14px;line-height:1.5;">
         Let's verify both connections before installing. Make sure Tally is open with your company loaded.
       </p>
       <div class="test-results" id="test-results">
@@ -286,18 +314,17 @@
       <button class="btn btn-outline" onclick="goStep(2)">← Back</button>
     </div>
 
-    <!-- Step 4: Installing -->
     <div class="step-panel" id="panel-4">
       <div class="success-screen" id="installing-screen">
-        <div style="font-size:48px;margin-bottom:16px;">⚙️</div>
+        <div style="font-size:44px;margin-bottom:14px;">⚙️</div>
         <h2>Installing Service…</h2>
         <p style="color:var(--muted);">Setting up Windows Service and creating Bitrix24 pipeline. This may take a moment.</p>
-        <div style="margin-top:20px;"><span class="btn-loader"></span> Please wait…</div>
+        <div style="margin-top:18px;"><span class="btn-loader"></span> Please wait…</div>
       </div>
       <div class="success-screen" id="success-screen" style="display:none">
         <div class="success-icon">🎉</div>
         <h2>You're All Set!</h2>
-        <p>TallyBitrixSync is now running silently in the background. You'll see it in your system tray.</p>
+        <p>TallyBitrixSync is running in the background. Check your system tray.</p>
         <div class="feature-list">
           <div class="feature-item"><span class="fi">✅</span> Windows Service registered</div>
           <div class="feature-item"><span class="fi">✅</span> Tally Outstanding pipeline created</div>
@@ -305,7 +332,7 @@
           <div class="feature-item"><span class="fi">✅</span> Auto-sync at 9 AM &amp; 11 PM IST</div>
           <div class="feature-item"><span class="fi">✅</span> Starts automatically with Windows</div>
         </div>
-        <button class="btn btn-primary" style="margin-top:20px" onclick="showDashboard()">Open Dashboard →</button>
+        <button class="btn btn-primary" style="margin-top:18px" onclick="showDashboard()">Open Dashboard →</button>
       </div>
     </div>
   </div>
@@ -314,51 +341,108 @@
 <!-- ══════════════════ DASHBOARD PAGE ══════════════════ -->
 <div class="page" id="page-dashboard">
   <div class="dash-body">
-    <div class="status-card" id="status-card">
+
+    <!-- Status Bar -->
+    <div class="status-bar">
       <div class="status-left">
-        <div class="status-indicator running" id="status-icon">⚡</div>
-        <div>
+        <div class="status-dot" id="status-dot"></div>
+        <div class="status-info">
           <div class="status-title" id="status-title">Service Running</div>
-          <div class="status-sub"   id="status-sub">Syncing automatically</div>
+          <div class="status-sub"   id="status-sub">Syncing at 9 AM &amp; 11 PM IST</div>
         </div>
       </div>
-      <div id="status-badge" style="font-size:11px;padding:4px 10px;border-radius:20px;background:rgba(56,217,169,.15);color:#38d9a9;font-weight:500;">LIVE</div>
+      <div class="status-badge live" id="status-badge">LIVE</div>
     </div>
 
-    <div class="action-grid">
-      <div class="action-card" onclick="syncNow()">
-        <div class="ac-icon">🔄</div>
-        <div class="ac-label">Sync Now</div>
-        <div class="ac-sub">Trigger manual sync</div>
+    <!-- Tabs -->
+    <div class="dash-tabs">
+      <button class="dash-tab active" onclick="switchTab('overview')">Overview</button>
+      <button class="dash-tab"        onclick="switchTab('history')">Sync History</button>
+      <button class="dash-tab"        onclick="switchTab('logs')">Live Logs</button>
+    </div>
+
+    <!-- OVERVIEW TAB -->
+    <div class="tab-panel active" id="tab-overview">
+
+      <!-- Stats -->
+      <div class="stats-row">
+        <div class="stat-card green">
+          <div class="stat-value" id="stat-synced">—</div>
+          <div class="stat-label">Bills Synced</div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-value" id="stat-today">—</div>
+          <div class="stat-label">Today</div>
+        </div>
+        <div class="stat-card warn">
+          <div class="stat-value" id="stat-failed">—</div>
+          <div class="stat-label">Failed</div>
+        </div>
       </div>
-      <div class="action-card" onclick="refreshLogs()">
-        <div class="ac-icon">📋</div>
-        <div class="ac-label">Refresh Logs</div>
-        <div class="ac-sub">View latest activity</div>
+
+      <!-- Next Sync -->
+      <div class="next-sync">
+        <div>
+          <div class="next-sync-label">Next scheduled sync</div>
+          <div class="next-sync-time" id="next-sync-time">Calculating…</div>
+        </div>
+        <span style="font-size:18px;">🕐</span>
       </div>
-      <div class="action-card" onclick="navigateTo('settings')">
-        <div class="ac-icon">⚙️</div>
-        <div class="ac-label">Settings</div>
-        <div class="ac-sub">Change configuration</div>
-      </div>
-      <div class="action-card" id="svc-toggle-card" onclick="toggleService()">
-        <div class="ac-icon" id="svc-icon">⏹</div>
-        <div class="ac-label" id="svc-label">Stop Service</div>
-        <div class="ac-sub" id="svc-sub">Pause all syncing</div>
+
+      <!-- Actions -->
+      <div class="action-grid">
+        <div class="action-card" onclick="syncNow()">
+          <div class="ac-icon">🔄</div>
+          <div class="ac-label">Sync Now</div>
+          <div class="ac-sub">Trigger manual sync</div>
+        </div>
+        <div class="action-card" onclick="switchTab('logs');refreshLogs()">
+          <div class="ac-icon">📋</div>
+          <div class="ac-label">View Logs</div>
+          <div class="ac-sub">Live activity feed</div>
+        </div>
+        <div class="action-card" onclick="navigateTo('settings')">
+          <div class="ac-icon">⚙️</div>
+          <div class="ac-label">Settings</div>
+          <div class="ac-sub">Change configuration</div>
+        </div>
+        <div class="action-card" id="svc-toggle-card" onclick="toggleService()">
+          <div class="ac-icon" id="svc-icon">⏹</div>
+          <div class="ac-label" id="svc-label">Stop Service</div>
+          <div class="ac-sub" id="svc-sub">Pause all syncing</div>
+        </div>
       </div>
     </div>
 
-    <div class="section-title">Recent Logs</div>
-    <div class="log-box" id="log-box">Loading logs…</div>
+    <!-- HISTORY TAB -->
+    <div class="tab-panel" id="tab-history">
+      <div class="section-title" style="margin-bottom:10px;">Recent Sync Runs</div>
+      <div class="history-list" id="history-list">
+        <div class="empty-state">
+          <div class="es-icon">📭</div>
+          Loading sync history…
+        </div>
+      </div>
+    </div>
+
+    <!-- LOGS TAB -->
+    <div class="tab-panel" id="tab-logs">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div class="section-title" style="margin-bottom:0">Live Logs</div>
+        <button onclick="refreshLogs()" style="background:var(--border2);border:none;color:var(--muted);font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;">↻ Refresh</button>
+      </div>
+      <div class="log-box" id="log-box">Loading logs…</div>
+    </div>
+
   </div>
 </div>
 
 <!-- ══════════════════ SETTINGS PAGE ══════════════════ -->
 <div class="page" id="page-settings">
   <div class="settings-body">
-    <div style="margin-bottom:24px;">
-      <div style="font-size:16px;font-weight:600;margin-bottom:4px;">Settings</div>
-      <div style="font-size:13px;color:var(--muted);">Update your connection details. Requires service restart.</div>
+    <div style="margin-bottom:20px;">
+      <div style="font-size:15px;font-weight:600;margin-bottom:4px;">Settings</div>
+      <div style="font-size:12px;color:var(--muted);">Update your connection details. Requires service restart.</div>
     </div>
     <div class="field">
       <label>Bitrix24 Webhook URL</label>
@@ -373,22 +457,31 @@
       <input id="s-tallyCompany" type="text"/>
     </div>
     <button class="btn btn-primary" onclick="saveSettings()">Save & Restart Service</button>
-    <button class="btn btn-outline" onclick="navigateTo('dashboard')">← Back</button>
+    <button class="btn btn-outline" onclick="navigateTo('dashboard')">← Back to Dashboard</button>
 
-    <div style="margin-top:24px;padding-top:24px;border-top:1px solid var(--border2);">
+    <div style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border2);">
+      <div class="section-title">Sync Schedule</div>
+      <div style="background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--muted);line-height:1.8;">
+        ⏰ Outstanding sync — 9:00 AM IST<br/>
+        🔔 Due date automation — 9:30 AM IST<br/>
+        🔄 Tally → Bitrix24 ledger sync — Every 2 hrs<br/>
+        ⏰ Outstanding sync — 11:00 PM IST
+      </div>
+    </div>
+
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border2);">
       <div class="section-title">Danger Zone</div>
       <button class="btn btn-outline" style="color:var(--danger);border-color:var(--danger);" onclick="uninstallService()">Uninstall Windows Service</button>
     </div>
   </div>
 </div>
 
-<!-- Toast -->
 <div class="toast" id="toast"></div>
 
 <script>
 const { ipcRenderer } = require('electron');
 
-// ── navigation ────────────────────────────────────────────────────────────────
+// ── navigation ─────────────────────────────────────────────────────────────
 function navigateTo(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById('page-' + page).classList.add('active');
@@ -396,37 +489,43 @@ function navigateTo(page) {
   if (page === 'settings')  loadSettings();
 }
 
+function switchTab(tab) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.dash-tab').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + tab).classList.add('active');
+  event.target.classList.add('active');
+  if (tab === 'logs')    refreshLogs();
+  if (tab === 'history') loadHistory();
+}
+
 ipcRenderer.on('navigate', (_, page) => navigateTo(page));
 ipcRenderer.on('config',   (_, cfg)  => { if (cfg) prefillSetup(cfg); });
 
 function prefillSetup(cfg) {
-  if (cfg.bitrixUrl)     document.getElementById('bitrixUrl').value     = cfg.bitrixUrl;
-  if (cfg.tallyHost)     document.getElementById('tallyHost').value     = cfg.tallyHost;
-  if (cfg.tallyPort)     document.getElementById('tallyPort').value     = cfg.tallyPort;
-  if (cfg.tallyCompany)  document.getElementById('tallyCompany').value  = cfg.tallyCompany;
+  if (cfg.bitrixUrl)    document.getElementById('bitrixUrl').value    = cfg.bitrixUrl;
+  if (cfg.tallyHost)    document.getElementById('tallyHost').value    = cfg.tallyHost;
+  if (cfg.tallyPort)    document.getElementById('tallyPort').value    = cfg.tallyPort;
+  if (cfg.tallyCompany) document.getElementById('tallyCompany').value = cfg.tallyCompany;
 }
 
-// ── setup wizard ──────────────────────────────────────────────────────────────
+// ── setup wizard ────────────────────────────────────────────────────────────
 let currentStep = 1;
 
 function goStep(n) {
-  // Validate current step
   if (n === 2) {
     const url = document.getElementById('bitrixUrl').value.trim();
     if (!url || !url.includes('bitrix24')) { showToast('Please enter a valid Bitrix24 webhook URL', 'error'); return; }
   }
   if (n === 3) {
-    const host    = document.getElementById('tallyHost').value.trim();
-    const port    = document.getElementById('tallyPort').value.trim();
-    const company = document.getElementById('tallyCompany').value.trim();
-    if (!host || !port || !company) { showToast('Please fill all Tally fields', 'error'); return; }
+    const host = document.getElementById('tallyHost').value.trim();
+    const port = document.getElementById('tallyPort').value.trim();
+    const co   = document.getElementById('tallyCompany').value.trim();
+    if (!host || !port || !co) { showToast('Please fill all Tally fields', 'error'); return; }
   }
   if (n === 4) { installService(); return; }
 
   document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + n).classList.add('active');
-
-  // Update step indicators
   for (let i = 1; i <= 4; i++) {
     const ind = document.getElementById('step-ind-' + i);
     ind.classList.remove('active','done');
@@ -449,22 +548,17 @@ async function runTests() {
 
   try {
     const results = await ipcRenderer.invoke('test-connections', cfg);
-
     tb.textContent = results.bitrix ? 'Connected ✓' : `Failed: ${results.bitrixError||'Error'}`;
     tb.className   = 'test-status ' + (results.bitrix ? 'ok' : 'fail');
-
     tt.textContent = results.tally  ? 'Connected ✓' : `Failed: ${results.tallyError||'Error'}`;
     tt.className   = 'test-status ' + (results.tally  ? 'ok' : 'fail');
-
     if (results.bitrix && results.tally) {
       document.getElementById('btn-install').style.display = 'block';
       showToast('Both connections successful!', 'success');
     } else {
       showToast('Check your connection details and try again', 'error');
     }
-  } catch(e) {
-    showToast('Test failed: ' + e.message, 'error');
-  }
+  } catch(e) { showToast('Test failed: ' + e.message, 'error'); }
 
   document.getElementById('btn-test').innerHTML = 'Run Connection Test Again';
   document.getElementById('btn-test').disabled = false;
@@ -473,15 +567,12 @@ async function runTests() {
 async function installService() {
   document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-4').classList.add('active');
-
   const cfg = getFormConfig();
   try {
-    const result = await ipcRenderer.invoke('install-service', cfg);
+    await ipcRenderer.invoke('install-service', cfg);
     document.getElementById('installing-screen').style.display = 'none';
     document.getElementById('success-screen').style.display    = 'block';
-  } catch(e) {
-    showToast('Install failed: ' + e.message, 'error');
-  }
+  } catch(e) { showToast('Install failed: ' + e.message, 'error'); }
 }
 
 function showDashboard() { navigateTo('dashboard'); }
@@ -489,41 +580,120 @@ function showDashboard() { navigateTo('dashboard'); }
 function getFormConfig() {
   return {
     bitrixUrl:    document.getElementById('bitrixUrl').value.trim(),
-    tallyHost:    document.getElementById('tallyHost').value.trim()   || 'localhost',
+    tallyHost:    document.getElementById('tallyHost').value.trim() || 'localhost',
     tallyPort:    parseInt(document.getElementById('tallyPort').value) || 9000,
     tallyCompany: document.getElementById('tallyCompany').value.trim(),
   };
 }
 
-// ── dashboard ─────────────────────────────────────────────────────────────────
+// ── dashboard ───────────────────────────────────────────────────────────────
+function updateStatusUI(running) {
+  document.getElementById('status-dot').className      = 'status-dot' + (running ? '' : ' stopped');
+  document.getElementById('status-title').textContent  = running ? 'Service Running' : 'Service Stopped';
+  document.getElementById('status-sub').textContent    = running ? 'Syncing at 9 AM & 11 PM IST' : 'Click Start Service to resume';
+  document.getElementById('status-badge').textContent  = running ? 'LIVE' : 'OFFLINE';
+  document.getElementById('status-badge').className    = 'status-badge ' + (running ? 'live' : 'offline');
+  document.getElementById('svc-icon').textContent      = running ? '⏹' : '▶';
+  document.getElementById('svc-label').textContent     = running ? 'Stop Service' : 'Start Service';
+  document.getElementById('svc-sub').textContent       = running ? 'Pause all syncing' : 'Resume syncing';
+}
+
 async function loadDashboard() {
   const status = await ipcRenderer.invoke('get-status');
-  const running = status.running;
+  updateStatusUI(status.running);
+  loadStats();
+  updateNextSync();
+}
 
-  document.getElementById('status-icon').textContent  = running ? '⚡' : '⏸';
-  document.getElementById('status-icon').className    = 'status-indicator ' + (running ? 'running' : 'stopped');
-  document.getElementById('status-title').textContent = running ? 'Service Running' : 'Service Stopped';
-  document.getElementById('status-sub').textContent   = running ? 'Syncing at 9 AM & 11 PM IST' : 'Click Start Service to resume';
-  document.getElementById('status-badge').textContent = running ? 'LIVE' : 'OFFLINE';
-  document.getElementById('status-badge').style.background = running ? 'rgba(56,217,169,.15)' : 'rgba(255,92,106,.15)';
-  document.getElementById('status-badge').style.color      = running ? '#38d9a9' : '#ff5c6a';
+function loadStats() {
+  try {
+    const history = JSON.parse(localStorage.getItem('syncHistory') || '[]');
+    const total   = history.reduce((s, r) => s + (r.processed || 0), 0);
+    const failed  = history.reduce((s, r) => s + (r.failed    || 0), 0);
 
-  document.getElementById('svc-icon').textContent  = running ? '⏹' : '▶';
-  document.getElementById('svc-label').textContent = running ? 'Stop Service' : 'Start Service';
-  document.getElementById('svc-sub').textContent   = running ? 'Pause all syncing' : 'Resume syncing';
+    // today's syncs
+    const today = new Date().toDateString();
+    const todayCount = history
+      .filter(r => new Date(r.timestamp).toDateString() === today)
+      .reduce((s, r) => s + (r.processed || 0), 0);
 
-  refreshLogs();
+    document.getElementById('stat-synced').textContent = total   || '0';
+    document.getElementById('stat-today').textContent  = todayCount || '0';
+    document.getElementById('stat-failed').textContent = failed  || '0';
+  } catch {
+    document.getElementById('stat-synced').textContent = '—';
+    document.getElementById('stat-today').textContent  = '—';
+    document.getElementById('stat-failed').textContent = '—';
+  }
+}
+
+function updateNextSync() {
+  const now  = new Date();
+  const next9  = new Date(); next9.setHours(9,0,0,0);
+  const next23 = new Date(); next23.setHours(23,0,0,0);
+  if (now > next9)  next9.setDate(next9.getDate() + 1);
+  if (now > next23) next23.setDate(next23.getDate() + 1);
+  const nextSync = next9 < next23 ? next9 : next23;
+  const diff = nextSync - now;
+  const h = Math.floor(diff / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  const label = nextSync.getHours() === 9 ? '9:00 AM IST' : '11:00 PM IST';
+  document.getElementById('next-sync-time').textContent = `${label} (in ${h}h ${m}m)`;
+}
+
+async function loadHistory() {
+  const box = document.getElementById('history-list');
+  try {
+    // Try to get from sync history API
+    const logs = await ipcRenderer.invoke('get-logs');
+    const lines = logs.split('\n').filter(l => l.includes('sync completed') || l.includes('sync failed') || l.includes('Morning sync') || l.includes('Scheduled sync'));
+
+    if (lines.length === 0) {
+      box.innerHTML = `<div class="empty-state"><div class="es-icon">📭</div>No sync runs yet.<br/>Sync history will appear here after first run.</div>`;
+      return;
+    }
+
+    box.innerHTML = lines.slice(-20).reverse().map(line => {
+      const isError = line.includes('ERROR') || 
+                (line.includes('failed') && !line.includes('failed: 0') && !line.includes('"failed":0'));
+      const timeMatch = line.match(/\[([^\]]+)\]/);
+      const time      = timeMatch ? new Date(timeMatch[1]).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' }) : '—';
+      const isOutstanding = line.includes('outstanding') || line.includes('Outstanding');
+      const isDueDate     = line.includes('due date') || line.includes('Due date');
+      const isTally       = line.includes('Tally →') || line.includes('tally-to-bitrix');
+
+      const label = isOutstanding ? '📊 Outstanding Sync'
+                  : isDueDate     ? '⏰ Due Date Check'
+                  : isTally       ? '🔄 Tally → Bitrix24'
+                  :                 '🔄 Sync Run';
+
+      return `
+        <div class="history-item">
+          <div class="history-left">
+            <div class="history-dot ${isError ? 'error' : 'success'}"></div>
+            <div class="history-info">
+              <div class="history-title">${label}</div>
+              <div class="history-time">${time}</div>
+            </div>
+          </div>
+          <div class="history-badge ${isError ? 'err' : 'ok'}">${isError ? 'FAILED' : 'OK'}</div>
+        </div>`;
+    }).join('');
+  } catch(e) {
+    box.innerHTML = `<div class="empty-state"><div class="es-icon">⚠️</div>Could not load history</div>`;
+  }
 }
 
 async function refreshLogs() {
   const logs = await ipcRenderer.invoke('get-logs');
-  const box = document.getElementById('log-box');
-  const lines = logs.split('\n').filter(Boolean).slice(-50);
+  const box  = document.getElementById('log-box');
+  const lines = logs.split('\n').filter(Boolean).slice(-100);
   box.innerHTML = lines.map(line => {
     let cls = 'log-line';
-    if (line.includes('ERROR')) cls += ' error';
-    else if (line.includes('synced') || line.includes('created') || line.includes('complete')) cls += ' success';
-    else cls += ' info';
+    if (line.includes('ERROR'))                                          cls += ' error';
+    else if (line.includes('WARN'))                                      cls += ' warn';
+    else if (line.includes('synced') || line.includes('completed') || line.includes('created')) cls += ' success';
+    else                                                                 cls += ' info';
     return `<div class="${cls}">${escapeHtml(line)}</div>`;
   }).join('');
   box.scrollTop = box.scrollHeight;
@@ -532,23 +702,23 @@ async function refreshLogs() {
 async function syncNow() {
   showToast('Sync triggered…', 'success');
   await ipcRenderer.invoke('trigger-sync');
-  setTimeout(refreshLogs, 3000);
+  setTimeout(() => { refreshLogs(); loadStats(); }, 3000);
 }
 
-let svcRunning = true;
 async function toggleService() {
   const status = await ipcRenderer.invoke('get-status');
   if (status.running) {
+    updateStatusUI(false);
     await ipcRenderer.invoke('stop-service');
     showToast('Service stopped', 'error');
   } else {
+    updateStatusUI(true);
     await ipcRenderer.invoke('start-service');
     showToast('Service started', 'success');
   }
-  setTimeout(loadDashboard, 1500);
 }
 
-// ── settings ──────────────────────────────────────────────────────────────────
+// ── settings ─────────────────────────────────────────────────────────────────
 async function loadSettings() {
   const status = await ipcRenderer.invoke('get-status');
   const cfg = status.config || {};

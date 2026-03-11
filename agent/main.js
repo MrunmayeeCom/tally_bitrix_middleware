@@ -7,9 +7,10 @@ const Service = require('node-windows').Service;
 let mainWindow = null;
 let tray = null;
 let serviceRunning = false;
+let userStoppedService = false;
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
-const LOG_PATH    = path.join(app.getPath('userData'), 'sync.log');
+const LOG_PATH    = path.join(__dirname, '..', 'logs', 'combined.log');
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -53,9 +54,25 @@ function createService() {
 }
 
 function checkServiceStatus(cb) {
+  if (userStoppedService) {
+    serviceRunning = false;
+    cb(false);
+    return;
+  }
   exec('sc query TallyBitrixSync', (err, stdout) => {
-    serviceRunning = !err && stdout.includes('RUNNING');
-    cb(serviceRunning);
+    if (!err && stdout.includes('RUNNING')) {
+      serviceRunning = true;
+      cb(true);
+      return;
+    }
+    const http = require('http');
+    const req = http.request({ hostname: 'localhost', port: 3000, path: '/health', method: 'GET', timeout: 2000 }, (res) => {
+      serviceRunning = res.statusCode === 200;
+      cb(serviceRunning);
+    });
+    req.on('error', () => { serviceRunning = false; cb(false); });
+    req.on('timeout', () => { serviceRunning = false; cb(false); req.destroy(); });
+    req.end();
   });
 }
 
@@ -249,15 +266,38 @@ ipcMain.handle('trigger-sync', async () => {
 
 ipcMain.handle('get-logs', async () => {
   try {
-    if (fs.existsSync(LOG_PATH)) {
-      const lines = fs.readFileSync(LOG_PATH, 'utf8').split('\n').slice(-100);
-      return lines.join('\n');
+    const logPaths = [
+      LOG_PATH,
+      path.join(__dirname, '..', 'logs', 'combined.log'),
+      path.join(app.getPath('userData'), 'sync.log')
+    ];
+    for (const p of logPaths) {
+      if (fs.existsSync(p)) {
+        const lines = fs.readFileSync(p, 'utf8').split('\n').slice(-100);
+        return lines.join('\n');
+      }
     }
     return 'No logs yet.';
   } catch { return 'Could not read logs.'; }
 });
 
-ipcMain.on('close-window', () => { if (mainWindow) mainWindow.hide(); });
+ipcMain.handle('start-service', async () => {
+  userStoppedService = false;
+  exec('sc start TallyBitrixSync', () => {});
+  serviceRunning = true;
+  updateTray();
+  return { success: true };
+});
+
+ipcMain.handle('stop-service', async () => {
+  userStoppedService = true;
+  exec('sc stop TallyBitrixSync', () => {});
+  serviceRunning = false;
+  updateTray();
+  return { success: true };
+});
+
+ipcMain.on('close-window',    () => { if (mainWindow) mainWindow.hide(); });
 ipcMain.on('minimize-window', () => { if (mainWindow) mainWindow.minimize(); });
 
 // ── app lifecycle ─────────────────────────────────────────────────────────────
@@ -268,6 +308,8 @@ app.whenReady().then(() => {
 
   if (!isConfigured()) {
     createMainWindow('setup');
+  } else {
+    createMainWindow('dashboard');
   }
 });
 
