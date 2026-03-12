@@ -30,8 +30,9 @@ async function createLedger(ledger) {
 
   try {
     const existingXml = await sendToTally(existsXml);
-    const namePattern = new RegExp(`<NAME>${escapeXml(ledger.ledgerName)}</NAME>`, 'i');
-    if (namePattern.test(existingXml)) {
+    const namePatternAttr = new RegExp(`NAME="${escapeXml(ledger.ledgerName)}"`, 'i');
+    const namePatternTag  = new RegExp(`<NAME>\\s*${escapeXml(ledger.ledgerName)}\\s*</NAME>`, 'i');
+    if (namePatternAttr.test(existingXml) || namePatternTag.test(existingXml)) {
       logger.info('Ledger already exists in Tally, skipping', { ledgerName: ledger.ledgerName });
       return { skipped: true, ledgerName: ledger.ledgerName };
     }
@@ -51,6 +52,7 @@ async function createLedger(ledger) {
             <REPORTNAME>All Masters</REPORTNAME>
             <STATICVARIABLES>
               <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+              <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
             </STATICVARIABLES>
           </REQUESTDESC>
           <REQUESTDATA>
@@ -58,7 +60,7 @@ async function createLedger(ledger) {
               <LEDGER NAME="${escapeXml(ledger.ledgerName)}" ACTION="Create">
                 <NAME>${escapeXml(ledger.ledgerName)}</NAME>
                 <PARENT>${escapeXml(ledger.groupName)}</PARENT>
-                <OPENINGBALANCE>${ledger.openingBalance}</OPENINGBALANCE>
+                <OPENINGBALANCE>${ledger.openingBalance || ''}</OPENINGBALANCE>
               </LEDGER>
             </TALLYMESSAGE>
           </REQUESTDATA>
@@ -68,7 +70,8 @@ async function createLedger(ledger) {
   `.trim();
 
   const response = await sendToTally(xml);
-  logger.info('Ledger created in Tally', { ledgerName: ledger.ledgerName });
+  const importResult = (response || '').match(/<LINEERROR>(.*?)<\/LINEERROR>|<CREATED>(.*?)<\/CREATED>|<ALTERED>(.*?)<\/ALTERED>/i);
+  logger.info('Ledger created in Tally', { ledgerName: ledger.ledgerName, tallyResult: importResult ? importResult[0] : 'no error tag found' });
   return response;
 }
 

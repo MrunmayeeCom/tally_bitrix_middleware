@@ -23,7 +23,7 @@ app.post('/sync/outstanding', authMiddleware, async (req, res) => {
     logger.info('Manual outstanding sync triggered');
     const result = await processOutstanding();
     result.trigger = 'manual';
-    recordSync(result);
+    // recordSync(result);
     res.status(200).json({ success: true, ...result });
   } catch (error) {
     logger.error('Manual outstanding sync failed', { message: error.message });

@@ -14,7 +14,7 @@ function loadHistory() {
 
 function saveHistory(history) {
   try {
-    fs.writeFileSync(HISTORY_PATH, JSON.stringify(history.slice(-100), null, 2));
+    fs.writeFileSync(HISTORY_PATH, JSON.stringify(history.slice(-500), null, 2));
   } catch {}
 }
 

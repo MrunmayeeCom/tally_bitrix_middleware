@@ -2,12 +2,12 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } = 
 const path = require('path');
 const fs = require('fs');
 const { exec, spawn } = require('child_process');
-const Service = require('node-windows').Service;
 
 let mainWindow = null;
 let tray = null;
 let serviceRunning = false;
 let userStoppedService = false;
+let serverProcess = null;
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 const LOG_PATH = app.isPackaged
@@ -41,46 +41,81 @@ function getServiceScript() {
   return path.join(__dirname, '..', 'src', 'server.js');
 }
 
-function createService() {
-  const cfg = loadConfig() || {};
-  if (!cfg.bitrixUrl) throw new Error('Service not configured — run setup first');
-  const svc = new Service({
-    name:        'TallyBitrixSync',
-    description: 'TallyBitrixSync — Tally ↔ Bitrix24 Middleware',
-    script:      getServiceScript(),
-    env: [
-      { name: 'NODE_ENV',           value: 'production'         },
-      { name: 'PORT',               value: '3000'               },
-      { name: 'BITRIX_WEBHOOK_URL', value: cfg.bitrixUrl        },
-      { name: 'TALLY_HOST',         value: cfg.tallyHost        },
-      { name: 'TALLY_PORT',         value: String(cfg.tallyPort)},
-      { name: 'TALLY_COMPANY',      value: cfg.tallyCompany     },
-    ]
-  });
-  return svc;
+function getNodeExecutable() {
+  if (!app.isPackaged) return 'node';
+  
+  // Try common Node.js install paths on Windows
+  const nodePaths = [
+    'C:\\Program Files\\nodejs\\node.exe',
+    'C:\\Program Files (x86)\\nodejs\\node.exe',
+    path.join(process.env.APPDATA, '..', 'Local', 'Programs', 'node', 'node.exe'),
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'node.exe'),
+  ];
+  
+  for (const p of nodePaths) {
+    if (fs.existsSync(p)) {
+      return p;
+    }
+  }
+  
+  // Fallback to PATH
+  return 'node';
 }
 
 function checkServiceStatus(cb) {
-  if (userStoppedService) {
-    serviceRunning = false;
-    cb(false);
-    return;
-  }
-  exec('sc query TallyBitrixSync', (err, stdout) => {
-    if (!err && stdout.includes('RUNNING')) {
-      serviceRunning = true;
-      cb(true);
-      return;
-    }
-    const http = require('http');
-    const req = http.request({ hostname: 'localhost', port: 3000, path: '/health', method: 'GET', timeout: 2000 }, (res) => {
-      serviceRunning = res.statusCode === 200;
-      cb(serviceRunning);
-    });
-    req.on('error', () => { serviceRunning = false; cb(false); });
-    req.on('timeout', () => { serviceRunning = false; cb(false); req.destroy(); });
-    req.end();
+  if (userStoppedService) { serviceRunning = false; cb(false); return; }
+  // Primary check — is port 3000 actually responding?
+  const http = require('http');
+  const req = http.request({
+    hostname: 'localhost', port: 3000, path: '/health', method: 'GET', timeout: 2000
+  }, (res) => {
+    serviceRunning = res.statusCode === 200;
+    cb(serviceRunning);
   });
+  req.on('error',   () => { serviceRunning = false; cb(false); });
+  req.on('timeout', () => { serviceRunning = false; cb(false); req.destroy(); });
+  req.end();
+}
+
+function spawnServer(cfg) {
+  if (serverProcess) {
+    try { serverProcess.kill(); } catch {}
+    serverProcess = null;
+  }
+
+  const nodePath   = getNodeExecutable();
+  const scriptPath = getServiceScript();
+
+  const env = Object.assign({}, process.env, {
+    NODE_ENV:           'production',
+    PORT:               '3000',
+    BITRIX_WEBHOOK_URL: cfg.bitrixUrl,
+    TALLY_HOST:         cfg.tallyHost,
+    TALLY_PORT:         String(cfg.tallyPort),
+    TALLY_COMPANY:      cfg.tallyCompany,
+  });
+
+  serverProcess = spawn(nodePath, [scriptPath], {
+    env,
+    detached: false,
+    stdio:    'ignore',
+  });
+
+  serverProcess.on('exit', (code) => {
+    serviceRunning = false;
+    serverProcess  = null;
+    if (!userStoppedService) {
+      // Auto-restart after 5s if it crashed
+      setTimeout(() => {
+        const cfg = loadConfig();
+        if (cfg && !userStoppedService) spawnServer(cfg);
+      }, 5000);
+    }
+    updateTray();
+  });
+
+  serviceRunning     = true;
+  userStoppedService = false;
 }
 
 function updateTray() {
@@ -119,6 +154,7 @@ function triggerSync() {
   const req = http.request({
     hostname: 'localhost', port: 3000,
     path: '/sync/outstanding', method: 'POST',
+    timeout: 10000,
     headers
   }, (res) => {
     let data = '';
@@ -151,14 +187,17 @@ function openSettings() {
 
 function startService() {
   userStoppedService = false;
-  exec('sc start TallyBitrixSync', () => {});
-  serviceRunning = true;
+  const cfg = loadConfig();
+  if (cfg) spawnServer(cfg);
   updateTray();
 }
 
 function stopService() {
   userStoppedService = true;
-  exec('sc stop TallyBitrixSync', () => {});
+  if (serverProcess) {
+    try { serverProcess.kill(); } catch {}
+    serverProcess = null;
+  }
   exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {});
   serviceRunning = false;
   updateTray();
@@ -272,75 +311,28 @@ ipcMain.handle('test-connections', async (_, cfg) => {
 
 ipcMain.handle('install-service', async (_, cfg) => {
   saveConfig(cfg);
-  return new Promise((resolve) => {
-    // Stop existing service first if running
-    exec('sc stop TallyBitrixSync', () => {
-      exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {
-        setTimeout(() => {
-          try {
-            const svc = createService();
-            // If already installed, just start it
-            exec('sc query TallyBitrixSync', (err, stdout) => {
-              if (!err && stdout.includes('TallyBitrixSync')) {
-                // Already installed — just start
-                exec('sc start TallyBitrixSync', () => {
-                  userStoppedService = false;
-                  serviceRunning = true;
-                  updateTray();
-                  resolve({ success: true });
-                });
-              } else {
-                // Fresh install
-                svc.on('install', () => { svc.start(); });
-                svc.on('start', () => {
-                  userStoppedService = false;
-                  serviceRunning = true;
-                  updateTray();
-                  resolve({ success: true });
-                });
-                svc.on('error', (e) => resolve({ success: false, error: String(e) }));
-                svc.install();
-              }
-            });
-          } catch (e) {
-            resolve({ success: false, error: String(e) });
-          }
-        }, 1500);
-      });
-    });
-  });
+  if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
+  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {});
+
+  await new Promise(r => setTimeout(r, 1500));
+  spawnServer(cfg);
+
+  for (let i = 0; i < 10; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    const alive = await new Promise(r => checkServiceStatus(r));
+    if (alive) return { success: true };
+  }
+  return { success: true };
 });
 
 ipcMain.handle('uninstall-service', async () => {
-  return new Promise((resolve) => {
-    exec('sc stop TallyBitrixSync', () => {
-      exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {
-        try {
-          const svc = createService();
-          svc.on('uninstall', () => {
-            serviceRunning = false;
-            userStoppedService = true;
-            // Clean up config and logs
-            try { fs.unlinkSync(CONFIG_PATH); } catch {}
-            updateTray();
-            resolve({ success: true });
-          });
-          svc.on('error', () => {
-            serviceRunning = false;
-            userStoppedService = true;
-            updateTray();
-            resolve({ success: true });
-          });
-          svc.uninstall();
-        } catch (e) {
-          serviceRunning = false;
-          userStoppedService = true;
-          updateTray();
-          resolve({ success: true });
-        }
-      });
-    });
-  });
+  userStoppedService = true;
+  if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
+  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {});
+  try { fs.unlinkSync(CONFIG_PATH); } catch {}
+  serviceRunning = false;
+  updateTray();
+  return { success: true };
 });
  
 ipcMain.handle('get-status', async () => {
@@ -391,19 +383,27 @@ ipcMain.handle('get-logs', async () => {
 });
 
 ipcMain.handle('start-service', async () => {
-  userStoppedService = false;
-  exec('sc start TallyBitrixSync', () => {});
-  serviceRunning = true;
+  const cfg = loadConfig();
+  if (cfg) spawnServer(cfg);
   updateTray();
   return { success: true };
 });
 
 ipcMain.handle('stop-service', async () => {
   userStoppedService = true;
-  exec('sc stop TallyBitrixSync', () => {});
-  // Kill process on port 3000 to ensure it's fully stopped
+  if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
   exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {});
   serviceRunning = false;
+  updateTray();
+  return { success: true };
+});
+
+ipcMain.handle('save-and-restart', async (_, cfg) => {
+  saveConfig(cfg);
+  if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
+  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {});
+  await new Promise(r => setTimeout(r, 1500));
+  spawnServer(cfg);
   updateTray();
   return { success: true };
 });
@@ -415,13 +415,21 @@ ipcMain.on('minimize-window', () => { if (mainWindow) mainWindow.minimize(); });
 
 app.whenReady().then(() => {
   app.setAppUserModelId('com.rajlaxmi.tallybitrixsync');
+  app.setLoginItemSettings({ openAtLogin: true });
   createTray();
 
   if (!isConfigured()) {
     createMainWindow('setup');
   } else {
+    // Auto-start server on app launch
+    const cfg = loadConfig();
+    if (cfg) spawnServer(cfg);
     createMainWindow('dashboard');
   }
+});
+
+app.on('before-quit', () => {
+  if (serverProcess) { try { serverProcess.kill(); } catch {} }
 });
 
 app.on('window-all-closed', (e) => e.preventDefault()); // keep running in tray

@@ -56,8 +56,22 @@ cron.schedule('0 23 * * *', async () => {
     timezone: 'Asia/Kolkata'
   });
 
-  // Tally → Bitrix24 ledger sync every 2 hours
-  cron.schedule('0 */2 * * *', async () => {
+  // Tally → Bitrix24 outstanding sync every 5 minutes
+  cron.schedule('*/15 * * * *', async () => {
+    logger.info('Scheduled Tally → Bitrix24 outstanding sync triggered');
+    try {
+      const result = await processOutstanding();
+      logger.info('15-min outstanding sync completed', result);
+    } catch (error) {
+      logger.error('15-min outstanding sync failed', { message: error.message });
+      recordSyncFailure('15min outstanding sync', error.message);
+    }
+  }, {
+    timezone: 'Asia/Kolkata'
+  });
+
+  // Tally → Bitrix24 ledger sync every 1 hours
+  cron.schedule('0 */1 * * *', async () => {
     logger.info('Scheduled Tally → Bitrix24 ledger sync triggered');
     try {
       await processTallyToContact();
@@ -69,7 +83,7 @@ cron.schedule('0 23 * * *', async () => {
     timezone: 'Asia/Kolkata'
   });
 
-  logger.info('Scheduler started — Outstanding sync at 9:00 AM and 11:00 PM IST | Due date check at 9:30 AM IST | Tally→Bitrix24 ledger sync every 2 hours');
+  logger.info('Scheduler started — Outstanding sync at 9AM, 11PM & every 15min IST | Due date check at 9:30 AM IST | Tally→Bitrix24 ledger sync every 1 hours');
 }
 
 module.exports = { startScheduler };

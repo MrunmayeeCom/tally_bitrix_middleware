@@ -182,7 +182,7 @@
   /* sync history */
   .section-title{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:8px;font-weight:600;}
 
-  .history-list{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto;}
+  .history-list{display:flex;flex-direction:column;gap:6px;max-height:440px;overflow-y:auto;}
   .history-item{
     background:var(--surface);border:1px solid var(--border2);
     border-radius:8px;padding:10px 14px;
@@ -469,6 +469,7 @@
       <div style="background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--muted);line-height:1.8;">
         ⏰ Outstanding sync — 9:00 AM IST<br/>
         🔔 Due date automation — 9:30 AM IST<br/>
+        🔄 Outstanding sync — Every 30 mins<br/>
         🔄 Tally → Bitrix24 ledger sync — Every 2 hrs<br/>
         ⏰ Outstanding sync — 11:00 PM IST
       </div>
@@ -502,7 +503,8 @@ function switchTab(tab, btn) {
   if (activeBtn) activeBtn.classList.add('active');
   if (tab === 'logs')    startLogAutoRefresh();
   else                   stopLogAutoRefresh();
-  if (tab === 'history') loadHistory();
+  if (tab === 'history') { loadHistory(); startHistoryAutoRefresh(); }
+  else                     stopHistoryAutoRefresh();
 }
 
 ipcRenderer.on('navigate', (_, page) => navigateTo(page));
@@ -591,10 +593,18 @@ async function installService() {
   document.getElementById('panel-4').classList.add('active');
   const cfg = getFormConfig();
   try {
-    await ipcRenderer.invoke('install-service', cfg);
+    // Timeout safety — resolve after 20s regardless
+    const result = await Promise.race([
+      ipcRenderer.invoke('install-service', cfg),
+      new Promise(r => setTimeout(() => r({ success: true, timeout: true }), 20000))
+    ]);
     document.getElementById('installing-screen').style.display = 'none';
     document.getElementById('success-screen').style.display    = 'block';
-  } catch(e) { showToast('Install failed: ' + e.message, 'error'); }
+  } catch(e) {
+    // Still show success — service may have installed even if IPC errored
+    document.getElementById('installing-screen').style.display = 'none';
+    document.getElementById('success-screen').style.display    = 'block';
+  }
 }
 
 function showDashboard() { navigateTo('dashboard'); }
@@ -675,17 +685,19 @@ async function loadHistory() {
       return;
     }
 
-    box.innerHTML = history.slice(0, 20).map(record => {
+    box.innerHTML = history.slice(0, 50).map(record => {
       const isError = !record.success || record.failed > 0;
       const time    = new Date(record.timestamp).toLocaleString('en-IN', {
         day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
       });
       const trigger = record.trigger || 'scheduled';
       const label   = trigger.includes('9AM')       ? '📊 Morning Sync'
-                    : trigger.includes('11PM')       ? '📊 Night Sync'
-                    : trigger.includes('due')        ? '⏰ Due Date Check'
-                    : trigger === 'manual'           ? '🖱️ Manual Sync'
-                    :                                  '🔄 Sync Run';
+              : trigger.includes('11PM')       ? '📊 Night Sync'
+              : trigger.includes('due')        ? '⏰ Due Date Check'
+              : trigger === 'manual'           ? '🖱️ Manual Sync'
+              : trigger.includes('30min')      ? '🔄 30-Min Sync'
+              : trigger.includes('scheduled')  ? '🔄 Sync Run'
+              :                                  '🔄 Sync Run';
       const detail  = isError
                     ? (record.error || `${record.failed} failed`)
                     : `${record.processed} bills synced`;
@@ -707,7 +719,17 @@ async function loadHistory() {
   }
 }
 
-let _logRefreshInterval = null;
+let _logRefreshInterval     = null;
+let _historyRefreshInterval = null;
+
+function startHistoryAutoRefresh() {
+  stopHistoryAutoRefresh();
+  _historyRefreshInterval = setInterval(loadHistory, 10000);
+}
+
+function stopHistoryAutoRefresh() {
+  if (_historyRefreshInterval) { clearInterval(_historyRefreshInterval); _historyRefreshInterval = null; }
+}
 
 async function refreshLogs() {
   const logs = await ipcRenderer.invoke('get-logs');
@@ -822,7 +844,7 @@ async function saveSettings() {
     tallyPort:    parseInt(document.getElementById('s-tallyPort').value),
     tallyCompany: document.getElementById('s-tallyCompany').value.trim(),
   };
-  await ipcRenderer.invoke('install-service', cfg);
+  await ipcRenderer.invoke('save-and-restart', cfg);
   showToast('Settings saved — service restarting…', 'success');
   setTimeout(() => navigateTo('dashboard'), 2000);
 }

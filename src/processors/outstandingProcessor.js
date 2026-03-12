@@ -167,7 +167,7 @@ async function processOutstanding() {
     await closePaidDeals(currentVoucherNumbers);
 
     const syncResult = { success: true, processed, failed, trigger: 'scheduled' };
-    recordSync(syncResult);
+    // recordSync(syncResult);
     logger.info('Outstanding sync completed', { processed, failed });
     return syncResult;
   } catch (error) {
