@@ -69,6 +69,7 @@ async function createLedger(ledger) {
     </ENVELOPE>
   `.trim();
 
+  await new Promise(resolve => setTimeout(resolve, 2000));
   const response = await sendToTally(xml);
   const importResult = (response || '').match(/<LINEERROR>(.*?)<\/LINEERROR>|<CREATED>(.*?)<\/CREATED>|<ALTERED>(.*?)<\/ALTERED>/i);
   logger.info('Ledger created in Tally', { ledgerName: ledger.ledgerName, tallyResult: importResult ? importResult[0] : 'no error tag found' });
@@ -77,7 +78,7 @@ async function createLedger(ledger) {
 
 // Get all Ledgers from Tally
 async function getLedgers() {
-  logger.info('Fetching ledgers from Tally');
+  logger.info('Fetching ledgers from Tally (Sundry Debtors, limit 5)');
 
   const xml = `
     <ENVELOPE>
@@ -91,6 +92,7 @@ async function getLedgers() {
             <STATICVARIABLES>
               <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
               <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+              <GROUPNAME>Sundry Debtors</GROUPNAME>
             </STATICVARIABLES>
           </REQUESTDESC>
         </EXPORTDATA>
@@ -98,8 +100,15 @@ async function getLedgers() {
     </ENVELOPE>
   `.trim();
 
+  await new Promise(resolve => setTimeout(resolve, 1000));
   const response = await sendToTally(xml);
-  return parseLedgersXml(response);
+
+  const sampleChunk = response.slice(0, 5000);
+  logger.info('RAW TALLY SAMPLE', { sample: sampleChunk });
+
+  const all = parseLedgersXml(response);
+  logger.info(`Returning ${all.length} ledgers`);
+  return all;
 }
 
 // Parse Tally List of Accounts XML into structured array
@@ -128,7 +137,8 @@ function parseLedgersXml(xml) {
 
       // Only sync Sundry Debtors and Sundry Creditors ledgers
       // Skip system ledgers like Cash, Bank, Tax accounts etc.
-      const syncGroups = ['sundry debtors', 'sundry creditors'];
+      //const syncGroups = ['sundry debtors', 'sundry creditors'];
+      const syncGroups = ['sundry debtors'];
       if (!syncGroups.includes(parent.toLowerCase())) continue;
 
       ledgers.push({
@@ -136,6 +146,8 @@ function parseLedgersXml(xml) {
         groupName:  parent,
         phone:      get('LEDPHONE')    || get('PHONE')    || '',
         email:      get('LEDEMAIL')    || get('EMAIL')    || '',
+        gstin:      get('PARTYGSTIN') || get('GSTIN') || '',
+        gstType:    get('GSTREGISTRATIONTYPE') || '',
       });
     }
 
@@ -241,6 +253,12 @@ function parseOutstandingXml(xml) {
       const amount = Math.abs(parseFloat(billCl)) || 0;
 
       if (!partyName && !voucherNumber) continue;
+
+      // Skip bills older than 5 years
+      const billDateParsed = new Date(formatTallyDateToISO(parseTallyDisplayDate(billDateRaw)));
+      const cutoffDate = new Date();
+      cutoffDate.setFullYear(cutoffDate.getFullYear() - 3);
+      if (billDateParsed < cutoffDate) continue;
 
       bills.push({
         voucherNumber,

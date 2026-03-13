@@ -9,81 +9,60 @@ function recordSyncFailure(trigger, message) {
   recordSync({ success: false, processed: 0, failed: 1, trigger, error: message });
 }
 
-// ─────────────────────────────────────────
-// Scheduler — Runs outstanding sync nightly
-// ─────────────────────────────────────────
+let isSyncing = false;
+let schedulerStarted = false;
+
+async function runSync(label, fn) {
+  if (isSyncing) {
+    logger.warn(`Sync already running — skipping ${label}`);
+    return;
+  }
+  isSyncing = true;
+  try {
+    const result = await fn();
+    logger.info(`${label} completed`, result || {});
+  } catch (error) {
+    logger.error(`${label} failed`, { message: error.message });
+    recordSyncFailure(label, error.message);
+  } finally {
+    isSyncing = false;
+  }
+}
+
+// Run ledger sync first, then outstanding sync sequentially
+async function runFullSync(label) {
+  await runSync(`${label} — ledger sync`, processTallyToContact);
+  await runSync(`${label} — outstanding sync`, processOutstanding);
+}
 
 function startScheduler() {
+  if (schedulerStarted) {
+    logger.warn('Scheduler already running — skipping duplicate start');
+    return;
+  }
+  schedulerStarted = true;
 
-  // Run every night at 11:00 PM
-cron.schedule('0 23 * * *', async () => {
-    logger.info('Scheduled outstanding sync triggered');
-    try {
-      const result = await processOutstanding();
-      logger.info('Scheduled sync completed', result);
-    } catch (error) {
-      logger.error('Scheduled sync failed', { message: error.message });
-      recordSyncFailure('11PM scheduled sync', error.message);
-    }
-  }, {
-    timezone: 'Asia/Kolkata'
-  });
+  // 9:00 AM — full sync (ledger first, then outstanding)
+  cron.schedule('0 9 * * *', () => {
+    runFullSync('9AM');
+  }, { timezone: 'Asia/Kolkata' });
 
-  // Run every day at 9:00 AM as well
-  cron.schedule('0 9 * * *', async () => {
-    logger.info('Scheduled outstanding sync triggered');
-    try {
-      const result = await processOutstanding();
-      logger.info('Morning sync completed', result);
-    } catch (error) {
-      logger.error('Morning sync failed', { message: error.message });
-      recordSyncFailure('9AM scheduled sync', error.message);
-    }
-  }, {
-    timezone: 'Asia/Kolkata'
-  });
+  // 11:00 PM — full sync (ledger first, then outstanding)
+  cron.schedule('0 23 * * *', () => {
+    runFullSync('11PM');
+  }, { timezone: 'Asia/Kolkata' });
 
-  // Run due date automation daily at 9:30 AM
-  cron.schedule('30 9 * * *', async () => {
-    logger.info('Scheduled due date automation triggered');
-    try {
-      await processDueDates();
-    } catch (error) {
-      logger.error('Due date automation failed', { message: error.message });
-      recordSyncFailure('Due date automation', error.message);
-    }
-  }, {
-    timezone: 'Asia/Kolkata'
-  });
+  // 9:30 AM — due date automation (runs after 9AM sync finishes)
+  cron.schedule('30 9 * * *', () => {
+    runSync('Due date automation', processDueDates);
+  }, { timezone: 'Asia/Kolkata' });
 
-  // Tally → Bitrix24 outstanding sync every 5 minutes
-  cron.schedule('*/15 * * * *', async () => {
-    logger.info('Scheduled Tally → Bitrix24 outstanding sync triggered');
-    try {
-      const result = await processOutstanding();
-      logger.info('15-min outstanding sync completed', result);
-    } catch (error) {
-      logger.error('15-min outstanding sync failed', { message: error.message });
-      recordSyncFailure('15min outstanding sync', error.message);
-    }
-  }, {
-    timezone: 'Asia/Kolkata'
-  });
+  // Every 4 hours — full sync (gentle on Tally, not every 2 hours)
+  cron.schedule('0 */4 * * *', () => {
+    runFullSync('4hr');
+  }, { timezone: 'Asia/Kolkata' });
 
-  // Tally → Bitrix24 ledger sync every 1 hours
-  cron.schedule('0 */1 * * *', async () => {
-    logger.info('Scheduled Tally → Bitrix24 ledger sync triggered');
-    try {
-      await processTallyToContact();
-    } catch (error) {
-      logger.error('Tally → Bitrix24 sync failed', { message: error.message });
-      recordSyncFailure('Tally→Bitrix24 ledger sync', error.message);
-    }
-  }, {
-    timezone: 'Asia/Kolkata'
-  });
-
-  logger.info('Scheduler started — Outstanding sync at 9AM, 11PM & every 15min IST | Due date check at 9:30 AM IST | Tally→Bitrix24 ledger sync every 1 hours');
+  logger.info('Scheduler started — Full sync (ledger → outstanding) at 9AM, 11PM & every 4hrs IST | Due date check at 9:30AM IST');
 }
 
 module.exports = { startScheduler };

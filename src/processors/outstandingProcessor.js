@@ -6,6 +6,7 @@ const { getTallyPipelineCategoryId } = require('../services/pipelineService');
 const { daysPending, formatAmount } = require('../utils/helpers');
 const { recordSync } = require('../utils/syncHistory');
 const logger = require('../utils/logger');
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 
 // Match a Tally party name to a Bitrix24 contact or company
@@ -18,10 +19,10 @@ async function findBitrixParty(partyName) {
       filter: { '%NAME': partyName },
       select: ['ID', 'NAME', 'LAST_NAME']
     });
-    const contacts = contactData.result || contactData;
+    const contacts = contactData.result || [];
     if (contacts.length > 0) {
       logger.info('Matched party to contact', { partyName, contactId: contacts[0].ID });
-      return { bitrixContactId: contacts[0].ID };
+      return { CONTACT_ID: contacts[0].ID };
     }
 
     // Search companies
@@ -29,14 +30,26 @@ async function findBitrixParty(partyName) {
       filter: { '%TITLE': partyName },
       select: ['ID', 'TITLE']
     });
-    const companies = companyData.result || companyData;
+    const companies = companyData.result || [];
     if (companies.length > 0) {
       logger.info('Matched party to company', { partyName, companyId: companies[0].ID });
-      return { bitrixCompanyId: companies[0].ID };
+      return { COMPANY_ID: companies[0].ID };
     }
 
+    // NOT FOUND — auto-create as company in Bitrix24
+    logger.info('Party not found in Bitrix24 — auto-creating company', { partyName });
+    const newCompany = await callBitrix('crm.company.add', {
+      fields: {
+        TITLE:    partyName,
+        COMMENTS: 'Auto-created from Tally outstanding sync'
+      }
+    });
+    const newId = newCompany.result;
+    logger.info('Company auto-created in Bitrix24', { partyName, companyId: newId });
+    return { COMPANY_ID: newId };
+
   } catch (e) {
-    logger.warn('Party name lookup failed', { partyName, message: e.message });
+    logger.warn('Party name lookup/create failed', { partyName, message: e.message });
   }
 
   return {};
@@ -153,6 +166,7 @@ async function processOutstanding() {
         });
 
         processed++;
+        await sleep(500);
 
       } catch (itemError) {
         logger.error('Failed to process outstanding bill', {

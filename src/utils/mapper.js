@@ -91,6 +91,8 @@ function mapOutstandingToDeal(outstanding) {
 
   if (outstanding.bitrixContactId) fields.CONTACT_ID = outstanding.bitrixContactId;
   if (outstanding.bitrixCompanyId) fields.COMPANY_ID = outstanding.bitrixCompanyId;
+  if (outstanding.CONTACT_ID) fields.CONTACT_ID = outstanding.CONTACT_ID;
+  if (outstanding.COMPANY_ID) fields.COMPANY_ID = outstanding.COMPANY_ID;
 
   return fields;
 }

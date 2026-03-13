@@ -151,24 +151,41 @@ function triggerSync() {
   const headers = { 'Content-Type': 'application/json' };
   if (cfg.apiKey) headers['x-api-key'] = cfg.apiKey;
 
-  const req = http.request({
+  // Step 1: Ledger sync FIRST (creates companies/contacts in Bitrix24)
+  const req1 = http.request({
     hostname: 'localhost', port: 3000,
-    path: '/sync/outstanding', method: 'POST',
-    timeout: 10000,
-    headers
+    path: '/sync/tally-to-bitrix', method: 'POST',
+    timeout: 60000, headers
   }, (res) => {
     let data = '';
     res.on('data', d => data += d);
     res.on('end', () => {
-      if (res.statusCode === 401) {
-        dialog.showErrorBox('Auth Error', 'API key mismatch. Check settings.');
-        return;
-      }
-      dialog.showMessageBox({ type: 'info', title: 'Sync Complete', message: `Sync triggered successfully!` });
+      // Step 2: Outstanding sync AFTER companies exist
+      const req2 = http.request({
+        hostname: 'localhost', port: 3000,
+        path: '/sync/outstanding', method: 'POST',
+        timeout: 120000, headers
+      }, (res2) => {
+        let data2 = '';
+        res2.on('data', d => data2 += d);
+        res2.on('end', () => {
+          if (res2.statusCode === 401) {
+            dialog.showErrorBox('Auth Error', 'API key mismatch. Check settings.');
+            return;
+          }
+          dialog.showMessageBox({
+            type: 'info',
+            title: 'Sync Complete',
+            message: 'Companies/Contacts + Deals synced successfully!'
+          });
+        });
+      });
+      req2.on('error', () => dialog.showErrorBox('Outstanding Sync Failed', 'Could not reach the sync service.'));
+      req2.end();
     });
   });
-  req.on('error', () => dialog.showErrorBox('Sync Failed', 'Could not reach the sync service. Is it running?'));
-  req.end();
+  req1.on('error', () => dialog.showErrorBox('Ledger Sync Failed', 'Could not reach the sync service. Is it running?'));
+  req1.end();
 }
 
 function openLogs() {

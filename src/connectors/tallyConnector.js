@@ -5,7 +5,8 @@ const { withRetry } = require('../utils/retry');
 
 const tallyClient = axios.create({
   baseURL: `http://${tallyConfig.host}:${tallyConfig.port}`,
-  headers: { 'Content-Type': 'text/xml' }
+  headers: { 'Content-Type': 'text/xml' },
+  timeout: 120000 // 120 seconds — if Tally doesn't respond, abort instead of hanging
 });
 
 async function sendToTally(xml) {
@@ -22,7 +23,7 @@ async function sendToTally(xml) {
       logger.error('Tally API error', { code: reason, status, body });
       throw new Error(`Tally unreachable: ${reason}`);
     }
-  }, { maxAttempts: 3, delayMs: 2000, label: 'Tally request' });
+  }, { maxAttempts: 1, delayMs: 3000, label: 'Tally request' });
 }
 
 module.exports = { sendToTally };

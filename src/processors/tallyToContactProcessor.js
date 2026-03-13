@@ -119,11 +119,24 @@ async function processTallyToContact() {
 
         // Step 3: Not found — create as company in Bitrix24
         // (Tally ledgers are almost always businesses)
-        const newId = await createBitrixCompany(ledger);
-        logger.info('Tally ledger synced to Bitrix24 as company', {
-          ledgerName: ledger.ledgerName,
-          companyId:  newId
-        });
+        // Step 3: Not found — decide company vs contact based on GSTIN
+        const isCompany = ledger.gstin && ledger.gstin.length === 15
+          || ['regular', 'composition', 'sez'].includes((ledger.gstType || '').toLowerCase());
+
+        if (isCompany) {
+          const newId = await createBitrixCompany(ledger);
+          logger.info('Tally ledger synced to Bitrix24 as COMPANY', {
+            ledgerName: ledger.ledgerName,
+            gstin: ledger.gstin,
+            companyId: newId
+          });
+        } else {
+          const newId = await createBitrixContact(ledger);
+          logger.info('Tally ledger synced to Bitrix24 as CONTACT', {
+            ledgerName: ledger.ledgerName,
+            contactId: newId
+          });
+        }
         created++;
 
       } catch (itemError) {
