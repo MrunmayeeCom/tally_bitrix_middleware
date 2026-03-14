@@ -9,6 +9,7 @@ const bitrixClient = axios.create({
 });
 
 async function callBitrix(method, params = {}) {
+  const isWrite = /\.(add|create)$/i.test(method);
   return withRetry(async () => {
     try {
       logger.info(`Bitrix24 API call: ${method}`, params);
@@ -19,7 +20,7 @@ async function callBitrix(method, params = {}) {
       logger.error(`Bitrix24 API error: ${method}`, { message: error.message });
       throw error;
     }
-  }, { maxAttempts: 3, delayMs: 1500, label: `Bitrix24 ${method}` });
+  }, { maxAttempts: isWrite ? 1 : 3, delayMs: 1500, label: `Bitrix24 ${method}` });
 }
 
 module.exports = { callBitrix };

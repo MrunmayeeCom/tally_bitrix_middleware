@@ -8,36 +8,47 @@ const MOCK_MODE = false; // Real Tally licensed version
 async function createLedger(ledger) {
   logger.info('Creating ledger in Tally', { ledgerName: ledger.ledgerName });
 
-  // Dedup check — fetch existing ledger by name
-  const existsXml = `
-    <ENVELOPE>
-      <HEADER>
-        <TALLYREQUEST>Export Data</TALLYREQUEST>
-      </HEADER>
-      <BODY>
-        <EXPORTDATA>
-          <REQUESTDESC>
-            <REPORTNAME>List of Accounts</REPORTNAME>
-            <STATICVARIABLES>
-              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
-              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-            </STATICVARIABLES>
-          </REQUESTDESC>
-        </EXPORTDATA>
-      </BODY>
-    </ENVELOPE>
-  `.trim();
+  // // Dedup check — fetch existing ledger by name
+  // const existsXml = `
+  //   <ENVELOPE>
+  //     <HEADER>
+  //       <TALLYREQUEST>Export Data</TALLYREQUEST>
+  //     </HEADER>
+  //     <BODY>
+  //       <EXPORTDATA>
+  //         <REQUESTDESC>
+  //           <REPORTNAME>List of Accounts</REPORTNAME>
+  //           <STATICVARIABLES>
+  //             <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+  //             <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+  //           </STATICVARIABLES>
+  //         </REQUESTDESC>
+  //       </EXPORTDATA>
+  //     </BODY>
+  //   </ENVELOPE>
+  // `.trim();
 
+  // try {
+  //   const existingXml = await sendToTally(existsXml);
+  //   const namePatternAttr = new RegExp(`NAME="${escapeXml(ledger.ledgerName)}"`, 'i');
+  //   const namePatternTag  = new RegExp(`<NAME>\\s*${escapeXml(ledger.ledgerName)}\\s*</NAME>`, 'i');
+  //   if (namePatternAttr.test(existingXml) || namePatternTag.test(existingXml)) {
+  //     logger.info('Ledger already exists in Tally, skipping', { ledgerName: ledger.ledgerName });
+  //     return { skipped: true, ledgerName: ledger.ledgerName };
+  //   }
+  // } catch (checkError) {
+  //   // If dedup check fails, proceed with creation anyway
+  //   logger.warn('Ledger dedup check failed, proceeding with create', { message: checkError.message });
+  // }
+
+  // Dedup check — fetch only this specific ledger by name (lightweight, won't freeze Tally)
   try {
-    const existingXml = await sendToTally(existsXml);
-    const namePatternAttr = new RegExp(`NAME="${escapeXml(ledger.ledgerName)}"`, 'i');
-    const namePatternTag  = new RegExp(`<NAME>\\s*${escapeXml(ledger.ledgerName)}\\s*</NAME>`, 'i');
-    if (namePatternAttr.test(existingXml) || namePatternTag.test(existingXml)) {
+    const existing = await getLedgerByName(ledger.ledgerName);
+    if (existing) {
       logger.info('Ledger already exists in Tally, skipping', { ledgerName: ledger.ledgerName });
       return { skipped: true, ledgerName: ledger.ledgerName };
     }
   } catch (checkError) {
-    // If dedup check fails, proceed with creation anyway
     logger.warn('Ledger dedup check failed, proceeding with create', { message: checkError.message });
   }
 

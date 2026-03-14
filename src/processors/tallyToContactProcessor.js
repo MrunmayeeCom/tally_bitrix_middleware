@@ -44,21 +44,16 @@ async function findBitrixCompany(name) {
 
 // Create contact in Bitrix24 from Tally ledger
 async function createBitrixContact(ledger) {
-  const nameParts = ledger.ledgerName.trim().split(' ');
-  const firstName = nameParts[0] || ledger.ledgerName;
-  const lastName  = nameParts.slice(1).join(' ') || '';
-
+  // Create as Company — TITLE field always displays correctly in Bitrix24
   const fields = {
-    NAME:      firstName,
-    LAST_NAME: lastName,
-    SOURCE_ID: 'OTHER',
-    COMMENTS:  'Auto-created from Tally ledger sync'
+    TITLE:    ledger.ledgerName,
+    COMMENTS: 'Auto-created from Tally ledger sync'
   };
 
   if (ledger.phone) fields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
   if (ledger.email) fields.EMAIL = [{ VALUE: ledger.email, VALUE_TYPE: 'WORK' }];
 
-  const data = await callBitrix('crm.contact.add', { fields });
+  const data = await callBitrix('crm.company.add', { fields });
   return data.result;
 }
 
@@ -111,10 +106,27 @@ async function processTallyToContact() {
         // Try company first (most Tally ledgers are businesses)
         const existingCompany = await findBitrixCompany(ledger.ledgerName);
         if (existingCompany) {
-          logger.info('Ledger already exists as company in Bitrix24 — skipping', {
-            ledgerName: ledger.ledgerName,
-            companyId:  existingCompany.ID
-          });
+          // Update existing company with latest details from Tally
+          const updateFields = {};
+          if (ledger.phone) updateFields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
+          if (ledger.email) updateFields.EMAIL = [{ VALUE: ledger.email, VALUE_TYPE: 'WORK' }];
+          if (ledger.gstin) updateFields.UF_CRM_GSTIN = ledger.gstin;
+
+          if (Object.keys(updateFields).length > 0) {
+            await callBitrix('crm.company.update', {
+              id:     existingCompany.ID,
+              fields: updateFields
+            });
+            logger.info('Bitrix24 company updated with latest Tally data', {
+              ledgerName: ledger.ledgerName,
+              companyId:  existingCompany.ID,
+              updated:    Object.keys(updateFields)
+            });
+          } else {
+            logger.info('Ledger already exists — no new data to update', {
+              ledgerName: ledger.ledgerName
+            });
+          }
           skipped++;
           continue;
         }

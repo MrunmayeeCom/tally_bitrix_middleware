@@ -183,9 +183,11 @@ async function processOutstanding() {
   try {
     logger.info('Outstanding sync started');
 
-    // Reset per-run cache and circuit breaker
+    // Reset per-run cache, circuit breaker, and dedup set
     partyCache.clear();
     tallyLedgerCircuitOpen = false;
+    const createdThisRun = new Set();
+    const inFlightVouchers = new Set();
 
     // Step 1: Fetch outstanding bills from Tally
     const outstandingList = await getOutstanding();
@@ -210,15 +212,35 @@ async function processOutstanding() {
         Object.assign(outstanding, partyMatch);
 
         const dealFields     = mapOutstandingToDeal(outstanding);
+        const dealKey = `${outstanding.partyName}||${outstanding.voucherNumber}`;
+
+        // Guard 1: skip if another parallel batch item is already creating this deal
+        if (inFlightVouchers.has(dealKey)) {
+          logger.warn('Duplicate in-flight — skipping', { dealKey });
+          return;
+        }
+        // Guard 2: skip if this deal was already created earlier in this sync run
+        if (createdThisRun.has(dealKey)) {
+          logger.warn('Already created this run — skipping duplicate', { dealKey });
+          processed++;
+          return;
+        }
+
+        inFlightVouchers.add(dealKey);
         const existingDealId = await findExistingDeal(outstanding.partyName, outstanding.voucherNumber);
         let action;
 
-        if (existingDealId) {
-          await updateDeal(existingDealId, dealFields);
-          action = 'updated';
-        } else {
-          await createDeal(dealFields);
-          action = 'created';
+        try {
+          if (existingDealId) {
+            await updateDeal(existingDealId, dealFields);
+            action = 'updated';
+          } else {
+            createdThisRun.add(dealKey);
+            await createDeal(dealFields);
+            action = 'created';
+          }
+        } finally {
+          inFlightVouchers.delete(dealKey);
         }
 
         logger.info(`Outstanding bill ${action} in Bitrix24`, {
