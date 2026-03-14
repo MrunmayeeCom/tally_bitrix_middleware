@@ -1,6 +1,9 @@
 const { getDealsInPipeline, getStages, updateDeal, sendNotification } = require('../services/bitrixService');
 const { getTallyPipelineCategoryId } = require('../services/pipelineService');
+const { getEscalationLastSent, setEscalationLastSent } = require('../utils/syncHistory');
 const logger = require('../utils/logger');
+
+const ESCALATION_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 
 // ─────────────────────────────────────────
 // Due Date Automation Processor
@@ -98,16 +101,25 @@ async function processDueDates() {
           notified7Days++;
         }
 
-        // 3 — Escalation: 30+ days overdue, notify responsible person again
+        // 3 — Escalation: 30+ days overdue, notify once every 3 days (persisted across restarts)
         if (diffDays < -30 && deal.ASSIGNED_BY_ID) {
-          await sendNotification(
-            deal.ASSIGNED_BY_ID,
-            `🚨 OVERDUE 30+ DAYS: [b]${deal.TITLE}[/b] | Amount: ₹${deal.OPPORTUNITY} | Was due: ${deal.CLOSEDATE}`,
-            deal.ID
-          );
-          logger.info('30-day escalation sent', { dealId: deal.ID, title: deal.TITLE });
-          escalated++;
+          const lastEscalated = getEscalationLastSent(deal.ID);
+          const now = Date.now();
+          if (now - lastEscalated >= ESCALATION_COOLDOWN_MS) {
+            await sendNotification(
+              deal.ASSIGNED_BY_ID,
+              `🚨 OVERDUE 30+ DAYS: [b]${deal.TITLE}[/b] | Amount: ₹${deal.OPPORTUNITY} | Was due: ${deal.CLOSEDATE}`,
+              deal.ID
+            );
+            setEscalationLastSent(deal.ID, now);
+            logger.info('30-day escalation sent', { dealId: deal.ID, title: deal.TITLE });
+            escalated++;
+          } else {
+            const hoursLeft = Math.round((ESCALATION_COOLDOWN_MS - (now - lastEscalated)) / 3600000);
+            logger.info('30-day escalation skipped — cooldown active', { dealId: deal.ID, hoursLeft });
+          }
         }
+
 
       } catch (dealError) {
         logger.error('Failed to process due date for deal', {

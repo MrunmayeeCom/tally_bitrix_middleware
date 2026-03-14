@@ -44,16 +44,18 @@ async function findBitrixCompany(name) {
 
 // Create contact in Bitrix24 from Tally ledger
 async function createBitrixContact(ledger) {
-  // Create as Company — TITLE field always displays correctly in Bitrix24
+  const nameParts = ledger.ledgerName.trim().split(/\s+/);
   const fields = {
-    TITLE:    ledger.ledgerName,
-    COMMENTS: 'Auto-created from Tally ledger sync'
+    NAME:      nameParts[0],
+    LAST_NAME: nameParts.slice(1).join(' ') || '',
+    SOURCE_ID: 'OTHER',
+    COMMENTS:  'Auto-created from Tally ledger sync'
   };
 
   if (ledger.phone) fields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
   if (ledger.email) fields.EMAIL = [{ VALUE: ledger.email, VALUE_TYPE: 'WORK' }];
 
-  const data = await callBitrix('crm.company.add', { fields });
+  const data = await callBitrix('crm.contact.add', { fields });
   return data.result;
 }
 
@@ -133,32 +135,51 @@ async function processTallyToContact() {
 
         const existingContact = await findBitrixContact(ledger.ledgerName);
         if (existingContact) {
-          logger.info('Ledger already exists as contact in Bitrix24 — skipping', {
-            ledgerName: ledger.ledgerName,
-            contactId:  existingContact.ID
-          });
+          const updateFields = {};
+          if (ledger.phone) updateFields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
+          if (ledger.email) updateFields.EMAIL = [{ VALUE: ledger.email, VALUE_TYPE: 'WORK' }];
+
+          if (Object.keys(updateFields).length > 0) {
+            await callBitrix('crm.contact.update', {
+              id:     existingContact.ID,
+              fields: updateFields
+            });
+            logger.info('Bitrix24 contact updated with latest Tally data', {
+              ledgerName: ledger.ledgerName,
+              contactId:  existingContact.ID,
+              updated:    Object.keys(updateFields)
+            });
+          } else {
+            logger.info('Contact already exists — no new data to update', {
+              ledgerName: ledger.ledgerName
+            });
+          }
           skipped++;
           continue;
         }
 
-        // Step 3: Not found — create as company in Bitrix24
-        // (Tally ledgers are almost always businesses)
-        // Step 3: Not found — decide company vs contact based on GSTIN
-        const isCompany = ledger.gstin && ledger.gstin.length === 15
-          || ['regular', 'composition', 'sez'].includes((ledger.gstType || '').toLowerCase());
+        // Step 3: Not found — decide company vs contact using Tally GST type
+        // Registered GST entity → Company. Unregistered / no GSTIN → Contact.
+        const gstin   = (ledger.gstin   || '').trim();
+        const gstType = (ledger.gstType || '').toLowerCase().trim();
 
-        if (isCompany) {
+        const registeredTypes = ['regular', 'composition', 'sez', 'sez developer',
+                                 'deemed export', 'uin holders', 'overseas'];
+        // If no GST data available — default to Company
+        // Most Rajlaxmi parties are businesses, so Company is the safer default
+        const isRegisteredBusiness = !gstin && !gstType ? true : gstin.length === 15 || registeredTypes.includes(gstType);
+
+        if (isRegisteredBusiness) {
           const newId = await createBitrixCompany(ledger);
-          logger.info('Tally ledger synced to Bitrix24 as COMPANY', {
+          logger.info('Tally ledger synced to Bitrix24 as COMPANY — registered GST entity', {
             ledgerName: ledger.ledgerName,
-            gstin: ledger.gstin,
-            companyId: newId
+            gstin, gstType, companyId: newId
           });
         } else {
           const newId = await createBitrixContact(ledger);
-          logger.info('Tally ledger synced to Bitrix24 as CONTACT', {
+          logger.info('Tally ledger synced to Bitrix24 as CONTACT — unregistered party', {
             ledgerName: ledger.ledgerName,
-            contactId: newId
+            gstType: gstType || 'blank', contactId: newId
           });
         }
         created++;

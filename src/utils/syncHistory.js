@@ -41,4 +41,32 @@ function getSyncHistory(limit = 20) {
   return history.slice(-limit).reverse();
 }
 
-module.exports = { recordSync, getLastSync, getSyncHistory };
+const ESCALATION_COOLDOWN_PATH = path.join(__dirname, '../../logs/escalation-cooldown.json');
+
+function loadEscalationCooldown() {
+  try {
+    if (fs.existsSync(ESCALATION_COOLDOWN_PATH)) {
+      return JSON.parse(fs.readFileSync(ESCALATION_COOLDOWN_PATH, 'utf8'));
+    }
+  } catch {}
+  return {};
+}
+
+function saveEscalationCooldown(data) {
+  try {
+    fs.writeFileSync(ESCALATION_COOLDOWN_PATH, JSON.stringify(data, null, 2));
+  } catch {}
+}
+
+function getEscalationLastSent(dealId) {
+  const data = loadEscalationCooldown();
+  return data[String(dealId)] || 0;
+}
+
+function setEscalationLastSent(dealId, timestamp) {
+  const data = loadEscalationCooldown();
+  data[String(dealId)] = timestamp;
+  saveEscalationCooldown(data);
+}
+
+module.exports = { recordSync, getLastSync, getSyncHistory, getEscalationLastSent, setEscalationLastSent };

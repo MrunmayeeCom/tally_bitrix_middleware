@@ -3,6 +3,9 @@ const { mapInvoiceToVoucher } = require('../utils/mapper');
 const { createVoucher } = require('../services/tallyService');
 const logger = require('../utils/logger');
 
+// In-memory dedup set — prevents duplicate vouchers if webhook fires twice within 60s
+const quotationDedup = new Set();
+
 async function processQuotation({ entityId, isUpdate = false }) {
   try {
     logger.info(`Processing quotation — ${isUpdate ? 'UPDATE' : 'CREATE'}`, { entityId });
@@ -36,7 +39,26 @@ async function processQuotation({ entityId, isUpdate = false }) {
       amount:        voucher.amount
     });
 
-    // Step 3: Create voucher in Tally
+    // Step 3: Check dedup before creating voucher in Tally
+    if (!isUpdate) {
+      const dedupKey = `quotation_${voucher.voucherNumber}`;
+      if (quotationDedup.has(dedupKey)) {
+        logger.warn('Duplicate quotation webhook — skipping', { voucherNumber: voucher.voucherNumber });
+        return { success: true, voucher, skipped: true };
+      }
+      quotationDedup.add(dedupKey);
+      setTimeout(() => quotationDedup.delete(dedupKey), 60000); // clear after 60s
+    }
+
+    // Step 3: On update — skip voucher creation, Tally doesn't support voucher alter via XML
+    if (isUpdate) {
+      logger.info('Quotation update — voucher alter not supported via Tally XML, skipping voucher push', {
+        entityId, voucherNumber: voucher.voucherNumber
+      });
+      return { success: true, voucher, skipped: true };
+    }
+
+    // Step 3: Create voucher in Tally (new quotations only)
     const result = await createVoucher(voucher);
     logger.info('Quotation processor completed', {
       entityId,

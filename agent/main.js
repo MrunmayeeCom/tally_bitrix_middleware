@@ -171,8 +171,7 @@ function triggerSync() {
         dialog.showErrorBox('Service Not Running', 'The sync service is not responding.');
         return;
       }
-      fireRequest('/sync/tally-to-bitrix');
-      setTimeout(() => fireRequest('/sync/outstanding'), 2000);
+      fireRequest('/sync/outstanding');
     }
   );
   probe.on('error', () => dialog.showErrorBox('Service Not Running', 'Could not reach the sync service on port 3000.'));

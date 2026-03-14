@@ -5,7 +5,6 @@ const webhookRoutes = require('./routes/webhookRoutes');
 const { processOutstanding } = require('./processors/outstandingProcessor');
 const { processDueDates } = require('./processors/dueDateProcessor');
 const { authMiddleware } = require('./middleware/authMiddleware');
-const { recordSync } = require('./utils/syncHistory');
 const logger = require('./utils/logger');
 
 const app = express();
@@ -23,7 +22,6 @@ app.post('/sync/outstanding', authMiddleware, async (req, res) => {
     logger.info('Manual outstanding sync triggered');
     const result = await processOutstanding();
     result.trigger = 'manual';
-    // recordSync(result);
     res.status(200).json({ success: true, ...result });
   } catch (error) {
     const offline = error.message === 'TALLY_OFFLINE';

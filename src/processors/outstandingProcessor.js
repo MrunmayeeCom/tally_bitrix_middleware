@@ -33,7 +33,7 @@ async function findBitrixParty(partyName) {
   }
 
   try {
-    // Search existing companies in Bitrix24 (all parties created as companies)
+    // 1 — Search existing companies in Bitrix24
     const companyData = await callBitrix('crm.company.list', {
       filter: { '%TITLE': partyName },
       select: ['ID', 'TITLE']
@@ -42,6 +42,22 @@ async function findBitrixParty(partyName) {
     if (companies.length > 0) {
       logger.info('Matched party to company', { partyName, companyId: companies[0].ID });
       const result = { COMPANY_ID: companies[0].ID };
+      partyCache.set(partyName, result);
+      return result;
+    }
+
+    // 2 — Search existing contacts in Bitrix24 (unregistered parties created as contacts)
+    const contactData = await callBitrix('crm.contact.list', {
+      filter: { '%NAME': partyName },
+      select: ['ID', 'NAME', 'LAST_NAME']
+    });
+    const contacts = contactData.result || [];
+    const matchedContact = contacts.find(c =>
+      `${c.NAME || ''} ${c.LAST_NAME || ''}`.trim().toLowerCase() === partyName.toLowerCase()
+    );
+    if (matchedContact) {
+      logger.info('Matched party to contact', { partyName, contactId: matchedContact.ID });
+      const result = { CONTACT_ID: matchedContact.ID };
       partyCache.set(partyName, result);
       return result;
     }
@@ -90,7 +106,9 @@ async function findBitrixParty(partyName) {
 
     const registeredTypes = ['regular', 'composition', 'sez', 'sez developer',
                              'deemed export', 'uin holders', 'overseas'];
-    const isRegisteredBusiness = gstin.length === 15 || registeredTypes.includes(gstType);
+    // If ledger not found or Tally unreachable — default to Company
+    // Most Rajlaxmi parties are businesses, so Company is the safer default
+    const isRegisteredBusiness = !ledger || gstin.length === 15 || registeredTypes.includes(gstType);
 
     let newId, result;
 
@@ -103,12 +121,22 @@ async function findBitrixParty(partyName) {
         partyName, companyId: newId, gstin, gstType
       });
     } else {
-      // Unregistered — create as Company (TITLE field always displays correctly)
-      const newCompany = await callBitrix('crm.company.add', { fields });
-      newId  = newCompany.result;
-      result = { COMPANY_ID: newId };
-      logger.info('Company created in Bitrix24 — unregistered party', {
-        partyName, companyId: newId, gstType: gstType || 'blank'
+      // Unregistered → Bitrix24 Contact
+      const nameParts = partyName.trim().split(/\s+/);
+      const contactFields = {
+        NAME:      nameParts[0],
+        LAST_NAME: nameParts.slice(1).join(' ') || '',
+        SOURCE_ID: 'OTHER',
+        COMMENTS:  'Auto-created from Tally outstanding sync'
+      };
+      if (fields.PHONE) contactFields.PHONE = fields.PHONE;
+      if (fields.EMAIL) contactFields.EMAIL = fields.EMAIL;
+
+      const newContact = await callBitrix('crm.contact.add', { fields: contactFields });
+      newId  = newContact.result;
+      result = { CONTACT_ID: newId };
+      logger.info('Contact created in Bitrix24 — unregistered party', {
+        partyName, contactId: newId, gstType: gstType || 'blank'
       });
     }
 
