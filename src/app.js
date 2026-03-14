@@ -26,22 +26,21 @@ app.post('/sync/outstanding', authMiddleware, async (req, res) => {
     // recordSync(result);
     res.status(200).json({ success: true, ...result });
   } catch (error) {
-    logger.error('Manual outstanding sync failed', { message: error.message });
-    res.status(500).json({ success: false, message: error.message });
+    const offline = error.message === 'TALLY_OFFLINE';
+    logger.warn('Manual outstanding sync failed', { message: error.message });
+    res.status(offline ? 503 : 500).json({
+      success: false,
+      message: offline ? 'Tally is not running. Please open Tally and try again.' : error.message
+    });
   }
 });
 
 // manual Tally → Bitrix24 ledger sync trigger
+// NOTE: Disabled for large companies (16k+ ledgers) — causes Tally freeze
+// Ledger sync only runs at 9AM scheduled job
 app.post('/sync/tally-to-bitrix', authMiddleware, async (req, res) => {
-  try {
-    const { processTallyToContact } = require('./processors/tallyToContactProcessor');
-    logger.info('Manual Tally → Bitrix24 sync triggered');
-    const result = await processTallyToContact();
-    res.status(200).json({ success: true, ...result });
-  } catch (error) {
-    logger.error('Manual Tally → Bitrix24 sync failed', { message: error.message });
-    res.status(500).json({ success: false, message: error.message });
-  }
+  logger.info('Manual ledger sync skipped — runs automatically at 9AM only (prevents Tally freeze with large ledger counts)');
+  res.status(200).json({ success: true, skipped: true, message: 'Ledger sync runs automatically at 9AM IST to prevent Tally freeze' });
 });
 
 // manual due date automation trigger

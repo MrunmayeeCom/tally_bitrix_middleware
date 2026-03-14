@@ -66,11 +66,29 @@ async function getDeals(filter = {}) {
 
 async function getDealsInPipeline(categoryId) {
   logger.info('Fetching all deals in pipeline', { categoryId });
-  const data = await callBitrix('crm.deal.list', {
-    filter: { CATEGORY_ID: categoryId },
-    select: ['ID', 'TITLE', 'CLOSEDATE', 'STAGE_ID', 'ASSIGNED_BY_ID', 'OPPORTUNITY']
-  });
-  return data.result || [];
+  const allDeals = [];
+  let start = 0;
+  const PAGE = 50;
+
+  while (true) {
+    const data = await callBitrix('crm.deal.list', {
+      filter: { CATEGORY_ID: categoryId },
+      select: ['ID', 'TITLE', 'CLOSEDATE', 'STAGE_ID', 'ASSIGNED_BY_ID', 'OPPORTUNITY'],
+      start
+    });
+    const page = data.result || [];
+    allDeals.push(...page);
+
+    // Bitrix24 returns `next` when more pages exist
+    if (data.next && page.length === PAGE) {
+      start = data.next;
+    } else {
+      break;
+    }
+  }
+
+  logger.info(`Fetched ${allDeals.length} deals from pipeline`, { categoryId });
+  return allDeals;
 }
 
 async function getStages(categoryId) {
@@ -82,16 +100,36 @@ async function getStages(categoryId) {
 async function sendNotification(userId, message, dealId = null) {
   logger.info('Sending notification', { userId, dealId, message });
 
-  if (dealId) {
-    // Add a timeline comment on the deal — works with standard CRM webhook
-    await callBitrix('crm.timeline.comment.add', {
-      fields: {
-        ENTITY_TYPE: 'deal',
-        ENTITY_ID:   dealId,
-        COMMENT:     message,
-        AUTHOR_ID:   userId
-      }
+  // Real in-app push notification to the assigned user
+  try {
+    await callBitrix('im.notify.system.add', {
+      USER_ID: userId,
+      MESSAGE: message
     });
+    logger.info('Push notification sent', { userId });
+  } catch (e) {
+    logger.warn('Push notification failed', { userId, message: e.message });
+  }
+
+  // CRM activity on the deal — visible in deal timeline
+  if (dealId) {
+    try {
+      const cleanMessage = message.replace(/\[.*?\]/g, ''); // strip BBCode for plain text fields
+      await callBitrix('crm.activity.add', {
+        fields: {
+          OWNER_TYPE_ID:  2,       // 2 = Deal
+          OWNER_ID:       dealId,
+          TYPE_ID:        2,       // 2 = generic activity
+          SUBJECT:        cleanMessage.substring(0, 80),
+          DESCRIPTION:    cleanMessage,
+          RESPONSIBLE_ID: userId,
+          COMPLETED:      'Y'
+        }
+      });
+      logger.info('CRM activity added on deal', { dealId });
+    } catch (e) {
+      logger.warn('CRM activity add failed', { dealId, message: e.message });
+    }
   }
 }
 
@@ -133,11 +171,36 @@ async function getInvoice(id) {
 // ── Quotes (entityTypeId 7) ────────────────────────────────────────────
 async function getQuote(id) {
   logger.info('Fetching quote:', id);
-  const data = await callBitrix('crm.item.get', { 
+  const data = await callBitrix('crm.item.get', {
     entityTypeId: 7,
-    id 
+    id
   });
-  return data.result?.item || data.result || data;
+  const item = data.result?.item || data.result || data;
+
+  // Enrich clientTitle — same pattern as invoice
+  if (!item.clientTitle && !item.CLIENT_TITLE) {
+    if (item.contactId > 0) {
+      try {
+        const contactData = await callBitrix('crm.contact.get', { id: item.contactId });
+        const c = contactData.result || contactData;
+        item.clientTitle = `${c.NAME || ''} ${c.LAST_NAME || ''}`.trim();
+        logger.info('Quote contact enriched', { contactId: item.contactId, name: item.clientTitle });
+      } catch (e) {
+        logger.warn('Could not enrich quote contact', { contactId: item.contactId });
+      }
+    } else if (item.companyId > 0) {
+      try {
+        const companyData = await callBitrix('crm.company.get', { id: item.companyId });
+        const co = companyData.result || companyData;
+        item.clientTitle = co.TITLE || '';
+        logger.info('Quote company enriched', { companyId: item.companyId, name: item.clientTitle });
+      } catch (e) {
+        logger.warn('Could not enrich quote company', { companyId: item.companyId });
+      }
+    }
+  }
+
+  return item;
 }
 
 // ── Pipeline ──────────────────────────────

@@ -1,35 +1,30 @@
 const { getCompany } = require('../services/bitrixService');
 const { mapCompanyToLedger } = require('../utils/mapper');
-const { createLedger } = require('../services/tallyService');
+const { createLedger, alterLedger } = require('../services/tallyService');
 const logger = require('../utils/logger');
 
-async function processCompany(entityId) {
+async function processCompany(entityId, isUpdate = false) {
   try {
-    logger.info('Processing company', { entityId });
+    logger.info(`Processing company — ${isUpdate ? 'UPDATE' : 'CREATE'}`, { entityId });
 
-    // Step 1: Fetch company from Bitrix24
     const company = await getCompany(entityId);
     if (!company) throw new Error(`Company not found: ${entityId}`);
 
-    // Step 2: Map to Tally ledger format
     const ledger = mapCompanyToLedger(company);
     logger.info('Company mapped', { ledgerName: ledger.ledgerName });
 
-    // Step 3: Create ledger in Tally
-    const result = await createLedger(ledger);
-    logger.info('Company processor completed', {
-      entityId,
-      ledgerName: ledger.ledgerName,
-      success: result.success
-    });
-
-    return { success: true, ledger };
+    if (isUpdate) {
+      const result = await alterLedger(ledger);
+      logger.info('Company ledger updated in Tally', { entityId, ledgerName: ledger.ledgerName });
+      return { success: true, ledger, action: 'updated' };
+    } else {
+      const result = await createLedger(ledger);
+      logger.info('Company ledger created in Tally', { entityId, ledgerName: ledger.ledgerName });
+      return { success: true, ledger, action: 'created' };
+    }
 
   } catch (error) {
-    logger.error('Company processor failed', {
-      entityId,
-      message: error.message
-    });
+    logger.error('Company processor failed', { entityId, message: error.message });
     throw error;
   }
 }

@@ -1,4 +1,4 @@
-const { getOutstanding } = require('../services/tallyService');
+const { getOutstanding, getLedgerByName } = require('../services/tallyService');
 const { mapOutstandingToDeal } = require('../utils/mapper');
 const { createDeal, updateDeal, getDeals } = require('../services/bitrixService');
 const { callBitrix } = require('../connectors/bitrixConnector');
@@ -8,24 +8,32 @@ const { recordSync } = require('../utils/syncHistory');
 const logger = require('../utils/logger');
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Process items in small parallel batches instead of one-by-one
+async function processInBatches(items, handler, batchSize = 3) {
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    await Promise.allSettled(batch.map(handler));
+    await sleep(300);
+  }
+}
 
-// Match a Tally party name to a Bitrix24 contact or company
+// Per-sync-run cache — avoids hitting Tally/Bitrix multiple times for same party
+const partyCache = new Map();
+
+// Circuit breaker — if Tally fails once during a sync run, stop trying it for ledger lookups
+let tallyLedgerCircuitOpen = false;
+
+
 async function findBitrixParty(partyName) {
   if (!partyName) return {};
 
-  try {
-    // Search contacts first
-    const contactData = await callBitrix('crm.contact.list', {
-      filter: { '%NAME': partyName },
-      select: ['ID', 'NAME', 'LAST_NAME']
-    });
-    const contacts = contactData.result || [];
-    if (contacts.length > 0) {
-      logger.info('Matched party to contact', { partyName, contactId: contacts[0].ID });
-      return { CONTACT_ID: contacts[0].ID };
-    }
+  // Return cached result if we already looked this party up this sync run
+  if (partyCache.has(partyName)) {
+    return partyCache.get(partyName);
+  }
 
-    // Search companies
+  try {
+    // Search existing companies in Bitrix24 (all parties created as companies)
     const companyData = await callBitrix('crm.company.list', {
       filter: { '%TITLE': partyName },
       select: ['ID', 'TITLE']
@@ -33,23 +41,82 @@ async function findBitrixParty(partyName) {
     const companies = companyData.result || [];
     if (companies.length > 0) {
       logger.info('Matched party to company', { partyName, companyId: companies[0].ID });
-      return { COMPANY_ID: companies[0].ID };
+      const result = { COMPANY_ID: companies[0].ID };
+      partyCache.set(partyName, result);
+      return result;
     }
 
-    // NOT FOUND — auto-create as company in Bitrix24
-    logger.info('Party not found in Bitrix24 — auto-creating company', { partyName });
-    const newCompany = await callBitrix('crm.company.add', {
-      fields: {
-        TITLE:    partyName,
-        COMMENTS: 'Auto-created from Tally outstanding sync'
+    // 3 — Not found in Bitrix24 — fetch ledger from Tally for enrichment + GST classification
+    const fields = {
+      TITLE:    partyName,
+      COMMENTS: 'Auto-created from Tally outstanding sync'
+    };
+
+    let ledger = null;
+
+    if (!tallyLedgerCircuitOpen) {
+      try {
+        logger.info('Fetching ledger details from Tally', { partyName });
+        ledger = await getLedgerByName(partyName);
+        if (ledger) {
+          if (ledger.phone) fields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
+          if (ledger.email) fields.EMAIL = [{ VALUE: ledger.email, VALUE_TYPE: 'WORK' }];
+          if (ledger.gstin) fields.UF_CRM_GSTIN = ledger.gstin;
+          logger.info('Ledger enrichment successful', {
+            partyName,
+            phone:   ledger.phone   || '—',
+            email:   ledger.email   || '—',
+            gstin:   ledger.gstin   || '—',
+            gstType: ledger.gstType || '—'
+          });
+        } else {
+          logger.warn('Ledger not found in Tally — bare record will be created', { partyName });
+        }
+      } catch (tallyErr) {
+        tallyLedgerCircuitOpen = true;
+        logger.warn('Tally unreachable — circuit opened, remaining parties created bare', {
+          partyName, message: tallyErr.message
+        });
       }
-    });
-    const newId = newCompany.result;
-    logger.info('Company auto-created in Bitrix24', { partyName, companyId: newId });
-    return { COMPANY_ID: newId };
+    } else {
+      logger.info('Tally circuit open — skipping ledger fetch', { partyName });
+    }
+
+    // 4 — Decide: Company or Contact?
+    // Use Tally's GST registration type — no guessing from name.
+    // Registered GST entity → Company. Unregistered / no GSTIN → Contact.
+    const gstin   = (ledger && ledger.gstin)   ? ledger.gstin   : '';
+    const gstType = (ledger && ledger.gstType) ? ledger.gstType.toLowerCase().trim() : '';
+
+    const registeredTypes = ['regular', 'composition', 'sez', 'sez developer',
+                             'deemed export', 'uin holders', 'overseas'];
+    const isRegisteredBusiness = gstin.length === 15 || registeredTypes.includes(gstType);
+
+    let newId, result;
+
+    if (isRegisteredBusiness) {
+      // Registered GST entity → Bitrix24 Company
+      const newCompany = await callBitrix('crm.company.add', { fields });
+      newId  = newCompany.result;
+      result = { COMPANY_ID: newId };
+      logger.info('Company created in Bitrix24 — registered GST entity', {
+        partyName, companyId: newId, gstin, gstType
+      });
+    } else {
+      // Unregistered — create as Company (TITLE field always displays correctly)
+      const newCompany = await callBitrix('crm.company.add', { fields });
+      newId  = newCompany.result;
+      result = { COMPANY_ID: newId };
+      logger.info('Company created in Bitrix24 — unregistered party', {
+        partyName, companyId: newId, gstType: gstType || 'blank'
+      });
+    }
+
+    partyCache.set(partyName, result);
+    return result;
 
   } catch (e) {
-    logger.warn('Party name lookup/create failed', { partyName, message: e.message });
+    logger.warn('Party lookup/create failed', { partyName, message: e.message });
   }
 
   return {};
@@ -116,6 +183,10 @@ async function processOutstanding() {
   try {
     logger.info('Outstanding sync started');
 
+    // Reset per-run cache and circuit breaker
+    partyCache.clear();
+    tallyLedgerCircuitOpen = false;
+
     // Step 1: Fetch outstanding bills from Tally
     const outstandingList = await getOutstanding();
 
@@ -129,30 +200,24 @@ async function processOutstanding() {
     let processed = 0;
     let failed    = 0;
 
-    for (const outstanding of outstandingList) {
+    await processInBatches(outstandingList, async (outstanding) => {
       try {
-        // Step 2: Enrich with calculated fields
         outstanding.daysPending   = daysPending(outstanding.dueDate);
         outstanding.pendingAmount = formatAmount(outstanding.pendingAmount);
         outstanding.billAmount    = formatAmount(outstanding.billAmount);
 
-        // Step 2b: Match partyName to Bitrix24 contact/company
         const partyMatch = await findBitrixParty(outstanding.partyName);
         Object.assign(outstanding, partyMatch);
 
-        // Step 3: Map to Bitrix24 deal format
-        const dealFields = mapOutstandingToDeal(outstanding);
-
-        // Step 4: Create or Update deal in Bitrix24
+        const dealFields     = mapOutstandingToDeal(outstanding);
         const existingDealId = await findExistingDeal(outstanding.partyName, outstanding.voucherNumber);
-        let result;
         let action;
 
         if (existingDealId) {
-          result = await updateDeal(existingDealId, dealFields);
+          await updateDeal(existingDealId, dealFields);
           action = 'updated';
         } else {
-          result = await createDeal(dealFields);
+          await createDeal(dealFields);
           action = 'created';
         }
 
@@ -161,13 +226,10 @@ async function processOutstanding() {
           partyName:     outstanding.partyName,
           pendingAmount: outstanding.pendingAmount,
           daysPending:   outstanding.daysPending,
-          action,
-          dealId:        existingDealId || result
+          action
         });
 
         processed++;
-        await sleep(500);
-
       } catch (itemError) {
         logger.error('Failed to process outstanding bill', {
           voucherNumber: outstanding.voucherNumber,
@@ -175,7 +237,7 @@ async function processOutstanding() {
         });
         failed++;
       }
-    }
+    }, 3); // 3 bills processed in parallel per batch
 
    const currentVoucherNumbers = outstandingList.map(o => String(o.voucherNumber));
     await closePaidDeals(currentVoucherNumbers);
@@ -185,6 +247,10 @@ async function processOutstanding() {
     logger.info('Outstanding sync completed', { processed, failed });
     return syncResult;
   } catch (error) {
+    if (error.message === 'TALLY_OFFLINE') {
+      logger.warn('Outstanding sync skipped — Tally is not running');
+      return { success: true, processed: 0, failed: 0, skipped: true };
+    }
     logger.error('Outstanding processor failed', { message: error.message });
     throw error;
   }

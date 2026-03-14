@@ -69,16 +69,64 @@ async function createLedger(ledger) {
     </ENVELOPE>
   `.trim();
 
-  await new Promise(resolve => setTimeout(resolve, 2000));
   const response = await sendToTally(xml);
   const importResult = (response || '').match(/<LINEERROR>(.*?)<\/LINEERROR>|<CREATED>(.*?)<\/CREATED>|<ALTERED>(.*?)<\/ALTERED>/i);
   logger.info('Ledger created in Tally', { ledgerName: ledger.ledgerName, tallyResult: importResult ? importResult[0] : 'no error tag found' });
   return response;
 }
 
+// Alter (update) an existing Ledger in Tally — used when Bitrix24 contact/company is updated
+async function alterLedger(ledger) {
+  logger.info('Altering ledger in Tally', { ledgerName: ledger.ledgerName });
+
+  const xml = `
+    <ENVELOPE>
+      <HEADER>
+        <TALLYREQUEST>Import Data</TALLYREQUEST>
+      </HEADER>
+      <BODY>
+        <IMPORTDATA>
+          <REQUESTDESC>
+            <REPORTNAME>All Masters</REPORTNAME>
+            <STATICVARIABLES>
+              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+            </STATICVARIABLES>
+          </REQUESTDESC>
+          <REQUESTDATA>
+            <TALLYMESSAGE xmlns:UDF="TallyUDF">
+              <LEDGER NAME="${escapeXml(ledger.ledgerName)}" ACTION="Alter">
+                <NAME>${escapeXml(ledger.ledgerName)}</NAME>
+                <PARENT>${escapeXml(ledger.groupName)}</PARENT>
+              </LEDGER>
+            </TALLYMESSAGE>
+          </REQUESTDATA>
+        </IMPORTDATA>
+      </BODY>
+    </ENVELOPE>
+  `.trim();
+
+  const response = await sendToTally(xml);
+  logger.info('Ledger altered in Tally', { ledgerName: ledger.ledgerName });
+  return response;
+}
+
 // Get all Ledgers from Tally
 async function getLedgers() {
-  logger.info('Fetching ledgers from Tally (Sundry Debtors, limit 5)');
+  // With 16,760 ledgers, fetching all at once freezes Tally.
+  // Only fetch ledgers modified/created in the last 7 days.
+  // This keeps the XML response tiny and Tally responsive.
+  const toDate   = new Date();
+  const fromDate = new Date();
+  fromDate.setDate(fromDate.getDate() - 7);
+
+  const fmt = (d) => {
+    const dd   = String(d.getDate()).padStart(2, '0');
+    const mm   = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
+  };
+
+  logger.info(`Fetching ledgers modified in last 7 days (${fmt(fromDate)} to ${fmt(toDate)})`);
 
   const xml = `
     <ENVELOPE>
@@ -93,6 +141,8 @@ async function getLedgers() {
               <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
               <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
               <GROUPNAME>Sundry Debtors</GROUPNAME>
+              <SVFROMDATE>${fmt(fromDate)}</SVFROMDATE>
+              <SVTODATE>${fmt(toDate)}</SVTODATE>
             </STATICVARIABLES>
           </REQUESTDESC>
         </EXPORTDATA>
@@ -100,15 +150,10 @@ async function getLedgers() {
     </ENVELOPE>
   `.trim();
 
-  await new Promise(resolve => setTimeout(resolve, 1000));
   const response = await sendToTally(xml);
-
-  const sampleChunk = response.slice(0, 5000);
-  logger.info('RAW TALLY SAMPLE', { sample: sampleChunk });
-
-  const all = parseLedgersXml(response);
-  logger.info(`Returning ${all.length} ledgers`);
-  return all;
+  const ledgers  = parseLedgersXml(response);
+  logger.info(`Fetched ${ledgers.length} recently modified ledgers`);
+  return ledgers;
 }
 
 // Parse Tally List of Accounts XML into structured array
@@ -202,6 +247,9 @@ async function createVoucher(voucher) {
 async function getOutstanding() {
   logger.info('Fetching outstanding bills from Tally');
 
+  // No date filter — Bills Receivable only returns currently UNPAID bills by design.
+  // Tally removes a bill from this report the moment payment is received.
+  // So this will never dump 16k records — it only returns genuinely outstanding bills.
   const xml = `
     <ENVELOPE>
       <HEADER>
@@ -254,11 +302,7 @@ function parseOutstandingXml(xml) {
 
       if (!partyName && !voucherNumber) continue;
 
-      // Skip bills older than 5 years
-      const billDateParsed = new Date(formatTallyDateToISO(parseTallyDisplayDate(billDateRaw)));
-      const cutoffDate = new Date();
-      cutoffDate.setFullYear(cutoffDate.getFullYear() - 3);
-      if (billDateParsed < cutoffDate) continue;
+      
 
       bills.push({
         voucherNumber,
@@ -310,9 +354,45 @@ function escapeXml(str) {
     .replace(/'/g,  '&apos;');
 }
 
+// Fetch a single ledger by exact name — lightweight, won't freeze Tally
+async function getLedgerByName(ledgerName) {
+  logger.info('Fetching single ledger from Tally', { ledgerName });
+
+  const xml = `
+    <ENVELOPE>
+      <HEADER>
+        <TALLYREQUEST>Export Data</TALLYREQUEST>
+      </HEADER>
+      <BODY>
+        <EXPORTDATA>
+          <REQUESTDESC>
+            <REPORTNAME>List of Accounts</REPORTNAME>
+            <STATICVARIABLES>
+              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+              <LEDGERNAME>${escapeXml(ledgerName)}</LEDGERNAME>
+            </STATICVARIABLES>
+          </REQUESTDESC>
+        </EXPORTDATA>
+      </BODY>
+    </ENVELOPE>
+  `.trim();
+
+  try {
+    const response = await sendToTally(xml);
+    const ledgers  = parseLedgersXml(response);
+    return ledgers.find(l => l.ledgerName.toLowerCase() === ledgerName.toLowerCase()) || null;
+  } catch (err) {
+    logger.warn('Single ledger fetch failed', { ledgerName, message: err.message });
+    return null;
+  }
+}
+
 module.exports = {
   createLedger,
+  alterLedger,
   getLedgers,
+  getLedgerByName,
   parseLedgersXml,
   createVoucher,
   getOutstanding,

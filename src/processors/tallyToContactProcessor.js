@@ -75,11 +75,23 @@ async function createBitrixCompany(ledger) {
   return data.result;
 }
 
+const LEDGER_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours minimum between ledger syncs
+let lastLedgerSyncTime = 0;
+
 async function processTallyToContact() {
   try {
     logger.info('Tally → Bitrix24 bi-directional sync started');
 
-    // Step 1: Fetch all Sundry Debtor/Creditor ledgers from Tally
+    // Rate-limit ledger sync — with 16k ledgers, don't hammer Tally every 4 hours
+    const now = Date.now();
+    if (now - lastLedgerSyncTime < LEDGER_SYNC_INTERVAL_MS) {
+      const nextIn = Math.round((LEDGER_SYNC_INTERVAL_MS - (now - lastLedgerSyncTime)) / 60000);
+      logger.info(`Ledger sync skipped — last ran less than 6hrs ago (next in ~${nextIn} min)`);
+      return { success: true, created: 0, skipped: 0, failed: 0 };
+    }
+    lastLedgerSyncTime = now;
+
+    // Step 1: Fetch Sundry Debtor ledgers from Tally in batches
     const ledgers = await getLedgers();
 
     if (!ledgers || ledgers.length === 0) {
@@ -152,6 +164,10 @@ async function processTallyToContact() {
     return { success: true, created, skipped, failed };
 
   } catch (error) {
+    if (error.message === 'TALLY_OFFLINE') {
+      logger.warn('Ledger sync skipped — Tally is not running');
+      return { success: true, created: 0, skipped: 0, failed: 0 };
+    }
     logger.error('Tally → Bitrix24 sync failed', { message: error.message });
     throw error;
   }

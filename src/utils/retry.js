@@ -25,7 +25,9 @@ async function withRetry(fn, options = {}) {
     }
   }
 
-  logger.error(`${label} failed after ${maxAttempts} attempts`, { message: lastError.message });
+  if (!options.silent) {
+    logger.error(`${label} failed after ${maxAttempts} attempts`, { message: lastError.message });
+  }
   throw lastError;
 }
 

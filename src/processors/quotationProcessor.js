@@ -3,13 +3,25 @@ const { mapInvoiceToVoucher } = require('../utils/mapper');
 const { createVoucher } = require('../services/tallyService');
 const logger = require('../utils/logger');
 
-async function processQuotation(entityId) {
+async function processQuotation({ entityId, isUpdate = false }) {
   try {
-    logger.info('Processing quotation', { entityId });
+    logger.info(`Processing quotation — ${isUpdate ? 'UPDATE' : 'CREATE'}`, { entityId });
 
     // Step 1: Fetch real quotation data from Bitrix24
     const quotation = await getQuote(entityId);
     if (!quotation) throw new Error(`Quotation not found: ${entityId}`);
+
+    // Step 1b: Ensure the party ledger exists in Tally before pushing the voucher
+    if (quotation.clientTitle || quotation.CLIENT_TITLE) {
+      const partyName = quotation.clientTitle || quotation.CLIENT_TITLE;
+      try {
+        const { createLedger } = require('../services/tallyService');
+        await createLedger({ ledgerName: partyName, groupName: 'Sundry Debtors', openingBalance: 0 });
+        logger.info('Party ledger ensured in Tally before quotation push', { partyName });
+      } catch (ledgerErr) {
+        logger.warn('Could not ensure party ledger — proceeding anyway', { message: ledgerErr.message });
+      }
+    }
 
     // Step 2: Map to Tally voucher format
     const voucher = {

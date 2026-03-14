@@ -29,7 +29,12 @@ async function runSync(label, fn) {
   }
 }
 
-// Run ledger sync first, then outstanding sync sequentially
+// Outstanding-only sync — safe for frequent runs
+async function runOutstandingSync(label) {
+  await runSync(`${label} — outstanding sync`, processOutstanding);
+}
+
+// Full sync — ledger first then outstanding, only for scheduled morning/night runs
 async function runFullSync(label) {
   await runSync(`${label} — ledger sync`, processTallyToContact);
   await runSync(`${label} — outstanding sync`, processOutstanding);
@@ -47,9 +52,9 @@ function startScheduler() {
     runFullSync('9AM');
   }, { timezone: 'Asia/Kolkata' });
 
-  // 11:00 PM — full sync (ledger first, then outstanding)
+  // 11:00 PM — outstanding only (ledger sync at night is wasteful with 16k ledgers)
   cron.schedule('0 23 * * *', () => {
-    runFullSync('11PM');
+    runOutstandingSync('11PM');
   }, { timezone: 'Asia/Kolkata' });
 
   // 9:30 AM — due date automation (runs after 9AM sync finishes)
@@ -57,9 +62,9 @@ function startScheduler() {
     runSync('Due date automation', processDueDates);
   }, { timezone: 'Asia/Kolkata' });
 
-  // Every 4 hours — full sync (gentle on Tally, not every 2 hours)
-  cron.schedule('0 */4 * * *', () => {
-    runFullSync('4hr');
+  // Every 4 hours during business hours — outstanding bills only, no ledger dump
+  cron.schedule('0 8,12,16,20 * * *', () => {
+    runOutstandingSync('4hr');
   }, { timezone: 'Asia/Kolkata' });
 
   logger.info('Scheduler started — Full sync (ledger → outstanding) at 9AM, 11PM & every 4hrs IST | Due date check at 9:30AM IST');

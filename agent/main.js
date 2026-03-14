@@ -151,41 +151,33 @@ function triggerSync() {
   const headers = { 'Content-Type': 'application/json' };
   if (cfg.apiKey) headers['x-api-key'] = cfg.apiKey;
 
-  // Step 1: Ledger sync FIRST (creates companies/contacts in Bitrix24)
-  const req1 = http.request({
-    hostname: 'localhost', port: 3000,
-    path: '/sync/tally-to-bitrix', method: 'POST',
-    timeout: 60000, headers
-  }, (res) => {
-    let data = '';
-    res.on('data', d => data += d);
-    res.on('end', () => {
-      // Step 2: Outstanding sync AFTER companies exist
-      const req2 = http.request({
+  function fireRequest(path) {
+    try {
+      const req = http.request({
         hostname: 'localhost', port: 3000,
-        path: '/sync/outstanding', method: 'POST',
-        timeout: 120000, headers
-      }, (res2) => {
-        let data2 = '';
-        res2.on('data', d => data2 += d);
-        res2.on('end', () => {
-          if (res2.statusCode === 401) {
-            dialog.showErrorBox('Auth Error', 'API key mismatch. Check settings.');
-            return;
-          }
-          dialog.showMessageBox({
-            type: 'info',
-            title: 'Sync Complete',
-            message: 'Companies/Contacts + Deals synced successfully!'
-          });
-        });
-      });
-      req2.on('error', () => dialog.showErrorBox('Outstanding Sync Failed', 'Could not reach the sync service.'));
-      req2.end();
-    });
-  });
-  req1.on('error', () => dialog.showErrorBox('Ledger Sync Failed', 'Could not reach the sync service. Is it running?'));
-  req1.end();
+        path, method: 'POST', headers
+      }, (res) => { res.resume(); });
+      req.on('error', () => {});
+      req.setTimeout(5000, () => req.destroy());
+      req.end();
+    } catch {}
+  }
+
+  const probe = http.request(
+    { hostname: 'localhost', port: 3000, path: '/health', method: 'GET', timeout: 3000 },
+    (res) => {
+      res.resume();
+      if (res.statusCode !== 200) {
+        dialog.showErrorBox('Service Not Running', 'The sync service is not responding.');
+        return;
+      }
+      fireRequest('/sync/tally-to-bitrix');
+      setTimeout(() => fireRequest('/sync/outstanding'), 2000);
+    }
+  );
+  probe.on('error', () => dialog.showErrorBox('Service Not Running', 'Could not reach the sync service on port 3000.'));
+  probe.on('timeout', () => { probe.destroy(); dialog.showErrorBox('Timeout', 'Sync service timed out.'); });
+  probe.end();
 }
 
 function openLogs() {

@@ -16,26 +16,28 @@ async function handleWebhook(req, res) {
       return res.status(400).json({ success: false, message: 'No event found' });
     }
 
+    const isUpdate = event.includes('UPDATE');
+
     switch (event) {
 
       case 'ONCRMCONTACTADD':
       case 'ONCRMCONTACTUPDATE':
-        await processContact(entityId);
+        await processContact(entityId, isUpdate);
         break;
 
       case 'ONCRMCOMPANYADD':
       case 'ONCRMCOMPANYUPDATE':
-        await processCompany(entityId);
+        await processCompany(entityId, isUpdate);
         break;
 
       case 'ONCRMINVOICEADD':
       case 'ONCRMINVOICEUPDATE':
-        await processInvoice(entityId);
+        await processInvoice(entityId, isUpdate);
         break;
 
       case 'ONCRMQUOTEADD':
       case 'ONCRMQUOTEUPDATE':
-        await processQuotation({entityId });
+        await processQuotation({ entityId, isUpdate });
         break;
 
       default:

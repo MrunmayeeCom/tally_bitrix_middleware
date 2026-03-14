@@ -1,7 +1,7 @@
 const { callBitrix } = require('../connectors/bitrixConnector');
 const logger = require('../utils/logger');
 
-const PIPELINE_NAME  = 'Tally Outstanding';
+const PIPELINE_NAME  = 'Tally Outstanding test';
 const PIPELINE_STAGES = [
   { NAME: 'New Bill'         },
   { NAME: 'Follow Up'        },

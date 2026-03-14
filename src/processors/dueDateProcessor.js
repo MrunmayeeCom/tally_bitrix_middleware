@@ -27,8 +27,9 @@ async function processDueDates() {
 
     logger.info('Pipeline stages loaded', { stageMap });
 
-    const overdueStageId    = stageMap['overdue'];
-    const followUpStageId   = stageMap['follow up'];
+    const overdueStageId  = stageMap['overdue'];
+    const followUpStageId = stageMap['follow up'];
+    const newBillStageId  = stageMap['new bill'];
 
     if (!overdueStageId) {
       logger.warn('Overdue stage not found in pipeline — check stage names');
@@ -70,14 +71,30 @@ async function processDueDates() {
           movedToOverdue++;
         }
 
-        // 2 — Send 7-day reminder notification
+        // 2 — Move to Follow Up and send 7-day reminder
+        if (diffDays === 7 && followUpStageId && currentStage === newBillStageId) {
+          await updateDeal(deal.ID, { STAGE_ID: followUpStageId });
+          logger.info('Deal moved to Follow Up — 7 days to due date', { dealId: deal.ID });
+        }
+
         if (diffDays === 7 && deal.ASSIGNED_BY_ID) {
           await sendNotification(
             deal.ASSIGNED_BY_ID,
-            `⚠️ Bill due in 7 days: ${deal.TITLE}\nAmount: ₹${deal.OPPORTUNITY}\nDue: ${deal.CLOSEDATE}`,
+            `⚠️ Bill due in 7 days: [b]${deal.TITLE}[/b] | Amount: ₹${deal.OPPORTUNITY} | Due: ${deal.CLOSEDATE}`,
             deal.ID
           );
           logger.info('7-day reminder sent', { dealId: deal.ID, title: deal.TITLE });
+          notified7Days++;
+        }
+
+        // 2b — Send 1-day reminder notification
+        if (diffDays === 1 && deal.ASSIGNED_BY_ID) {
+          await sendNotification(
+            deal.ASSIGNED_BY_ID,
+            `🔔 Bill due TOMORROW: [b]${deal.TITLE}[/b] | Amount: ₹${deal.OPPORTUNITY} | Due: ${deal.CLOSEDATE}`,
+            deal.ID
+          );
+          logger.info('1-day reminder sent', { dealId: deal.ID, title: deal.TITLE });
           notified7Days++;
         }
 
@@ -85,7 +102,7 @@ async function processDueDates() {
         if (diffDays < -30 && deal.ASSIGNED_BY_ID) {
           await sendNotification(
             deal.ASSIGNED_BY_ID,
-            `🚨 OVERDUE 30+ days: ${deal.TITLE}\nAmount: ₹${deal.OPPORTUNITY}\nWas due: ${deal.CLOSEDATE}`,
+            `🚨 OVERDUE 30+ DAYS: [b]${deal.TITLE}[/b] | Amount: ₹${deal.OPPORTUNITY} | Was due: ${deal.CLOSEDATE}`,
             deal.ID
           );
           logger.info('30-day escalation sent', { dealId: deal.ID, title: deal.TITLE });
