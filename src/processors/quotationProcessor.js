@@ -51,7 +51,7 @@ async function processQuotation({ entityId, isUpdate = false }) {
     const voucher = {
       ...mapInvoiceToVoucher(quotation),
       voucherType: 'Sales Order',
-      narration:   `Bitrix24 Quotation #${quotation.ID}`
+      narration:   `Bitrix24 Quotation #${quotation.id || quotation.ID}`
     };
 
     logger.info('Quotation mapped', {
@@ -71,21 +71,26 @@ async function processQuotation({ entityId, isUpdate = false }) {
       setTimeout(() => quotationDedup.delete(dedupKey), 60000); // clear after 60s
     }
 
-    // Tally does not support altering existing vouchers via XML API.
-    // If a quotation is updated in Bitrix24, the Sales Order in Tally
-    // will NOT be updated — it stays as originally created.
-    // Manual correction required directly in Tally if amount or date changed.
     if (isUpdate) {
-      logger.warn('Quotation updated in Bitrix24 but Tally Sales Order CANNOT be updated — Tally XML does not support voucher alter', {
-        entityId,
-        voucherNumber: voucher.voucherNumber,
-        partyName:     voucher.partyName,
-        action:        'Manual correction required in Tally if amount or date changed'
+      // Tally doesn't support voucher ALTER via XML — workaround: delete old + create new
+      logger.info('Quotation updated — deleting old Tally voucher and recreating with new values', {
+        entityId, voucherNumber: voucher.voucherNumber
       });
-      return { success: true, voucher, skipped: true };
+      try {
+        const { deleteVoucher } = require('../services/tallyService');
+        await deleteVoucher(`BX-${voucher.voucherNumber}`);
+        logger.info('Old voucher deleted from Tally', { voucherNumber: voucher.voucherNumber });
+      } catch (delErr) {
+        if (delErr.message.includes('will not recreate')) {
+          // Hard stop — delete confirmed failed, do not create duplicate
+          throw delErr;
+        }
+        // Voucher didn't exist in Tally yet — safe to proceed with fresh create
+        logger.info('No existing voucher found in Tally — proceeding with fresh create', { message: delErr.message });
+      }
     }
 
-    // Step 3: Create voucher in Tally (new quotations only)
+    // Create voucher in Tally (new + updates after delete)
     const result = await createVoucher(voucher);
     logger.info('Quotation processor completed', {
       entityId,

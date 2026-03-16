@@ -54,14 +54,15 @@ async function handleWebhook(req, res) {
       case 'ONCRMQUOTEADD':
       case 'ONCRMQUOTEUPDATE':
       case 'ONCRMSMARTPROCESSELEMENTADD':
-      case 'ONCRMSMARTPROCESSELEMENTEDIT':
+      case 'ONCRMSMARTPROCESSELEMENTEDIT': {
         // entityTypeId 7 = Quote, ignore other smart process types
-        if (!payload.data?.FIELDS?.ENTITY_TYPE_ID || String(payload.data.FIELDS.ENTITY_TYPE_ID) === '7') {
-          await processQuotation({ entityId, isUpdate });
-        } else {
+        if (payload.data?.FIELDS?.ENTITY_TYPE_ID && String(payload.data.FIELDS.ENTITY_TYPE_ID) !== '7') {
           logger.info('Smart process event ignored — not a Quote', { entityTypeId: payload.data?.FIELDS?.ENTITY_TYPE_ID });
+          break;
         }
+        await processQuotation({ entityId, isUpdate: event === 'ONCRMQUOTEUPDATE' || event === 'ONCRMSMARTPROCESSELEMENTEDIT' });
         break;
+      }
 
       case 'ONCRMCONTACTDELETE':
       case 'ONCRMCOMPANYDELETE':
