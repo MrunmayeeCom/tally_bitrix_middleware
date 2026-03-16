@@ -237,10 +237,9 @@ async function createVoucher(voucher) {
           </REQUESTDESC>
           <REQUESTDATA>
             <TALLYMESSAGE xmlns:UDF="TallyUDF">
-              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="Invoice Voucher View">
+              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="${voucher.voucherType === 'Sales Order' ? 'Sales Order Voucher View' : 'Invoice Voucher View'}">
                 <DATE>${voucher.date.replace(/-/g, '')}</DATE>
                 <VOUCHERTYPENAME>${voucher.voucherType}</VOUCHERTYPENAME>
-                ${isSalesOrder ? '<ISORDER>Yes</ISORDER>' : ''}
                 <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
                 <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
                 <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
@@ -285,9 +284,20 @@ async function createVoucher(voucher) {
   const exceptions = parseInt((response || '').match(/<EXCEPTIONS>(\d+)<\/EXCEPTIONS>/i)?.[1] ?? '0');
   const errors     = parseInt((response || '').match(/<ERRORS>(\d+)<\/ERRORS>/i)?.[1] ?? '0');
 
-  if (created === 0 || exceptions > 0 || errors > 0) {
+  const altered = parseInt((response || '').match(/<ALTERED>(\d+)<\/ALTERED>/i)?.[1] ?? '0');
+
+  if (exceptions > 0 || errors > 0) {
     logger.error('Tally voucher create failed', { voucherNumber: voucher.voucherNumber, created, exceptions, errors });
     throw new Error(`Tally voucher create failed (created=${created}, exceptions=${exceptions}, errors=${errors})`);
+  }
+
+  if (created === 0 && altered === 0) {
+    logger.error('Tally silently ignored voucher — voucher type name may not exist in Tally', {
+      voucherNumber: voucher.voucherNumber,
+      voucherType:   voucher.voucherType,
+      hint:          'Go to Gateway of Tally → Accounts Info → Voucher Types and confirm the exact name'
+    });
+    throw new Error(`Tally ignored voucher (CREATED=0, no errors) — voucher type "${voucher.voucherType}" may not exist in Tally`);
   }
 
   logger.info('Voucher created in Tally', { voucherNumber: voucher.voucherNumber });
@@ -550,7 +560,9 @@ async function deleteVoucher(voucherNumber) {
                 <DATE>${voucherDate || new Date().toISOString().slice(0,10).replace(/-/g,'')}</DATE>
                 <VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME>
                 <VOUCHERNUMBER>${escapeXml(voucherNumber)}</VOUCHERNUMBER>
+                <REFERENCE>${escapeXml(voucherNumber)}</REFERENCE>
                 <MASTERID>${masterId}</MASTERID>
+                <PERSISTEDVIEW>Sales Order Voucher View</PERSISTEDVIEW>
               </VOUCHER>
             </TALLYMESSAGE>
           </REQUESTDATA>
@@ -564,6 +576,13 @@ async function deleteVoucher(voucherNumber) {
   if (response && response.includes('<DELETED>1</DELETED>')) {
     logger.info('Voucher successfully deleted from Tally', { voucherNumber, masterId });
     return response;
+  }
+
+  // "Cannot delete unnamed object" means Tally couldn't match the voucher —
+  // safe to proceed with create (it no longer exists or never fully committed)
+  if (response && response.includes('Cannot delete unnamed object')) {
+    logger.warn('Tally could not delete voucher (unnamed object) — proceeding with create anyway', { voucherNumber, masterId });
+    return null;
   }
 
   logger.error('Voucher delete failed — aborting create to prevent duplicate', { voucherNumber, masterId });

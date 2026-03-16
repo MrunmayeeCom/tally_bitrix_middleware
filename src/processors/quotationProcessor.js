@@ -48,11 +48,22 @@ async function processQuotation({ entityId, isUpdate = false }) {
     }
 
     // Step 2: Map to Tally voucher format
+    // 'Sales Order' must match the voucher type name EXACTLY as it appears in
+    // Gateway of Tally → Accounts Info → Voucher Types (case-sensitive)
+    const TALLY_SALES_ORDER_TYPE = 'Sales Order';
+
     const voucher = {
       ...mapInvoiceToVoucher(quotation),
-      voucherType: 'Sales Order',
+      voucherType: TALLY_SALES_ORDER_TYPE,
       narration:   `Bitrix24 Quotation #${quotation.id || quotation.ID}`
     };
+
+    logger.info('Quotation voucher type being used', {
+      voucherType:   TALLY_SALES_ORDER_TYPE,
+      voucherNumber: voucher.voucherNumber,
+      partyName:     voucher.partyName,
+      hint:          'If Tally rejects silently, verify this name in Tally → Accounts Info → Voucher Types'
+    });
 
     logger.info('Quotation mapped', {
       voucherNumber: voucher.voucherNumber,
@@ -72,6 +83,10 @@ async function processQuotation({ entityId, isUpdate = false }) {
     }
 
     if (isUpdate) {
+      // Wait 2s before attempting delete — ADD and UPDATE webhooks fire simultaneously
+      // from Bitrix24; the ADD may still be mid-commit in Tally when UPDATE arrives
+      await new Promise(r => setTimeout(r, 2000));
+
       // Tally doesn't support voucher ALTER via XML — workaround: delete old + create new
       logger.info('Quotation updated — deleting old Tally voucher and recreating with new values', {
         entityId, voucherNumber: voucher.voucherNumber
