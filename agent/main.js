@@ -131,7 +131,8 @@ function updateTray() {
       { label: `TallyBitrixSync`,       enabled: false                                   },
       { label: running ? '● Running' : '○ Stopped', enabled: false                       },
       { type:  'separator'                                                                },
-      { label: 'Sync Now',              click: triggerSync, enabled: running             },
+      { label: 'Sync Outstanding',      click: triggerSync,        enabled: running      },
+      { label: 'Sync Ledgers',          click: triggerLedgerSync,  enabled: running      },
       { label: 'View Logs',             click: openLogs                                  },
       { label: 'Open Dashboard',        click: openDashboard                             },
       { type:  'separator'                                                                },
@@ -143,6 +144,36 @@ function updateTray() {
     ]);
     tray.setContextMenu(menu);
   });
+}
+
+function triggerLedgerSync() {
+  const http = require('http');
+  const cfg = loadConfig() || {};
+  const headers = { 'Content-Type': 'application/json' };
+  if (cfg.apiKey) headers['x-api-key'] = cfg.apiKey;
+
+  const probe = http.request(
+    { hostname: 'localhost', port: 3000, path: '/health', method: 'GET', timeout: 3000 },
+    (res) => {
+      res.resume();
+      if (res.statusCode !== 200) {
+        dialog.showErrorBox('Service Not Running', 'The sync service is not responding.');
+        return;
+      }
+      try {
+        const req = http.request({
+          hostname: 'localhost', port: 3000,
+          path: '/sync/tally-to-bitrix', method: 'POST', headers
+        }, (res) => { res.resume(); });
+        req.on('error', () => {});
+        req.setTimeout(5000, () => req.destroy());
+        req.end();
+      } catch {}
+    }
+  );
+  probe.on('error', () => dialog.showErrorBox('Service Not Running', 'Could not reach the sync service on port 3000.'));
+  probe.on('timeout', () => { probe.destroy(); dialog.showErrorBox('Timeout', 'Sync service timed out.'); });
+  probe.end();
 }
 
 function triggerSync() {
@@ -245,7 +276,7 @@ function createTray() {
   tray.setToolTip('TallyBitrixSync');
   tray.on('double-click', openDashboard);
   updateTray();
-  setInterval(updateTray, 10000); // refresh every 10s
+  setInterval(updateTray, 30000); // refresh every 30s
 }
 
 // ── IPC ───────────────────────────────────────────────────────────────────────
@@ -330,7 +361,8 @@ ipcMain.handle('install-service', async (_, cfg) => {
     const alive = await new Promise(r => checkServiceStatus(r));
     if (alive) return { success: true };
   }
-  return { success: true };
+  // Service did not respond after 10 seconds — report failure
+  return { success: false, error: 'Service did not start in time — check Node.js is installed and Tally is running' };
 });
 
 ipcMain.handle('uninstall-service', async () => {
@@ -353,6 +385,27 @@ ipcMain.handle('get-status', async () => {
 
 ipcMain.handle('trigger-sync', async () => {
   triggerSync();
+  return { triggered: true };
+});
+
+ipcMain.handle('trigger-ledger-sync', async () => {
+  const http = require('http');
+  const cfg = loadConfig() || {};
+  const headers = { 'Content-Type': 'application/json' };
+  if (cfg.apiKey) headers['x-api-key'] = cfg.apiKey;
+
+  const alive = await new Promise(r => checkServiceStatus(r));
+  if (!alive) return { triggered: false, error: 'Service not running' };
+
+  try {
+    const req = http.request({
+      hostname: 'localhost', port: 3000,
+      path: '/sync/tally-to-bitrix', method: 'POST', headers
+    }, (res) => { res.resume(); });
+    req.on('error', () => {});
+    req.setTimeout(5000, () => req.destroy());
+    req.end();
+  } catch {}
   return { triggered: true };
 });
 

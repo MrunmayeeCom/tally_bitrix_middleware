@@ -100,35 +100,24 @@ async function getStages(categoryId) {
 async function sendNotification(userId, message, dealId = null) {
   logger.info('Sending notification', { userId, dealId, message });
 
-  // Real in-app push notification to the assigned user
-  try {
-    await callBitrix('im.notify.system.add', {
-      USER_ID: userId,
-      MESSAGE: message
-    });
-    logger.info('Push notification sent', { userId });
-  } catch (e) {
-    logger.warn('Push notification failed', { userId, message: e.message });
-  }
-
-  // CRM activity on the deal — visible in deal timeline
+  // Timeline comment on the deal — visible to all, requires only CRM scope
   if (dealId) {
     try {
-      const cleanMessage = message.replace(/\[.*?\]/g, ''); // strip BBCode for plain text fields
-      await callBitrix('crm.activity.add', {
+      const timelineText = message
+        .replace(/\[b\](.*?)\[\/b\]/g, '$1')
+        .replace(/[\u{1F300}-\u{1FFFF}]/gu, '')
+        .replace(/[^\x20-\x7E\n]/g, '')
+        .trim();
+      await callBitrix('crm.timeline.comment.add', {
         fields: {
-          OWNER_TYPE_ID:  2,       // 2 = Deal
-          OWNER_ID:       dealId,
-          TYPE_ID:        2,       // 2 = generic activity
-          SUBJECT:        cleanMessage.substring(0, 80),
-          DESCRIPTION:    cleanMessage,
-          RESPONSIBLE_ID: userId,
-          COMPLETED:      'Y'
+          ENTITY_TYPE: 'deal',
+          ENTITY_ID:   dealId,
+          COMMENT:     timelineText
         }
       });
-      logger.info('CRM activity added on deal', { dealId });
+      logger.info('Timeline comment posted', { dealId });
     } catch (e) {
-      logger.warn('CRM activity add failed', { dealId, message: e.message });
+      logger.warn('Timeline comment failed', { dealId, message: e.message });
     }
   }
 }

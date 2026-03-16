@@ -128,7 +128,7 @@ async function getLedgers() {
   // This keeps the XML response tiny and Tally responsive.
   const toDate   = new Date();
   const fromDate = new Date();
-  fromDate.setDate(fromDate.getDate() - 7);
+  fromDate.setDate(fromDate.getDate() - 30);
 
   const fmt = (d) => {
     const dd   = String(d.getDate()).padStart(2, '0');
@@ -216,9 +216,25 @@ function parseLedgersXml(xml) {
   }
 }
 
-// Create Voucher in Tally (Invoice)
+// Create Voucher in Tally (Sales Order / Sales Invoice)
 async function createVoucher(voucher) {
   logger.info('Creating voucher in Tally', { voucherNumber: voucher.voucherNumber });
+
+  // Build inventory entries — Tally requires these for Sales Order and Sales vouchers.
+  // If no line items came from Bitrix, create a single generic service entry.
+  const items = (voucher.items && voucher.items.length > 0)
+    ? voucher.items
+    : [{ name: 'Service', quantity: 1, rate: voucher.amount, amount: voucher.amount }];
+
+  const inventoryXml = items.map(item => `
+              <ALLINVENTORYENTRIES.LIST>
+                <STOCKITEMNAME>${escapeXml(item.name || 'Service')}</STOCKITEMNAME>
+                <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                <RATE>${parseFloat(item.rate || 0)}</RATE>
+                <AMOUNT>${parseFloat(item.amount || 0)}</AMOUNT>
+                <BILLEDQTY>${parseFloat(item.quantity || 1)} Nos</BILLEDQTY>
+                <ACTUALQTY>${parseFloat(item.quantity || 1)} Nos</ACTUALQTY>
+              </ALLINVENTORYENTRIES.LIST>`).join('');
 
   const xml = `
     <ENVELOPE>
@@ -238,9 +254,18 @@ async function createVoucher(voucher) {
               <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create">
                 <DATE>${voucher.date.replace(/-/g, '')}</DATE>
                 <VOUCHERTYPENAME>${voucher.voucherType}</VOUCHERTYPENAME>
+                <ISORDER>Yes</ISORDER>
+                <PERSISTEDVIEW>Order Voucher View</PERSISTEDVIEW>
+                <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
+                <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
                 <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
-                <AMOUNT>${voucher.amount}</AMOUNT>
                 <NARRATION>${escapeXml(voucher.narration)}</NARRATION>
+                ${inventoryXml}
+                <ALLLEDGERENTRIES.LIST>
+                  <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
+                  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+                  <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
+                </ALLLEDGERENTRIES.LIST>
               </VOUCHER>
             </TALLYMESSAGE>
           </REQUESTDATA>
@@ -250,6 +275,15 @@ async function createVoucher(voucher) {
   `.trim();
 
   const response = await sendToTally(xml);
+
+  // Tally returns HTTP 200 even on failure — check XML body for actual errors
+  if (response && response.includes('<LINEERROR>')) {
+    const errMatch = response.match(/<LINEERROR>(.*?)<\/LINEERROR>/i);
+    const errMsg = errMatch ? errMatch[1] : 'Unknown Tally error';
+    logger.error('Tally rejected voucher', { voucherNumber: voucher.voucherNumber, error: errMsg });
+    throw new Error(`Tally rejected voucher: ${errMsg}`);
+  }
+
   logger.info('Voucher created in Tally', { voucherNumber: voucher.voucherNumber });
   return response;
 }

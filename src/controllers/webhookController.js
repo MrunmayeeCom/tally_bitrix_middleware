@@ -21,14 +21,28 @@ async function handleWebhook(req, res) {
     switch (event) {
 
       case 'ONCRMCONTACTADD':
-      case 'ONCRMCONTACTUPDATE':
+      case 'ONCRMCONTACTUPDATE': {
+        const contactSource = payload.data?.FIELDS?.SOURCE_DESCRIPTION || '';
+        if (contactSource === 'TALLY_SYNC') {
+          logger.info('Skipping webhook — contact was auto-created by Tally sync, not a user action', { entityId });
+          break;
+        }
         await processContact(entityId, isUpdate);
         break;
+      }
 
       case 'ONCRMCOMPANYADD':
-      case 'ONCRMCOMPANYUPDATE':
+      case 'ONCRMCOMPANYUPDATE': {
+        // Skip if this company was auto-created by Tally ledger sync
+        // to avoid circular webhook loop (Tally→Bitrix→Tally→Bitrix...)
+        const companySource = payload.data?.FIELDS?.SOURCE_DESCRIPTION || '';
+        if (companySource === 'TALLY_SYNC') {
+          logger.info('Skipping webhook — company was auto-created by Tally sync, not a user action', { entityId });
+          break;
+        }
         await processCompany(entityId, isUpdate);
         break;
+      }
 
       case 'ONCRMINVOICEADD':
       case 'ONCRMINVOICEUPDATE':

@@ -78,11 +78,40 @@ async function setupPipeline() {
     }
 
     logger.info('Tally Outstanding pipeline setup complete', { categoryId });
+    await setupDealCustomFields();
     return categoryId;
 
   } catch (error) {
     logger.error('Pipeline setup failed', { message: error.message });
     // Non-fatal — server still starts, deals go to default pipeline
+  }
+}
+
+async function setupDealCustomFields() {
+  const fields = [
+    { FIELD_NAME: 'UF_BILL_DATE',    USER_TYPE_ID: 'date',   LIST_COLUMN_LABEL: 'Bill Date'     },
+    { FIELD_NAME: 'UF_DUE_DATE',     USER_TYPE_ID: 'date',   LIST_COLUMN_LABEL: 'Due Date'      },
+    { FIELD_NAME: 'UF_BILL_AMOUNT',  USER_TYPE_ID: 'double', LIST_COLUMN_LABEL: 'Bill Amount'   },
+    { FIELD_NAME: 'UF_OUTSTANDING',  USER_TYPE_ID: 'double', LIST_COLUMN_LABEL: 'Outstanding'   },
+    { FIELD_NAME: 'UF_DAYS_PENDING', USER_TYPE_ID: 'integer',LIST_COLUMN_LABEL: 'Days Pending'  },
+  ];
+
+  for (const field of fields) {
+    try {
+      await callBitrix('crm.deal.userfield.add', {
+        fields: {
+          ...field,
+          ENTITY_ID:   'CRM_DEAL',
+          EDIT_FORM_LABEL: field.LIST_COLUMN_LABEL,
+          MANDATORY:   'N',
+          SHOW_IN_LIST: 'Y',
+        }
+      });
+      logger.info('Custom deal field created', { fieldName: field.FIELD_NAME });
+    } catch (e) {
+      // Field likely already exists — not an error
+      logger.info('Custom deal field already exists or skipped', { fieldName: field.FIELD_NAME, message: e.message });
+    }
   }
 }
 

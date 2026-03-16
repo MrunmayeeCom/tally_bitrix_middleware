@@ -333,7 +333,9 @@
           <div class="feature-item"><span class="fi">✅</span> Windows Service registered</div>
           <div class="feature-item"><span class="fi">✅</span> Tally Outstanding pipeline created</div>
           <div class="feature-item"><span class="fi">✅</span> Webhooks configured</div>
-          <div class="feature-item"><span class="fi">✅</span> Auto-sync at 9 AM &amp; 11 PM IST</div>
+          <div class="feature-item"><span class="fi">✅</span> Outstanding sync every 15 minutes</div>
+          <div class="feature-item"><span class="fi">✅</span> Ledger sync every 5 minutes</div>
+          <div class="feature-item"><span class="fi">✅</span> Due date automation every hour</div>
           <div class="feature-item"><span class="fi">✅</span> Starts automatically with Windows</div>
         </div>
         <button class="btn btn-primary" style="margin-top:18px" onclick="showDashboard()">Open Dashboard →</button>
@@ -352,7 +354,7 @@
         <div class="status-dot" id="status-dot"></div>
         <div class="status-info">
           <div class="status-title" id="status-title">Service Running</div>
-          <div class="status-sub"   id="status-sub">Syncing at 9 AM &amp; 11 PM IST</div>
+          <div class="status-sub"   id="status-sub">Outstanding every 15min | Ledgers every 5min</div>
         </div>
       </div>
       <div class="status-badge live" id="status-badge">LIVE</div>
@@ -397,8 +399,13 @@
       <div class="action-grid">
         <div class="action-card" onclick="syncNow()">
           <div class="ac-icon">🔄</div>
-          <div class="ac-label">Sync Now</div>
-          <div class="ac-sub">Trigger manual sync</div>
+          <div class="ac-label">Sync Outstanding</div>
+          <div class="ac-sub">Sync bills from Tally</div>
+        </div>
+        <div class="action-card" onclick="syncLedgers()">
+          <div class="ac-icon">👥</div>
+          <div class="ac-label">Sync Ledgers</div>
+          <div class="ac-sub">Tally → Bitrix24 contacts</div>
         </div>
         <div class="action-card" onclick="switchTab('logs', this)">
           <div class="ac-icon">📋</div>
@@ -468,9 +475,9 @@
       <div class="section-title">Sync Schedule</div>
       <div style="background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--muted);line-height:1.8;">
         ⏰ Full sync (Ledger + Outstanding) — 9:00 AM IST<br/>
-        🔔 Due date automation — 9:30 AM IST<br/>
-        🔄 Outstanding sync — 8 AM, 12 PM, 4 PM, 8 PM IST<br/>
-        ⏰ Outstanding sync — 11:00 PM IST
+        🔄 Outstanding sync — Every 15 minutes<br/>
+        👥 Ledger sync (Tally → Bitrix24) — Every 5 minutes<br/>
+        🔔 Due date automation — Every 1 hour
       </div>
     </div>
 
@@ -608,19 +615,20 @@ async function installService() {
       document.getElementById('success-screen').style.display = 'block';
     } else {
       // Service returned but reported failure
-      document.getElementById('installing-screen').innerHTML = `
+      const screen = document.getElementById('installing-screen');
+      screen.innerHTML = `
         <div style="font-size:44px;margin-bottom:14px;">❌</div>
         <h2 style="color:var(--danger)">Installation Failed</h2>
-        <p style="color:var(--muted);">The service could not be started. Please check that Node.js is installed and Tally is running, then try again.</p>
+        <p style="color:var(--muted);">${result.error || 'The service could not be started. Check Node.js is installed and Tally is running.'}</p>
         <button class="btn btn-primary" style="margin-top:18px" onclick="goStep(3)">← Go Back & Retry</button>
       `;
-      document.getElementById('installing-screen').style.display = 'block';
+      screen.style.display = 'block';
     }
 
   } catch(e) {
     // IPC error — show a real failure message instead of fake success
-    document.getElementById('installing-screen').style.display = 'none';
-    document.getElementById('installing-screen').innerHTML = `
+    const screen = document.getElementById('installing-screen');
+    screen.innerHTML = `
       <div style="font-size:44px;margin-bottom:14px;">❌</div>
       <h2 style="color:var(--danger)">Installation Failed</h2>
       <p style="color:var(--muted);">${e.message || 'An unexpected error occurred. Please try again.'}</p>
@@ -645,7 +653,7 @@ function getFormConfig() {
 function updateStatusUI(running) {
   document.getElementById('status-dot').className      = 'status-dot' + (running ? '' : ' stopped');
   document.getElementById('status-title').textContent  = running ? 'Service Running' : 'Service Stopped';
-  document.getElementById('status-sub').textContent    = running ? 'Syncing at 9 AM & 11 PM IST' : 'Click Start Service to resume';
+  document.getElementById('status-sub').textContent    = running ? 'Outstanding every 15min | Ledgers every 5min' : 'Click Start Service to resume';
   document.getElementById('status-badge').textContent  = running ? 'LIVE' : 'OFFLINE';
   document.getElementById('status-badge').className    = 'status-badge ' + (running ? 'live' : 'offline');
   document.getElementById('svc-icon').textContent      = running ? '⏹' : '▶';
@@ -658,6 +666,9 @@ async function loadDashboard() {
   updateStatusUI(status.running);
   loadStats();
   updateNextSync();
+  // Refresh countdown every 30 seconds
+  if (window._nextSyncInterval) clearInterval(window._nextSyncInterval);
+  window._nextSyncInterval = setInterval(updateNextSync, 30000);
 }
 
 async function loadStats() {
@@ -681,21 +692,14 @@ async function loadStats() {
 
 function updateNextSync() {
   const now = new Date();
-  // Convert current time to IST (UTC+5:30)
-  const istOffset = 5.5 * 60 * 60000;
-  const nowIST = new Date(now.getTime() + istOffset - (now.getTimezoneOffset() * 60000));
-
-  const next9  = new Date(nowIST); next9.setHours(9,0,0,0);
-  const next23 = new Date(nowIST); next23.setHours(23,0,0,0);
-  if (nowIST > next9)  next9.setDate(next9.getDate() + 1);
-  if (nowIST > next23) next23.setDate(next23.getDate() + 1);
-
-  const nextSync = next9 < next23 ? next9 : next23;
-  const diff = nextSync - nowIST;
-  const h = Math.floor(diff / 3600000);
-  const m = Math.floor((diff % 3600000) / 60000);
-  const label = nextSync.getHours() === 9 ? '9:00 AM IST' : '11:00 PM IST';
-  document.getElementById('next-sync-time').textContent = `${label} (in ${h}h ${m}m)`;
+  // Next 15-minute mark
+  const ms = now.getTime();
+  const interval = 15 * 60 * 1000;
+  const nextMs = Math.ceil(ms / interval) * interval;
+  const diff = nextMs - ms;
+  const m = Math.floor(diff / 60000);
+  const s = Math.floor((diff % 60000) / 1000);
+  document.getElementById('next-sync-time').textContent = `Outstanding in ${m}m ${s}s | Ledger in <5min`;
 }
 
 async function loadHistory() {
@@ -780,13 +784,44 @@ function stopLogAutoRefresh() {
   if (_logRefreshInterval) { clearInterval(_logRefreshInterval); _logRefreshInterval = null; }
 }
 
+async function syncLedgers() {
+  if (window._ledgerSyncInProgress) return;
+  window._ledgerSyncInProgress = true;
+  document.querySelectorAll('.action-card').forEach(c => {
+    if (c.querySelector('.ac-label')?.textContent === 'Sync Ledgers') {
+      c.style.opacity = '0.5';
+      c.style.pointerEvents = 'none';
+      c.querySelector('.ac-icon').textContent = '⏳';
+    }
+  });
+  showToast('Ledger sync triggered…', 'success');
+  try {
+    await ipcRenderer.invoke('trigger-ledger-sync');
+    setTimeout(() => {
+      refreshLogs();
+      document.querySelectorAll('.action-card').forEach(c => {
+        if (c.querySelector('.ac-label')?.textContent === 'Sync Ledgers') {
+          c.style.opacity = '1';
+          c.style.pointerEvents = 'auto';
+          c.querySelector('.ac-icon').textContent = '👥';
+        }
+      });
+      window._ledgerSyncInProgress = false;
+      showToast('Ledger sync completed — check logs', 'success');
+    }, 5000);
+  } catch(e) {
+    showToast('Ledger sync failed: ' + e.message, 'error');
+    window._ledgerSyncInProgress = false;
+  }
+}
+
 async function syncNow() {
   const card = document.querySelector('.action-card');
   const icon = document.getElementById('sync-icon');
   if (window._syncInProgress) return;
   window._syncInProgress = true;
   document.querySelectorAll('.action-card').forEach(c => {
-    if (c.querySelector('.ac-label')?.textContent === 'Sync Now') {
+    if (c.querySelector('.ac-label')?.textContent === 'Sync Outstanding') {
       c.style.opacity = '0.5';
       c.style.pointerEvents = 'none';
       c.querySelector('.ac-icon').textContent = '⏳';
@@ -799,7 +834,7 @@ async function syncNow() {
       refreshLogs();
       loadStats();
       document.querySelectorAll('.action-card').forEach(c => {
-        if (c.querySelector('.ac-label')?.textContent === 'Sync Now') {
+        if (c.querySelector('.ac-label')?.textContent === 'Sync Outstanding') {
           c.style.opacity = '1';
           c.style.pointerEvents = 'auto';
           c.querySelector('.ac-icon').textContent = '🔄';

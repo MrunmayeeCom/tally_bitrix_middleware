@@ -11,9 +11,11 @@ const logger = require('../utils/logger');
 // Search Bitrix24 for existing contact by name
 async function findBitrixContact(name) {
   try {
+    // Small delay before each search to avoid 502 rate limiting
+    await new Promise(r => setTimeout(r, 300));
     const data = await callBitrix('crm.contact.list', {
       filter: { '%NAME': name },
-      select: ['ID', 'NAME', 'LAST_NAME']
+      select: ['ID', 'NAME', 'LAST_NAME', 'PHONE', 'EMAIL']
     });
     const results = data.result || [];
     return results.find(c =>
@@ -28,9 +30,11 @@ async function findBitrixContact(name) {
 // Search Bitrix24 for existing company by name
 async function findBitrixCompany(name) {
   try {
+    // Small delay before each search to avoid 502 rate limiting
+    await new Promise(r => setTimeout(r, 300));
     const data = await callBitrix('crm.company.list', {
       filter: { '%TITLE': name },
-      select: ['ID', 'TITLE']
+      select: ['ID', 'TITLE', 'PHONE', 'EMAIL']
     });
     const results = data.result || [];
     return results.find(c =>
@@ -46,10 +50,11 @@ async function findBitrixCompany(name) {
 async function createBitrixContact(ledger) {
   const nameParts = ledger.ledgerName.trim().split(/\s+/);
   const fields = {
-    NAME:      nameParts[0],
-    LAST_NAME: nameParts.slice(1).join(' ') || '',
-    SOURCE_ID: 'OTHER',
-    COMMENTS:  'Auto-created from Tally ledger sync'
+    NAME:               nameParts[0],
+    LAST_NAME:          nameParts.slice(1).join(' ') || '',
+    SOURCE_ID:          'OTHER',
+    SOURCE_DESCRIPTION: 'TALLY_SYNC',
+    COMMENTS:           'Auto-created from Tally ledger sync'
   };
 
   if (ledger.phone) fields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
@@ -63,7 +68,9 @@ async function createBitrixContact(ledger) {
 async function createBitrixCompany(ledger) {
   const fields = {
     TITLE:     ledger.ledgerName,
-    COMMENTS:  'Auto-created from Tally ledger sync'
+    COMMENTS:  'Auto-created from Tally ledger sync',
+    SOURCE_ID: 'OTHER',
+    SOURCE_DESCRIPTION: 'TALLY_SYNC' // marker to identify auto-created records
   };
 
   if (ledger.phone) fields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
@@ -72,20 +79,14 @@ async function createBitrixCompany(ledger) {
   return data.result;
 }
 
-const LEDGER_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours minimum between ledger syncs
 let lastLedgerSyncTime = 0;
 
-async function processTallyToContact() {
+async function processTallyToContact({ manual = false } = {}) {
   try {
     logger.info('Tally → Bitrix24 bi-directional sync started');
 
-    // Rate-limit ledger sync — with 16k ledgers, don't hammer Tally every 4 hours
+    // Track last run time for logging purposes only
     const now = Date.now();
-    if (now - lastLedgerSyncTime < LEDGER_SYNC_INTERVAL_MS) {
-      const nextIn = Math.round((LEDGER_SYNC_INTERVAL_MS - (now - lastLedgerSyncTime)) / 60000);
-      logger.info(`Ledger sync skipped — last ran less than 6hrs ago (next in ~${nextIn} min)`);
-      return { success: true, created: 0, skipped: 0, failed: 0 };
-    }
     lastLedgerSyncTime = now;
 
     // Step 1: Fetch Sundry Debtor ledgers from Tally in batches
@@ -98,23 +99,43 @@ async function processTallyToContact() {
 
     logger.info(`Found ${ledgers.length} ledgers in Tally to check`);
 
+    // Use change detection — only process ledgers that are new or changed
+    // This makes the sync fast enough to run every 5 minutes safely
+    const { detectChanges } = require('../watchers/tallyChangeDetector');
+    const { added, changed } = detectChanges(ledgers);
+    const toProcess = [...added, ...changed];
+
+    if (toProcess.length === 0) {
+      logger.info('No changes detected in Tally ledgers — skipping Bitrix24 update');
+      return { success: true, created: 0, skipped: ledgers.length, failed: 0 };
+    }
+
+    logger.info(`Processing ${toProcess.length} changed/new ledgers out of ${ledgers.length} total`);
+
     let created = 0;
     let skipped = 0;
     let failed  = 0;
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    for (const ledger of ledgers) {
+    for (const ledger of toProcess) {
       try {
         // Step 2: Check if already exists in Bitrix24
         // Try company first (most Tally ledgers are businesses)
         const existingCompany = await findBitrixCompany(ledger.ledgerName);
         if (existingCompany) {
-          // Update existing company with latest details from Tally
           const updateFields = {};
           if (ledger.phone) updateFields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
           if (ledger.email) updateFields.EMAIL = [{ VALUE: ledger.email, VALUE_TYPE: 'WORK' }];
           if (ledger.gstin) updateFields.UF_CRM_GSTIN = ledger.gstin;
+          // Sync ledger name back — if renamed in Tally, update Bitrix24 company title
+          if (ledger.ledgerName && ledger.ledgerName !== existingCompany.TITLE) {
+            updateFields.TITLE = ledger.ledgerName;
+            logger.info('Ledger name changed in Tally — updating Bitrix24 company title', {
+              old: existingCompany.TITLE,
+              new: ledger.ledgerName
+            });
+          }
 
           if (Object.keys(updateFields).length > 0) {
             await callBitrix('crm.company.update', {
@@ -140,6 +161,19 @@ async function processTallyToContact() {
           const updateFields = {};
           if (ledger.phone) updateFields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
           if (ledger.email) updateFields.EMAIL = [{ VALUE: ledger.email, VALUE_TYPE: 'WORK' }];
+          // Sync ledger name back — if renamed in Tally, update Bitrix24 contact name
+          if (ledger.ledgerName) {
+            const nameParts = ledger.ledgerName.trim().split(/\s+/);
+            const currentFullName = `${existingContact.NAME || ''} ${existingContact.LAST_NAME || ''}`.trim();
+            if (ledger.ledgerName !== currentFullName) {
+              updateFields.NAME      = nameParts[0];
+              updateFields.LAST_NAME = nameParts.slice(1).join(' ') || '';
+              logger.info('Ledger name changed in Tally — updating Bitrix24 contact name', {
+                old: currentFullName,
+                new: ledger.ledgerName
+              });
+            }
+          }
 
           if (Object.keys(updateFields).length > 0) {
             await callBitrix('crm.contact.update', {
@@ -187,13 +221,21 @@ async function processTallyToContact() {
         created++;
 
       } catch (itemError) {
-        logger.error('Failed to sync ledger to Bitrix24', {
-          ledgerName: ledger.ledgerName,
-          message:    itemError.message
-        });
+        const is502 = itemError.message?.includes('502') || itemError.message?.includes('503');
+        if (is502) {
+          logger.warn('Bitrix24 overloaded (502/503) — pausing ledger sync for 10s', {
+            ledgerName: ledger.ledgerName
+          });
+          await sleep(10000); // longer pause when Bitrix24 is struggling
+        } else {
+          logger.error('Failed to sync ledger to Bitrix24', {
+            ledgerName: ledger.ledgerName,
+            message:    itemError.message
+          });
+        }
         failed++;
       }
-      await sleep(500);
+      await sleep(1500);
     }
 
     logger.info('Tally → Bitrix24 sync completed', { created, skipped, failed });

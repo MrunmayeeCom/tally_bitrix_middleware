@@ -37,8 +37,15 @@ app.post('/sync/outstanding', authMiddleware, async (req, res) => {
 // NOTE: Disabled for large companies (16k+ ledgers) — causes Tally freeze
 // Ledger sync only runs at 9AM scheduled job
 app.post('/sync/tally-to-bitrix', authMiddleware, async (req, res) => {
-  logger.info('Manual ledger sync skipped — runs automatically at 9AM only (prevents Tally freeze with large ledger counts)');
-  res.status(200).json({ success: true, skipped: true, message: 'Ledger sync runs automatically at 9AM IST to prevent Tally freeze' });
+  try {
+    const { processTallyToContact } = require('./processors/tallyToContactProcessor');
+    logger.info('Manual ledger sync triggered');
+    const result = await processTallyToContact({ manual: true });
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Manual ledger sync failed', { message: error.message });
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 
 // manual due date automation trigger
