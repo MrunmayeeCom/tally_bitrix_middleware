@@ -1,6 +1,6 @@
 const { getQuote } = require('../services/bitrixService');
 const { mapInvoiceToVoucher } = require('../utils/mapper');
-const { createVoucher } = require('../services/tallyService');
+const { createVoucher, alterVoucher } = require('../services/tallyService');
 const logger = require('../utils/logger');
 
 // In-memory dedup set — prevents duplicate vouchers if webhook fires twice within 60s
@@ -47,10 +47,20 @@ async function processQuotation({ entityId, isUpdate = false }) {
       logger.warn('Ledger check/create failed — proceeding anyway', { message: ledgerErr.message });
     }
 
-    // Step 2: Map to Tally voucher format
-    // 'Sales Order' must match the voucher type name EXACTLY as it appears in
-    // Gateway of Tally → Accounts Info → Voucher Types (case-sensitive)
-    const TALLY_SALES_ORDER_TYPE = 'Sales Order';
+    // Auto-detect the correct voucher type from Tally if env is not set
+    let TALLY_SALES_ORDER_TYPE = process.env.TALLY_QUOTATION_VOUCHER_TYPE || '';
+    if (!TALLY_SALES_ORDER_TYPE) {
+      const { getVoucherTypes } = require('../services/tallyService');
+      const availableTypes = await getVoucherTypes();
+      const preferred = ['Sales Order', 'Sales Orders', 'Sales Invoice'];
+      TALLY_SALES_ORDER_TYPE = preferred.find(t =>
+        availableTypes.some(a => a.toLowerCase() === t.toLowerCase())
+      ) || 'Sales';
+      logger.info('Auto-detected Tally voucher type', {
+        selected: TALLY_SALES_ORDER_TYPE,
+        availableTypes
+      });
+    }
 
     const voucher = {
       ...mapInvoiceToVoucher(quotation),
@@ -83,29 +93,20 @@ async function processQuotation({ entityId, isUpdate = false }) {
     }
 
     if (isUpdate) {
-      // Wait 2s before attempting delete — ADD and UPDATE webhooks fire simultaneously
-      // from Bitrix24; the ADD may still be mid-commit in Tally when UPDATE arrives
+      // Wait 2s — ADD and UPDATE webhooks fire simultaneously from Bitrix24
       await new Promise(r => setTimeout(r, 2000));
 
-      // Tally doesn't support voucher ALTER via XML — workaround: delete old + create new
-      logger.info('Quotation updated — deleting old Tally voucher and recreating with new values', {
+      logger.info('Quotation updated — altering existing Tally voucher in place', {
         entityId, voucherNumber: voucher.voucherNumber
       });
-      try {
-        const { deleteVoucher } = require('../services/tallyService');
-        await deleteVoucher(`BX-${voucher.voucherNumber}`);
-        logger.info('Old voucher deleted from Tally', { voucherNumber: voucher.voucherNumber });
-      } catch (delErr) {
-        if (delErr.message.includes('will not recreate')) {
-          // Hard stop — delete confirmed failed, do not create duplicate
-          throw delErr;
-        }
-        // Voucher didn't exist in Tally yet — safe to proceed with fresh create
-        logger.info('No existing voucher found in Tally — proceeding with fresh create', { message: delErr.message });
-      }
+      const result = await alterVoucher(voucher);
+      logger.info('Quotation processor completed', {
+        entityId, voucherNumber: voucher.voucherNumber, success: true, action: 'altered'
+      });
+      return { success: true, voucher };
     }
 
-    // Create voucher in Tally (new + updates after delete)
+    // Create voucher in Tally (new quotations only)
     const result = await createVoucher(voucher);
     logger.info('Quotation processor completed', {
       entityId,

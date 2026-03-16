@@ -237,7 +237,7 @@ async function createVoucher(voucher) {
           </REQUESTDESC>
           <REQUESTDATA>
             <TALLYMESSAGE xmlns:UDF="TallyUDF">
-              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="${voucher.voucherType === 'Sales Order' ? 'Sales Order Voucher View' : 'Invoice Voucher View'}">
+              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create">
                 <DATE>${voucher.date.replace(/-/g, '')}</DATE>
                 <VOUCHERTYPENAME>${voucher.voucherType}</VOUCHERTYPENAME>
                 <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
@@ -287,6 +287,10 @@ async function createVoucher(voucher) {
   const altered = parseInt((response || '').match(/<ALTERED>(\d+)<\/ALTERED>/i)?.[1] ?? '0');
 
   if (exceptions > 0 || errors > 0) {
+    if (voucher.voucherType === 'Sales Order') {
+      logger.warn('Sales Order rejected by Tally — retrying as Sales Invoice', { voucherNumber: voucher.voucherNumber });
+      return createVoucher({ ...voucher, voucherType: 'Sales Invoice' });
+    }
     logger.error('Tally voucher create failed', { voucherNumber: voucher.voucherNumber, created, exceptions, errors });
     throw new Error(`Tally voucher create failed (created=${created}, exceptions=${exceptions}, errors=${errors})`);
   }
@@ -464,6 +468,129 @@ async function getLedgerByName(ledgerName) {
   }
 }
 
+// Alter (update) an existing Sales Order voucher in Tally by MASTERID + GUID
+async function alterVoucher(voucher) {
+  logger.info('Altering voucher in Tally', { voucherNumber: voucher.voucherNumber });
+
+  const today = new Date();
+  const fromDate = new Date(today.getFullYear() - 2, today.getMonth(), today.getDate());
+  const fmt = (d) => {
+    const dd   = String(d.getDate()).padStart(2, '0');
+    const mm   = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
+  };
+
+  const fetchXml = `
+    <ENVELOPE>
+      <HEADER>
+        <TALLYREQUEST>Export Data</TALLYREQUEST>
+      </HEADER>
+      <BODY>
+        <EXPORTDATA>
+          <REQUESTDESC>
+            <REPORTNAME>Day Book</REPORTNAME>
+            <STATICVARIABLES>
+              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+              <VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME>
+              <SVFROMDATE>${fmt(fromDate)}</SVFROMDATE>
+              <SVTODATE>${fmt(today)}</SVTODATE>
+            </STATICVARIABLES>
+          </REQUESTDESC>
+        </EXPORTDATA>
+      </BODY>
+    </ENVELOPE>`.trim();
+
+  let masterId    = null;
+  let voucherDate = null;
+  let voucherGuid = null;
+
+  try {
+    const fetchResponse = await sendToTally(fetchXml);
+    const voucherBlockRegex = /<VOUCHER\b[^>]*>([\s\S]*?)<\/VOUCHER>/gi;
+    let vBlock;
+    while ((vBlock = voucherBlockRegex.exec(fetchResponse)) !== null) {
+      const block    = vBlock[1];
+      const numMatch = block.match(/<VOUCHERNUMBER[^>]*>(.*?)<\/VOUCHERNUMBER>/i);
+      const refMatch = block.match(/<REFERENCE[^>]*>(.*?)<\/REFERENCE>/i);
+      const idMatch  = block.match(/<MASTERID>\s*(\d+)\s*<\/MASTERID>/i);
+      const guidMatch = block.match(/<GUID>(.*?)<\/GUID>/i);
+      const vNum = (numMatch && numMatch[1].trim()) || '';
+      const vRef = (refMatch && refMatch[1].trim()) || '';
+      const target = `BX-${voucher.voucherNumber}`;
+      if (idMatch && (vNum === target || vRef === target)) {
+        masterId    = idMatch[1];
+        voucherGuid = guidMatch ? guidMatch[1].trim() : null;
+        const dateMatch = block.match(/<DATE>\s*(\d+)\s*<\/DATE>/i);
+        voucherDate = dateMatch ? dateMatch[1].trim() : null;
+        logger.info('Found MASTERID for alter', { voucherNumber: target, masterId, guid: voucherGuid });
+        break;
+      }
+    }
+  } catch (fetchErr) {
+    logger.warn('Could not fetch MASTERID for alter', { message: fetchErr.message });
+  }
+
+  if (!masterId) {
+    logger.warn('No existing voucher found for alter — falling back to create', { voucherNumber: voucher.voucherNumber });
+    return createVoucher(voucher);
+  }
+
+  const xml = `
+    <ENVELOPE>
+      <HEADER>
+        <TALLYREQUEST>Import Data</TALLYREQUEST>
+      </HEADER>
+      <BODY>
+        <IMPORTDATA>
+          <REQUESTDESC>
+            <REPORTNAME>Vouchers</REPORTNAME>
+            <STATICVARIABLES>
+              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+            </STATICVARIABLES>
+          </REQUESTDESC>
+          <REQUESTDATA>
+            <TALLYMESSAGE xmlns:UDF="TallyUDF">
+              <VOUCHER VCHTYPE="Sales Order" ACTION="Alter" MASTERID="${masterId}">
+                <DATE>${voucher.date.replace(/-/g, '')}</DATE>
+                <VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME>
+                <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
+                <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
+                <MASTERID>${masterId}</MASTERID>
+                ${voucherGuid ? `<GUID>${voucherGuid}</GUID>` : ''}
+                <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
+                <NARRATION>${escapeXml(voucher.narration)}</NARRATION>
+                <ALLLEDGERENTRIES.LIST>
+                  <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
+                  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+                  <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
+                </ALLLEDGERENTRIES.LIST>
+                <ALLLEDGERENTRIES.LIST>
+                  <LEDGERNAME>Sales</LEDGERNAME>
+                  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                  <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
+                </ALLLEDGERENTRIES.LIST>
+              </VOUCHER>
+            </TALLYMESSAGE>
+          </REQUESTDATA>
+        </IMPORTDATA>
+      </BODY>
+    </ENVELOPE>`.trim();
+
+  const response = await sendToTally(xml);
+  logger.info('Raw Tally alter response', { voucherNumber: voucher.voucherNumber, response: (response || '').substring(0, 400) });
+
+  const altered = parseInt((response || '').match(/<ALTERED>(\d+)<\/ALTERED>/i)?.[1] ?? '0');
+  if (altered === 1) {
+    logger.info('Voucher altered in Tally', { voucherNumber: voucher.voucherNumber, masterId });
+    return response;
+  }
+
+  logger.error('Voucher alter failed', { voucherNumber: voucher.voucherNumber, masterId, response: (response || '').substring(0, 400) });
+  throw new Error(`Tally voucher alter failed for BX-${voucher.voucherNumber}`);
+}
+
 // Delete a voucher in Tally by voucher number (used before recreating on update)
 // Step 1: fetch the MASTERID, Step 2: delete by MASTERID
 async function deleteVoucher(voucherNumber) {
@@ -589,6 +716,44 @@ async function deleteVoucher(voucherNumber) {
   throw new Error(`Voucher delete failed for ${voucherNumber} — will not recreate to avoid duplicate`);
 }
 
+async function getVoucherTypes() {
+  const xml = `
+    <ENVELOPE>
+      <HEADER>
+        <TALLYREQUEST>Export Data</TALLYREQUEST>
+      </HEADER>
+      <BODY>
+        <EXPORTDATA>
+          <REQUESTDESC>
+            <REPORTNAME>List of Voucher Types</REPORTNAME>
+            <STATICVARIABLES>
+              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+            </STATICVARIABLES>
+          </REQUESTDESC>
+        </EXPORTDATA>
+      </BODY>
+    </ENVELOPE>`.trim();
+
+  try {
+    const response = await sendToTally(xml);
+    const names = [];
+    const regex = /<VOUCHERTYPE\b[^>]*>([\s\S]*?)<\/VOUCHERTYPE>/gi;
+    let match;
+    while ((match = regex.exec(response)) !== null) {
+      const nameMatch = match[1].match(/<NAME>(.*?)<\/NAME>/i);
+      const nameAttr  = /NAME="([^"]+)"/i.exec(match[0]);
+      const name = (nameMatch && nameMatch[1].trim()) || (nameAttr && nameAttr[1].trim()) || '';
+      if (name) names.push(name);
+    }
+    logger.info('Fetched voucher types from Tally', { count: names.length, names });
+    return names;
+  } catch (err) {
+    logger.warn('Could not fetch voucher types from Tally', { message: err.message });
+    return [];
+  }
+}
+
 async function ensureTallyDefaults() {
   logger.info('Ensuring Tally default masters exist');
   const xml = `
@@ -629,8 +794,10 @@ module.exports = {
   getLedgerByName,
   parseLedgersXml,
   createVoucher,
+  alterVoucher,
   deleteVoucher,
   getOutstanding,
   parseOutstandingXml,
-  ensureTallyDefaults
+  ensureTallyDefaults,
+  getVoucherTypes
 };
