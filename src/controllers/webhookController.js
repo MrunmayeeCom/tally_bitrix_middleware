@@ -32,12 +32,26 @@ async function handleWebhook(req, res) {
 
       case 'ONCRMINVOICEADD':
       case 'ONCRMINVOICEUPDATE':
+      case 'ONCRMSMARTINVOICEADD':
+      case 'ONCRMSMARTINVOICEUPDATE':
         await processInvoice(entityId, isUpdate);
         break;
 
       case 'ONCRMQUOTEADD':
       case 'ONCRMQUOTEUPDATE':
-        await processQuotation({ entityId, isUpdate });
+      case 'ONCRMSMARTPROCESSELEMENTADD':
+      case 'ONCRMSMARTPROCESSELEMENTEDIT':
+        // entityTypeId 7 = Quote, ignore other smart process types
+        if (!payload.data?.FIELDS?.ENTITY_TYPE_ID || String(payload.data.FIELDS.ENTITY_TYPE_ID) === '7') {
+          await processQuotation({ entityId, isUpdate });
+        } else {
+          logger.info('Smart process event ignored — not a Quote', { entityTypeId: payload.data?.FIELDS?.ENTITY_TYPE_ID });
+        }
+        break;
+
+      case 'ONCRMCONTACTDELETE':
+      case 'ONCRMCOMPANYDELETE':
+        logger.warn(`CRM record deleted in Bitrix24 — Tally ledger NOT removed (manual cleanup required)`, { event, entityId });
         break;
 
       default:

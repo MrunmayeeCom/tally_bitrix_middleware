@@ -10,11 +10,12 @@ function recordSyncFailure(trigger, message) {
 }
 
 let isSyncing = false;
+let isDueDateSyncing = false;
 let schedulerStarted = false;
 
 async function runSync(label, fn) {
   if (isSyncing) {
-    logger.warn(`Sync already running — skipping ${label}`);
+    logger.warn(`Sync already running — skipping ${label}`, { skippedAt: new Date().toISOString() });
     return;
   }
   isSyncing = true;
@@ -26,6 +27,23 @@ async function runSync(label, fn) {
     recordSyncFailure(label, error.message);
   } finally {
     isSyncing = false;
+  }
+}
+
+async function runDueDateSync(label, fn) {
+  if (isDueDateSyncing) {
+    logger.warn(`Due date sync already running — skipping ${label}`);
+    return;
+  }
+  isDueDateSyncing = true;
+  try {
+    const result = await fn();
+    logger.info(`${label} completed`, result || {});
+  } catch (error) {
+    logger.error(`${label} failed`, { message: error.message });
+    recordSyncFailure(label, error.message);
+  } finally {
+    isDueDateSyncing = false;
   }
 }
 
@@ -59,7 +77,7 @@ function startScheduler() {
 
   // 9:30 AM — due date automation (runs after 9AM sync finishes)
   cron.schedule('30 9 * * *', () => {
-    runSync('Due date automation', processDueDates);
+    runDueDateSync('Due date automation', processDueDates);
   }, { timezone: 'Asia/Kolkata' });
 
   // Every 4 hours during business hours — outstanding bills only, no ledger dump

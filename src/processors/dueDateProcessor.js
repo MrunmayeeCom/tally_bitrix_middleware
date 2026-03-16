@@ -52,7 +52,10 @@ async function processDueDates() {
 
     for (const deal of deals) {
       try {
-        if (!deal.CLOSEDATE) continue;
+        if (!deal.CLOSEDATE) {
+          logger.warn('Deal has no due date — skipping', { dealId: deal.ID, title: deal.TITLE });
+          continue;
+        }
 
         const closeDate = new Date(deal.CLOSEDATE);
         closeDate.setHours(0, 0, 0, 0);

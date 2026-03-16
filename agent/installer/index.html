@@ -592,17 +592,41 @@ async function installService() {
   document.getElementById('panel-4').classList.add('active');
   const cfg = getFormConfig();
   try {
-    // Timeout safety — resolve after 20s regardless
     const result = await Promise.race([
       ipcRenderer.invoke('install-service', cfg),
       new Promise(r => setTimeout(() => r({ success: true, timeout: true }), 20000))
     ]);
+
     document.getElementById('installing-screen').style.display = 'none';
-    document.getElementById('success-screen').style.display    = 'block';
+
+    if (result && result.timeout) {
+      // Service took too long — may or may not have started
+      document.getElementById('success-screen').style.display = 'block';
+      showToast('Installation is taking longer than expected — verify status in dashboard', 'error');
+    } else if (result && result.success) {
+      // Genuine success
+      document.getElementById('success-screen').style.display = 'block';
+    } else {
+      // Service returned but reported failure
+      document.getElementById('installing-screen').innerHTML = `
+        <div style="font-size:44px;margin-bottom:14px;">❌</div>
+        <h2 style="color:var(--danger)">Installation Failed</h2>
+        <p style="color:var(--muted);">The service could not be started. Please check that Node.js is installed and Tally is running, then try again.</p>
+        <button class="btn btn-primary" style="margin-top:18px" onclick="goStep(3)">← Go Back & Retry</button>
+      `;
+      document.getElementById('installing-screen').style.display = 'block';
+    }
+
   } catch(e) {
-    // Still show success — service may have installed even if IPC errored
+    // IPC error — show a real failure message instead of fake success
     document.getElementById('installing-screen').style.display = 'none';
-    document.getElementById('success-screen').style.display    = 'block';
+    document.getElementById('installing-screen').innerHTML = `
+      <div style="font-size:44px;margin-bottom:14px;">❌</div>
+      <h2 style="color:var(--danger)">Installation Failed</h2>
+      <p style="color:var(--muted);">${e.message || 'An unexpected error occurred. Please try again.'}</p>
+      <button class="btn btn-primary" style="margin-top:18px" onclick="goStep(3)">← Go Back & Retry</button>
+    `;
+    document.getElementById('installing-screen').style.display = 'block';
   }
 }
 

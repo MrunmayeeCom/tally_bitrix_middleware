@@ -216,12 +216,14 @@ async function processOutstanding() {
     tallyLedgerCircuitOpen = false;
     const createdThisRun = new Set();
     const inFlightVouchers = new Set();
+    logger.info('Per-run state reset — cache, circuit breaker, dedup cleared');
 
     // Step 1: Fetch outstanding bills from Tally
     const outstandingList = await getOutstanding();
 
     if (!outstandingList || outstandingList.length === 0) {
       logger.info('No outstanding bills found');
+      await closePaidDeals([]);
       return { success: true, processed: 0 };
     }
 
@@ -293,7 +295,7 @@ async function processOutstanding() {
     await closePaidDeals(currentVoucherNumbers);
 
     const syncResult = { success: true, processed, failed, trigger: 'scheduled' };
-    // recordSync(syncResult);
+    recordSync(syncResult);
     logger.info('Outstanding sync completed', { processed, failed });
     return syncResult;
   } catch (error) {

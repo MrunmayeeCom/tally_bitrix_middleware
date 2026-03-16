@@ -59,10 +59,11 @@ function mapInvoiceToVoucher(invoice) {
     invoice.title         ||   // e.g. "Invoice #164" as last resort
     '';
 
+  const today = new Date().toISOString().split('T')[0];
   return {
     voucherType:   'Sales',
     voucherNumber,
-    date:          dateRaw?.split('T')[0]      || '',
+    date:          dateRaw?.split('T')[0]      || today,
     partyName,
     amount:        parseFloat(amount)          || 0,
     currency:      currency                    || 'INR',

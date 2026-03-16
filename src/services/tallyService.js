@@ -281,6 +281,11 @@ async function getOutstanding() {
   `.trim();
 
   const response = await sendToTally(xml);
+  const tallyError = detectTallyError(response);
+  if (tallyError) {
+    logger.error('Tally returned an error for outstanding bills', { error: tallyError });
+    return [];
+  }
   return parseOutstandingXml(response);
 }
 
@@ -333,6 +338,16 @@ function parseOutstandingXml(xml) {
     logger.error('Failed to parse Tally outstanding XML', { message: err.message });
     return [];
   }
+}
+
+function detectTallyError(xml) {
+  if (!xml) return 'Empty response from Tally';
+  if (xml.includes('<LINEERROR>')) {
+    const m = xml.match(/<LINEERROR>(.*?)<\/LINEERROR>/i);
+    return m ? m[1] : 'Unknown Tally error';
+  }
+  if (xml.includes('Company not loaded')) return 'Tally company not loaded — open the correct company in Tally';
+  return null;
 }
 
 // Convert Tally display date "1-Apr-25" or "1-Apr-2025" → YYYYMMDD for formatTallyDateToISO

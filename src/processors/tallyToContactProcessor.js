@@ -102,6 +102,8 @@ async function processTallyToContact() {
     let skipped = 0;
     let failed  = 0;
 
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
     for (const ledger of ledgers) {
       try {
         // Step 2: Check if already exists in Bitrix24
@@ -191,6 +193,7 @@ async function processTallyToContact() {
         });
         failed++;
       }
+      await sleep(500);
     }
 
     logger.info('Tally → Bitrix24 sync completed', { created, skipped, failed });

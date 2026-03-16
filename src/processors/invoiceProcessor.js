@@ -16,14 +16,29 @@ async function processInvoice(entityId, isUpdate = false) {
 
     // Step 1b: Ensure the party ledger exists in Tally before pushing the voucher
     const partyName = invoice.clientTitle || invoice.CLIENT_TITLE || '';
-    if (partyName) {
-      try {
-        const { createLedger } = require('../services/tallyService');
+    if (!partyName) {
+      logger.warn('Invoice skipped — no contact or company linked in Bitrix24', {
+        entityId,
+        action: 'Open this invoice in Bitrix24 and link a Contact or Company, then it will sync on next webhook trigger'
+      });
+      return {
+        success: true,
+        skipped: true,
+        reason:  'No contact or company linked to invoice in Bitrix24'
+      };
+    }
+    try {
+      const { getLedgerByName, createLedger } = require('../services/tallyService');
+      const existingLedger = await getLedgerByName(partyName);
+      if (existingLedger) {
+        logger.info('Party ledger already exists in Tally — proceeding with invoice push', { partyName });
+      } else {
+        logger.warn('Party ledger not found in Tally — creating as fallback (Step 1 may have been missed)', { partyName });
         await createLedger({ ledgerName: partyName, groupName: 'Sundry Debtors', openingBalance: 0 });
-        logger.info('Party ledger ensured in Tally before invoice push', { partyName });
-      } catch (ledgerErr) {
-        logger.warn('Could not ensure party ledger — proceeding anyway', { message: ledgerErr.message });
+        logger.info('Fallback ledger created for invoice push', { partyName });
       }
+    } catch (ledgerErr) {
+      logger.warn('Ledger check/create failed — proceeding anyway', { message: ledgerErr.message });
     }
 
     // Step 2: Map to Tally voucher format
@@ -46,11 +61,15 @@ async function processInvoice(entityId, isUpdate = false) {
       setTimeout(() => invoiceDedup.delete(dedupKey), 60000); // clear after 60s
     }
 
-    // Step 3: On update — skip voucher creation, Tally doesn't support voucher alter via XML
-    // Only the ledger (party) has been ensured above, which is sufficient for updates
+    // Tally does not support altering existing vouchers via XML API.
+    // If an invoice is updated in Bitrix24, the Sales voucher in Tally
+    // will NOT be updated — manual correction required directly in Tally.
     if (isUpdate) {
-      logger.info('Invoice update — voucher alter not supported via Tally XML, skipping voucher push', {
-        entityId, voucherNumber: voucher.voucherNumber
+      logger.warn('Invoice updated in Bitrix24 but Tally Sales voucher CANNOT be updated — Tally XML does not support voucher alter', {
+        entityId,
+        voucherNumber: voucher.voucherNumber,
+        partyName:     voucher.partyName,
+        action:        'Manual correction required in Tally if amount or date changed'
       });
       return { success: true, voucher, skipped: true };
     }
