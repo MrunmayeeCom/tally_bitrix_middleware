@@ -14,6 +14,16 @@ const PIPELINE_STAGES = [
 let tallyPipelineCategoryId = null;
 
 async function getTallyPipelineCategoryId() {
+  if (tallyPipelineCategoryId) return tallyPipelineCategoryId;
+  try {
+    const fs   = require('fs');
+    const path = require('path');
+    const cache = path.join(__dirname, '../../logs/pipeline-cache.json');
+    if (fs.existsSync(cache)) {
+      const data = JSON.parse(fs.readFileSync(cache, 'utf8'));
+      if (data.categoryId) { tallyPipelineCategoryId = data.categoryId; return tallyPipelineCategoryId; }
+    }
+  } catch {}
   return tallyPipelineCategoryId;
 }
 
@@ -34,6 +44,12 @@ async function setupPipeline() {
     if (existing) {
       tallyPipelineCategoryId = existing.id || existing.ID;
       logger.info('Tally Outstanding pipeline already exists', { categoryId: tallyPipelineCategoryId });
+      try {
+        const fs   = require('fs');
+        const path = require('path');
+        const cache = path.join(__dirname, '../../logs/pipeline-cache.json');
+        fs.writeFileSync(cache, JSON.stringify({ categoryId: tallyPipelineCategoryId }));
+      } catch {}
       return tallyPipelineCategoryId;
     }
 
@@ -78,6 +94,12 @@ async function setupPipeline() {
     }
 
     logger.info('Tally Outstanding pipeline setup complete', { categoryId });
+    try {
+      const fs   = require('fs');
+      const path = require('path');
+      const cache = path.join(__dirname, '../../logs/pipeline-cache.json');
+      fs.writeFileSync(cache, JSON.stringify({ categoryId }));
+    } catch {}
     await setupDealCustomFields();
     return categoryId;
 

@@ -8,7 +8,9 @@ function loadHistory() {
     if (fs.existsSync(HISTORY_PATH)) {
       return JSON.parse(fs.readFileSync(HISTORY_PATH, 'utf8'));
     }
-  } catch {}
+  } catch {
+    try { fs.renameSync(HISTORY_PATH, HISTORY_PATH + '.corrupted'); } catch {}
+  }
   return [];
 }
 
