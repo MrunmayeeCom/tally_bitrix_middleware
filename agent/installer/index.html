@@ -25,7 +25,7 @@
   }
 
   html,body{
-    width:520px;height:680px;overflow:hidden;
+    width:520px;height:680px;overflow-y:auto;
     background:var(--bg);color:var(--text);
     font-family:'DM Sans',sans-serif;font-size:14px;
     user-select:none;
@@ -47,7 +47,7 @@
   .tb-min{background:#febc2e;}   .tb-min:hover{background:#f5a623;}
 
   /* pages */
-  .page{display:none;height:640px;overflow:hidden;}
+  .page{display:none;min-height:640px;overflow:visible;}
   .page.active{display:flex;flex-direction:column;}
 
   /* ── SETUP PAGE ── */
@@ -66,7 +66,7 @@
   .setup-hero h1{font-size:18px;font-weight:600;margin-bottom:4px;}
   .setup-hero p{color:var(--muted);font-size:12px;line-height:1.5;}
 
-  .setup-body{padding:20px 32px;flex:1;overflow-y:auto;}
+  .setup-body{padding:20px 32px;flex:1;overflow-y:auto;max-height:480px;}
 
   .steps{display:flex;gap:0;margin-bottom:24px;}
   .step{flex:1;text-align:center;position:relative;}
@@ -533,29 +533,38 @@ const ipcRenderer = (function() {
         return { success: true };
       }
 
+      const API = 'http://localhost:3000/api';
+      async function api(path, method = 'GET') {
+        const res = await fetch(`${API}${path}`, { method });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      }
+
       if (channel === 'get-status') {
-        return { running: _running, config: _config };
+        try { return await api('/status'); }
+        catch { return { running: _running, config: _config }; }
       }
 
       if (channel === 'get-sync-history') {
-        return _history.length ? _history : [
-          { timestamp: new Date().toISOString(), success: true, processed: 12, failed: 0, trigger: 'scheduled' },
-          { timestamp: new Date(Date.now()-900000).toISOString(), success: true, processed: 8, failed: 0, trigger: 'manual' },
-          { timestamp: new Date(Date.now()-1800000).toISOString(), success: false, failed: 2, processed: 5, trigger: 'scheduled', error: 'Timeout' },
-        ];
+        try { return await api('/history'); }
+        catch { return _history; }
       }
 
       if (channel === 'get-logs') {
-        return [
-          `[${new Date().toLocaleTimeString()}] INFO  Scheduler started`,
-          `[${new Date(Date.now()-60000).toLocaleTimeString()}] INFO  Outstanding sync triggered`,
-          `[${new Date(Date.now()-55000).toLocaleTimeString()}] SUCCESS  12 bills synced to Bitrix24`,
-          `[${new Date(Date.now()-3600000).toLocaleTimeString()}] WARN  Tally response slow (2300ms)`,
-          `[${new Date(Date.now()-7200000).toLocaleTimeString()}] ERROR  Deal update failed: ID 4421`,
-        ].join('\n');
+        try { const d = await api('/logs'); return d.logs; }
+        catch { return 'Service offline — start the local service to see live logs.'; }
       }
 
-      if (channel === 'trigger-sync' || channel === 'trigger-ledger-sync') return { success: true };
+      if (channel === 'trigger-sync') {
+        try { return await api('/trigger/outstanding', 'POST'); }
+        catch { return { triggered: false }; }
+      }
+
+      if (channel === 'trigger-ledger-sync') {
+        try { return await api('/trigger/ledgers', 'POST'); }
+        catch { return { triggered: false }; }
+      }
+
       if (channel === 'stop-service')  { _running = false; return {}; }
       if (channel === 'start-service') { _running = true;  return {}; }
 
