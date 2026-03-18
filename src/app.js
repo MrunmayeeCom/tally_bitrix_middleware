@@ -69,6 +69,14 @@ app.get('/sync/history', authMiddleware, (req, res) => {
   });
 });
 
+const path = require("path");
+
+app.use(express.static(path.join(__dirname, "../agent/installer")));
+
+app.all("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "../agent/installer/index.html"));
+});
+
 // error handler — must be last
 app.use(errorHandler);
 
