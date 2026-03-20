@@ -670,6 +670,7 @@ function renderCompanyList() {
 
 // Settings page company management — separate from setup wizard
 let _settingsCompanies = [];
+let _settingsCompaniesBaseline = 0; // count when settings page was opened
 
 function renderSettingsCompanyList() {
   const box = document.getElementById('s-company-list');
@@ -690,6 +691,14 @@ function renderSettingsCompanyList() {
   if (hint) hint.textContent = `${_settingsCompanies.length} / ${_companyLimit} companies on your plan`;
 }
 
+async function syncCompanyUsageToLMS(count) {
+  try {
+    await ipcRenderer.invoke('update-company-usage', count);
+  } catch(e) {
+    console.warn('[LMS] Company usage sync failed:', e.message);
+  }
+}
+
 function addSettingsCompany() {
   const input = document.getElementById('s-tallyCompanyInput');
   const name  = input?.value.trim();
@@ -702,11 +711,13 @@ function addSettingsCompany() {
   _settingsCompanies.push(name);
   input.value = '';
   renderSettingsCompanyList();
+  syncCompanyUsageToLMS(_settingsCompanies.length);
 }
 
 function removeSettingsCompany(index) {
   _settingsCompanies.splice(index, 1);
   renderSettingsCompanyList();
+  syncCompanyUsageToLMS(_settingsCompanies.length);
 }
 
 function addCompany() {
@@ -1176,6 +1187,7 @@ async function loadSettings() {
   _settingsCompanies = cfg.tallyCompanies?.length
     ? [...cfg.tallyCompanies]
     : cfg.tallyCompany ? [cfg.tallyCompany] : [];
+  _settingsCompaniesBaseline = _settingsCompanies.length; // snapshot on open
   renderSettingsCompanyList();
 
   // Update sync schedule display with real plan values
@@ -1236,17 +1248,8 @@ async function saveSettings() {
     activeCompany  : _settingsCompanies[0] || '',
   };
   await ipcRenderer.invoke('save-and-restart', cfg);
-
-  // Update company usage in LMS
-  try {
-    const API = 'http://localhost:3000/api';
-    await fetch(`${API}/companies/update-usage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ count: _settingsCompanies.length })
-    });
-  } catch {}
-
+  // Update baseline after save so next session starts fresh
+  _settingsCompaniesBaseline = _settingsCompanies.length;
   showToast('Settings saved — service restarting…', 'success');
   setTimeout(() => navigateTo('dashboard'), 2000);
 }

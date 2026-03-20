@@ -20,6 +20,7 @@ const PRODUCT_ID              = '69ba90211cf0356ba779b317';
 const HEARTBEAT_INTERVAL_MS   = 30 * 60 * 1000; // 30 minutes
 const LICENSE_CACHE_PATH      = path.join(__dirname, '../../logs/license-cache.json');
 const REGISTRY_CACHE_PATH     = path.join(__dirname, '../../logs/feature-registry-cache.json');
+const USAGE_CACHE_PATH        = path.join(__dirname, '../../logs/usage-cache.json');
 
 let APP_VERSION = '1.0.0';
 try { APP_VERSION = require('../../package.json').version || '1.0.0'; } catch {}
@@ -117,6 +118,30 @@ function loadRegistryCache() {
     }
   } catch {}
   return null;
+}
+
+function saveUsageCache(data) {
+  try {
+    const dir = path.dirname(USAGE_CACHE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(USAGE_CACHE_PATH, JSON.stringify(data));
+  } catch {}
+}
+
+function loadUsageCache() {
+  try {
+    if (fs.existsSync(USAGE_CACHE_PATH))
+      return JSON.parse(fs.readFileSync(USAGE_CACHE_PATH, 'utf8'));
+  } catch {}
+  return { companyCount: 0 };
+}
+
+// Called on startup — syncs local cache to match what LMS actually has
+// Prevents any drift from previous sessions
+function syncUsageCacheFromLMS(lmsCompanyUsage) {
+  const count = Number(lmsCompanyUsage) || 0;
+  saveUsageCache({ companyCount: count });
+  logger.info(`[LMS] Usage cache synced from LMS — companyCount: ${count}`);
 }
 
 // ── Fetch feature registry from LMS ──────────────────────────────────────────
@@ -263,6 +288,13 @@ async function validateLicense(customerEmail) {
     // Step 3 — merge registry defaults + license values into flat slug map
     const features = parseFeatures(rawFeatures, registry);
 
+    // Extract current company usage from LMS response
+    // Try multiple possible response locations
+    const lmsCompanyUsage = license.usageStats?.['company-limit']
+                         ?? license.usage?.['company-limit']
+                         ?? license.currentUsage?.companyCount
+                         ?? null;
+
     const result = {
       valid         : license.status === 'active',
       licenseId     : license._id,
@@ -270,9 +302,10 @@ async function validateLicense(customerEmail) {
       plan          : licType.name || 'Unknown',
       status        : license.status,
       endDate       : license.endDate,
-      features,      // flat slug map — { 'contact-sync': true, 'auto-sync': 15, ... }
-      registry,      // full registry for reference
+      features,
+      registry,
       customerEmail,
+      lmsCompanyUsage, // actual current usage from LMS (null if not in response)
     };
 
     if (result.valid) {
@@ -343,32 +376,49 @@ function startHeartbeat(licenseId) {
  * value = number of companies currently configured
  * LMS increments usage, so we send the delta (not absolute count)
  */
-async function updateCompanyUsage(companyCount) {
+async function updateCompanyUsage(newCount) {
   const id = _currentLicenseId;
   if (!id) {
     logger.warn('[LMS] Cannot update company usage — no active licenseId');
     return;
   }
-  const cache = loadLicenseCache();
+
+  const usage      = loadUsageCache();
+  const prevCount  = usage.companyCount || 0;
+  const delta      = newCount - prevCount;
+
+  if (delta === 0) {
+    logger.info(`[LMS] company-limit unchanged (${newCount}) — skipping`);
+    return;
+  }
+
+  const cache  = loadLicenseCache();
   const userId = cache?.licenseId || id;
 
   try {
-    logger.info(`[LMS] Updating company-limit usage: ${companyCount}`);
-    const { status, data } = await lmsFetch(`/api/heartbeat/${id}`, {
+    logger.info(`[LMS] Updating company-limit — prev: ${prevCount}, new: ${newCount}, delta: ${delta > 0 ? '+' : ''}${delta}`);
+    
+    // Save cache BEFORE the API call so rapid sequential calls
+    // read the updated count and don't recalculate wrong deltas
+    saveUsageCache({ companyCount: newCount });
+
+    const { status } = await lmsFetch(`/api/heartbeat/${id}`, {
       method: 'POST',
       body: {
         userId,
-        features: [
-          { slug: 'company-limit', value: companyCount }
-        ]
+        features: [{ slug: 'company-limit', value: delta }]
       }
     });
     if (status === 200) {
-      logger.info(`[LMS] company-limit usage updated to ${companyCount}`);
+      logger.info(`[LMS] company-limit updated: ${prevCount} → ${newCount}`);
     } else {
-      logger.warn(`[LMS] company-limit update failed — HTTP ${status}`);
+      // Revert cache if LMS call failed
+      saveUsageCache({ companyCount: prevCount });
+      logger.warn(`[LMS] company-limit update failed — HTTP ${status}, reverted cache`);
     }
   } catch(e) {
+    // Revert cache on error
+    saveUsageCache({ companyCount: prevCount });
     logger.warn(`[LMS] updateCompanyUsage error: ${e.message}`);
   }
 }
@@ -377,4 +427,20 @@ function clearHeartbeatInterval() {
   if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
 }
 
-module.exports = { validateLicense, fetchFeatureRegistry, startHeartbeat, clearHeartbeatInterval, parseFeatures, loadLicenseCache, clearRegistryCache, updateCompanyUsage };
+// ── Periodic re-validation ────────────────────────────────────────────────────
+let _revalidateTimer = null;
+
+function startRevalidation(customerEmail, onResult) {
+  if (_revalidateTimer) clearInterval(_revalidateTimer);
+  _revalidateTimer = setInterval(async () => {
+    logger.info('[LMS] Periodic re-validation...');
+    const result = await validateLicense(customerEmail);
+    onResult(result);
+  }, 6 * 60 * 60 * 1000); // every 6 hours
+}
+
+function stopRevalidation() {
+  if (_revalidateTimer) { clearInterval(_revalidateTimer); _revalidateTimer = null; }
+}
+
+module.exports = { validateLicense, fetchFeatureRegistry, startHeartbeat, startRevalidation, stopRevalidation, clearHeartbeatInterval, parseFeatures, loadLicenseCache, loadUsageCache, saveUsageCache, syncUsageCacheFromLMS, clearRegistryCache, updateCompanyUsage };

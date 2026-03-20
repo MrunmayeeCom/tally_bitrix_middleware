@@ -504,6 +504,16 @@ ipcMain.handle('save-and-restart', async (_, cfg) => {
   return { success: true };
 });
 
+ipcMain.handle('update-company-usage', async (_, count) => {
+  try {
+    const { updateCompanyUsage } = require('../src/services/lmsService');
+    await updateCompanyUsage(Number(count));
+    return { success: true };
+  } catch(e) {
+    return { success: false, message: e.message };
+  }
+});
+
 ipcMain.on('close-window',    () => { if (mainWindow) mainWindow.hide(); });
 ipcMain.on('minimize-window', () => { if (mainWindow) mainWindow.minimize(); });
 
@@ -539,13 +549,18 @@ async function bootstrapLicense(cfg) {
       const previousPlan = getPlan();
       setFeatures(result.features, result.plan);
 
-      // Send initial company usage to LMS on startup
-      const companies = getCompanies(cfg);
       startHeartbeat(result.licenseId);
-      if (companies.length > 0) {
-        const { updateCompanyUsage } = require('../src/services/lmsService');
-        updateCompanyUsage(companies.length).catch(() => {});
-      }
+
+      // On startup — force cache to 0 then send actual count to LMS
+      // This ensures LMS always reflects the true local company count
+      try {
+        const { saveUsageCache, updateCompanyUsage } = require('../src/services/lmsService');
+        const companies = getCompanies(cfg);
+        // Reset cache to 0 so updateCompanyUsage sends the full count as delta
+        saveUsageCache({ companyCount: 0 });
+        await updateCompanyUsage(companies.length);
+        logger.info(`[LMS] Startup company sync complete — sent count: ${companies.length}`);
+      } catch {}
 
       // Start periodic re-validation every 6 hours
       startRevalidation(cfg.customerEmail, async (newResult) => {
