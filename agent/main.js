@@ -551,17 +551,6 @@ async function bootstrapLicense(cfg) {
 
       startHeartbeat(result.licenseId);
 
-      // On startup — force cache to 0 then send actual count to LMS
-      // This ensures LMS always reflects the true local company count
-      try {
-        const { saveUsageCache, updateCompanyUsage } = require('../src/services/lmsService');
-        const companies = getCompanies(cfg);
-        // Reset cache to 0 so updateCompanyUsage sends the full count as delta
-        saveUsageCache({ companyCount: 0 });
-        await updateCompanyUsage(companies.length);
-        logger.info(`[LMS] Startup company sync complete — sent count: ${companies.length}`);
-      } catch {}
-
       // Start periodic re-validation every 6 hours
       startRevalidation(cfg.customerEmail, async (newResult) => {
         if (!newResult.valid) {

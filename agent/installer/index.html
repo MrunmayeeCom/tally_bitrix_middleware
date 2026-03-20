@@ -929,30 +929,32 @@ function updateStatusUI(running, features = {}) {
 async function loadDashboard() {
   const status = await ipcRenderer.invoke('get-status');
 
-  // License features come from API status when service is running
-  // When service is offline, try to read from localStorage cache
-  let features = status.license?.features || status.config?.features || {};
+  // Features — try license object first, then localStorage cache
+  let features = status.license?.features || {};
   if (Object.keys(features).length === 0) {
     try {
       const cached = JSON.parse(localStorage.getItem('tbs_license_features') || '{}');
       if (Object.keys(cached).length > 0) features = cached;
     } catch {}
   } else {
-    // Cache features for offline use
+    // Always cache latest features for offline use
     try { localStorage.setItem('tbs_license_features', JSON.stringify(features)); } catch {}
   }
 
   updateStatusUI(status.running, features);
-  if (features['auto-sync']) {
-    _agentSyncMinutes = Number(features['auto-sync']) || 15;
-  }
 
-  // Update status sub with real plan info
-  const plan = status.license?.plan;
+  // Sync interval
+  const interval = Number(features['auto-sync']) || 60;
+  if (interval) _agentSyncMinutes = interval;
+
+  // Status bar sub text — always show plan info if available
+  const plan    = status.license?.plan || localStorage.getItem('tbs_license_plan') || '';
+  const ledger  = features['contact-sync'] || features['company-sync'];
+  const dueDate = features['due-date-automation'];
+
   if (plan) {
-    const ledger   = features['contact-sync'] || features['company-sync'];
-    const dueDate  = features['due-date-automation'];
-    const interval = features['auto-sync'] || 60;
+    // Cache plan name for offline display
+    try { localStorage.setItem('tbs_license_plan', plan); } catch {}
     document.getElementById('status-sub').textContent =
       `Outstanding every ${interval}min` +
       (ledger  ? ` · Ledgers every ${interval}min` : '') +
@@ -960,10 +962,10 @@ async function loadDashboard() {
       ` · Plan: ${plan}`;
   }
 
-  // Update company limit for setup wizard
-  _companyLimit = features['company-limit'] || 1;
+  // Update company limit for setup wizard and settings
+  _companyLimit = Number(features['company-limit']) || 5;
 
-  // Grey out Sync Ledgers action card if not on plan
+  // Grey out Sync Ledgers if not on plan
   const ledgerEnabled = features['contact-sync'] || features['company-sync'];
   document.querySelectorAll('.action-card').forEach(c => {
     const label = c.querySelector('.ac-label')?.textContent;
@@ -1175,28 +1177,36 @@ async function toggleService() {
 // ── settings ─────────────────────────────────────────────────────────────────
 async function loadSettings() {
   const status = await ipcRenderer.invoke('get-status');
-  const cfg      = status.config   || {};
-  const features = status.license?.features || {};
+  const cfg    = status.config  || {};
+
+  // Features — try license object first, then fall back to localStorage cache
+  let features = status.license?.features || {};
+  if (Object.keys(features).length === 0) {
+    try {
+      const cached = JSON.parse(localStorage.getItem('tbs_license_features') || '{}');
+      if (Object.keys(cached).length > 0) features = cached;
+    } catch {}
+  }
 
   document.getElementById('s-customerEmail').value = cfg.customerEmail || '';
   document.getElementById('s-bitrixUrl').value     = cfg.bitrixUrl     || '';
   document.getElementById('s-tallyHost').value     = cfg.tallyHost     || 'localhost';
   document.getElementById('s-tallyPort').value     = cfg.tallyPort     || 9000;
 
-  // Load companies into settings company list
-  _settingsCompanies = cfg.tallyCompanies?.length
+  // Load companies — support both array and legacy single string
+  _settingsCompanies = Array.isArray(cfg.tallyCompanies) && cfg.tallyCompanies.length
     ? [...cfg.tallyCompanies]
     : cfg.tallyCompany ? [cfg.tallyCompany] : [];
-  _settingsCompaniesBaseline = _settingsCompanies.length; // snapshot on open
+  _settingsCompaniesBaseline = _settingsCompanies.length;
   renderSettingsCompanyList();
 
-  // Update sync schedule display with real plan values
-  const interval  = features['auto-sync']          || 60;
-  const ledger    = features['contact-sync']        || features['company-sync'];
-  const dueDate   = features['due-date-automation'];
-  const plan      = status.license?.plan            || 'Unknown';
-  const userLimit    = features['user-limit']    || 'Unlimited';
-  const companyLimit = features['company-limit'] || 1;
+  // Sync schedule — uses features with fallback so never shows Unknown
+  const interval     = Number(features['auto-sync'])   || 60;
+  const ledger       = features['contact-sync']        || features['company-sync'];
+  const dueDate      = features['due-date-automation'];
+  const plan         = status.license?.plan            || 'Business';
+  const userLimit    = features['user-limit']          || 'Unlimited';
+  const companyLimit = features['company-limit']       || 5;
   const scheduleEl   = document.getElementById('sync-schedule-info');
   if (scheduleEl) {
     scheduleEl.innerHTML =

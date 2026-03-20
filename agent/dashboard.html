@@ -702,13 +702,16 @@ async function loadCompanySwitcher() {
   try {
     const data = await get('/api/companies');
     if (!data.companies || data.companies.length === 0) return;
-    // Show switcher even with 1 company so user knows which is active
 
-    // Build company switcher UI if multiple companies
     const bar = document.getElementById('next-bar');
     if (!bar) return;
 
+    // Remove existing switcher to avoid duplicates on refresh
+    const existing = document.getElementById('company-switcher');
+    if (existing) existing.remove();
+
     const switcher = document.createElement('div');
+    switcher.id = 'company-switcher';
     switcher.style.cssText = 'margin-bottom:14px;';
     switcher.innerHTML = `
       <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);
@@ -734,8 +737,6 @@ async function loadCompanySwitcher() {
 
 async function switchCompany(company) {
   try {
-    await post(`/api/companies/switch`);
-    // Re-post with body
     const r = await fetch(`${API}/api/companies/switch`, {
       method: 'POST',
       headers: HEADERS,

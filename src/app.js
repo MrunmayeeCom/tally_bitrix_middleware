@@ -119,10 +119,12 @@ app.get('/api/status', (req, res) => {
       features,
     } : null,
     config: {
-      bitrixUrl:    process.env.BITRIX_WEBHOOK_URL || '',
-      tallyHost:    process.env.TALLY_HOST         || 'localhost',
-      tallyPort:    process.env.TALLY_PORT         || 9000,
-      tallyCompany: process.env.TALLY_COMPANY      || '',
+      bitrixUrl:      process.env.BITRIX_WEBHOOK_URL  || '',
+      tallyHost:      process.env.TALLY_HOST           || 'localhost',
+      tallyPort:      process.env.TALLY_PORT           || 9000,
+      tallyCompany:   process.env.TALLY_COMPANY        || '',
+      tallyCompanies: (process.env.TALLY_COMPANIES || process.env.TALLY_COMPANY || '').split(',').filter(Boolean),
+      activeCompany:  process.env.TALLY_COMPANY        || '',
     }
   });
 });
