@@ -782,8 +782,8 @@ function goStep(n) {
   if (n === 3) {
     const host = document.getElementById('tallyHost').value.trim();
     const port = document.getElementById('tallyPort').value.trim();
-    const co   = document.getElementById('tallyCompany').value.trim();
-    if (!host || !port || !co) { showToast('Please fill all Tally fields', 'error'); return; }
+    if (!host || !port) { showToast('Please fill Tally host and port', 'error'); return; }
+    if (_companies.length === 0) { showToast('Add at least one Tally company', 'error'); return; }
   }
   if (n === 4) { installService(); return; }
 
@@ -1224,7 +1224,7 @@ async function testSettingsConnection() {
     bitrixUrl:    document.getElementById('s-bitrixUrl').value.trim(),
     tallyHost:    document.getElementById('s-tallyHost').value.trim(),
     tallyPort:    parseInt(document.getElementById('s-tallyPort').value),
-    tallyCompany: document.getElementById('s-tallyCompany').value.trim(),
+    tallyCompany: _settingsCompanies[0] || '',
   };
   const btn = document.getElementById('btn-test-settings');
   btn.textContent = 'Testing…';
