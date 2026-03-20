@@ -4,18 +4,7 @@ const { processDueDates } = require('./processors/dueDateProcessor');
 const { processTallyToContact } = require('./processors/tallyToContactProcessor');
 const { recordSync } = require('./utils/syncHistory');
 const logger = require('./utils/logger');
-
-// Active plan features — set by applySchedulerFeatures() after LMS validation
-let _features = null;
-
-/** Called from main.js after validateLicense() succeeds */
-function applySchedulerFeatures(features) {
-  _features = features;
-  logger.info(`[LMS] Scheduler features applied — syncInterval: ${features.syncIntervalMinutes}min | outstanding: ${features.outstandingSync} | ledger: ${features.ledgerSync} | dueDates: ${features.dueDateSync}`);
-}
-
-/** Returns current feature map (used by /api/status) */
-function getActiveFeatures() { return _features; }
+const featureGate = require('./services/featureGate');
 
 function recordSyncFailure(trigger, message) {
   recordSync({ success: false, processed: 0, failed: 1, trigger, error: message });
@@ -25,6 +14,7 @@ let isSyncing        = false;
 let isDueDateSyncing = false;
 let isLedgerSyncing  = false;
 let schedulerStarted = false;
+let _activeTasks     = []; // track all cron tasks for restart
 
 async function runSync(label, fn) {
   if (isSyncing) {
@@ -90,9 +80,23 @@ async function runFullSync(label) {
 }
 
 function intervalToCron(minutes) {
-  const valid = [5, 15, 30, 60];
-  const m = valid.includes(minutes) ? minutes : 60;
-  return m < 60 ? `*/${m} * * * *` : `0 * * * *`;
+  const m = Math.max(1, Math.floor(Number(minutes) || 60));
+  if (m >= 60) return `0 * * * *`;
+  if (m === 1) return `* * * * *`;
+  return `*/${m} * * * *`;
+}
+
+function stopScheduler() {
+  _activeTasks.forEach(task => { try { task.stop(); } catch {} });
+  _activeTasks = [];
+  schedulerStarted = false;
+  logger.info('[Scheduler] All cron tasks stopped');
+}
+
+function restartScheduler() {
+  logger.info('[Scheduler] Restarting due to plan change...');
+  stopScheduler();
+  startScheduler();
 }
 
 function startScheduler() {
@@ -102,44 +106,44 @@ function startScheduler() {
   }
   schedulerStarted = true;
 
-  // Resolve feature gates — fallback to Starter limits if LMS not yet validated
-  const f = _features || {
-    syncIntervalMinutes: 60,
-    outstandingSync:     true,
-    ledgerSync:          false,
-    dueDateSync:         false,
-  };
+  // Read features via featureGate slugs — set after LMS validation
+  // Falls back to applyStarterFallback() values if LMS not yet validated
+  const syncMinutes = featureGate.getLimit('auto-sync', 60);
+  const syncCron    = intervalToCron(syncMinutes);
 
-  const syncCron = intervalToCron(f.syncIntervalMinutes);
+  logger.info(`[Scheduler] Plan: ${featureGate.getPlan()} | interval: ${syncMinutes}min`);
 
-  // 9:00 AM IST — daily full sync (always runs for all plans)
-  cron.schedule('0 9 * * *', () => {
-    if (f.ledgerSync)      runLedgerSync('9AM — ledger sync', processTallyToContact);
-    if (f.outstandingSync) runOutstandingSync('9AM — outstanding sync');
-  }, { timezone: 'Asia/Kolkata' });
+  // 9AM daily — full sync baseline (always runs)
+  _activeTasks.push(cron.schedule('0 9 * * *', () => {
+    if (featureGate.isEnabled('contact-sync') || featureGate.isEnabled('company-sync')) {
+      runLedgerSync('9AM — ledger sync', processTallyToContact);
+    }
+    if (featureGate.isEnabled('outstanding-sync')) {
+      runOutstandingSync('9AM — outstanding sync');
+    }
+  }, { timezone: 'Asia/Kolkata' }));
 
   // Outstanding sync — all plans (interval depends on plan)
-  if (f.outstandingSync) {
-    cron.schedule(syncCron, () => {
-      runOutstandingSync(`${f.syncIntervalMinutes}min — outstanding`);
-    }, { timezone: 'Asia/Kolkata' });
+  if (featureGate.isEnabled('outstanding-sync')) {
+    _activeTasks.push(cron.schedule(syncCron, () => {
+      runOutstandingSync(`${syncMinutes}min — outstanding`);
+    }, { timezone: 'Asia/Kolkata' }));
   }
 
-  // Ledger sync — Professional+ only
-  if (f.ledgerSync) {
-    cron.schedule(syncCron, () => {
-      runLedgerSync(`${f.syncIntervalMinutes}min — ledger sync`, () => processTallyToContact({ manual: true }));
-    }, { timezone: 'Asia/Kolkata' });
+  // Ledger sync — Professional+ (contact-sync or company-sync slug enabled)
+  if (featureGate.isEnabled('contact-sync') || featureGate.isEnabled('company-sync')) {
+    _activeTasks.push(cron.schedule(syncCron, () => {
+      runLedgerSync(`${syncMinutes}min — ledger sync`, () => processTallyToContact({ manual: true }));
+    }, { timezone: 'Asia/Kolkata' }));
   }
 
   // Due date automation — Business+ only
-  if (f.dueDateSync) {
-    cron.schedule('0 * * * *', () => {
+  if (featureGate.isEnabled('due-date-automation')) {
+    _activeTasks.push(cron.schedule('0 * * * *', () => {
       runDueDateSync('1hr — due date automation', processDueDates);
-    }, { timezone: 'Asia/Kolkata' });
+    }, { timezone: 'Asia/Kolkata' }));
   }
 
-  logger.info(`Scheduler started — Plan features: outstandingSync=${f.outstandingSync} | ledgerSync=${f.ledgerSync} | dueDateSync=${f.dueDateSync} | interval=${f.syncIntervalMinutes}min`);
-}
+  logger.info(`Scheduler started — outstanding: ${featureGate.isEnabled('outstanding-sync')} | ledger: ${featureGate.isEnabled('contact-sync')} | dueDates: ${featureGate.isEnabled('due-date-automation')} | interval: ${syncMinutes}min`);}
 
-module.exports = { startScheduler, applySchedulerFeatures, getActiveFeatures };
+module.exports = { startScheduler, restartScheduler };

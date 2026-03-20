@@ -2,12 +2,15 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } = 
 const path = require('path');
 const fs = require('fs');
 const { exec, spawn } = require('child_process');
+const logger = (() => { try { return require('../src/utils/logger'); } catch { return console; } })();
 
 let mainWindow = null;
 let tray = null;
 let serviceRunning = false;
 let userStoppedService = false;
 let serverProcess = null;
+let _licenseValid = false;
+let _licensePlan  = 'Validating…';
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 const LOG_PATH = app.isPackaged
@@ -29,7 +32,23 @@ function saveConfig(cfg) {
 
 function isConfigured() {
   const cfg = loadConfig();
-  return !!(cfg && cfg.bitrixUrl && cfg.tallyHost && cfg.tallyPort && cfg.tallyCompany);
+  const hasCompany = cfg?.tallyCompanies?.length > 0 || cfg?.tallyCompany;
+  return !!(cfg && cfg.bitrixUrl && cfg.tallyHost && cfg.tallyPort && hasCompany);
+}
+
+function getCompanies(cfg) {
+  if (!cfg) return [];
+  // Support both old single company and new array format
+  if (cfg.tallyCompanies && cfg.tallyCompanies.length > 0) return cfg.tallyCompanies;
+  if (cfg.tallyCompany) return [cfg.tallyCompany];
+  return [];
+}
+
+function getActiveCompany(cfg) {
+  const companies = getCompanies(cfg);
+  // Use selected company or default to first
+  if (cfg.activeCompany && companies.includes(cfg.activeCompany)) return cfg.activeCompany;
+  return companies[0] || '';
 }
 
 function getServiceScript() {
@@ -92,7 +111,8 @@ function spawnServer(cfg) {
     BITRIX_WEBHOOK_URL: cfg.bitrixUrl,
     TALLY_HOST:         cfg.tallyHost,
     TALLY_PORT:         String(cfg.tallyPort),
-    TALLY_COMPANY:      cfg.tallyCompany,
+    TALLY_COMPANY:      getActiveCompany(cfg),
+    TALLY_COMPANIES:    getCompanies(cfg).join(','),
   });
 
   serverProcess = spawn(nodePath, [scriptPath], {
@@ -128,8 +148,9 @@ function updateTray() {
     tray.setToolTip(`TallyBitrixSync — ${running ? 'Running ✅' : 'Stopped ❌'}`);
 
     const menu = Menu.buildFromTemplate([
-      { label: `TallyBitrixSync`,       enabled: false                                   },
-      { label: running ? '● Running' : '○ Stopped', enabled: false                       },
+      { label: `TallyBitrixSync`,                                          enabled: false },
+      { label: running ? '● Running' : '○ Stopped',                        enabled: false },
+      { label: `Plan: ${_licensePlan}`,                                    enabled: false },
       { type:  'separator'                                                                },
       { label: 'Sync Outstanding',      click: triggerSync,        enabled: running      },
       { label: 'Sync Ledgers',          click: triggerLedgerSync,  enabled: running      },
@@ -378,7 +399,21 @@ ipcMain.handle('uninstall-service', async () => {
 ipcMain.handle('get-status', async () => {
   return new Promise((resolve) => {
     checkServiceStatus((running) => {
-      resolve({ running, config: loadConfig() });
+      // Include license cache so Electron dashboard has same data as Bitrix dashboard
+      let license = null;
+      try {
+        const { loadLicenseCache } = require('../src/services/lmsService');
+        const cache = loadLicenseCache();
+        if (cache) {
+          license = {
+            plan    : cache.plan,
+            status  : cache.status,
+            endDate : cache.endDate,
+            features: cache.features || {},
+          };
+        }
+      } catch {}
+      resolve({ running, config: loadConfig(), license });
     });
   });
 });
@@ -474,7 +509,7 @@ ipcMain.on('minimize-window', () => { if (mainWindow) mainWindow.minimize(); });
 
 // ── app lifecycle ─────────────────────────────────────────────────────────────
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   app.setAppUserModelId('com.rajlaxmi.tallybitrixsync');
   app.setLoginItemSettings({ openAtLogin: true });
   createTray();
@@ -482,15 +517,97 @@ app.whenReady().then(() => {
   if (!isConfigured()) {
     createMainWindow('setup');
   } else {
-    // Auto-start server on app launch
     const cfg = loadConfig();
-    if (cfg) spawnServer(cfg);
+    if (cfg) {
+      spawnServer(cfg);
+      setTimeout(() => bootstrapLicense(cfg), 3000);
+    }
     createMainWindow('dashboard');
   }
 });
 
+async function bootstrapLicense(cfg) {
+  try {
+    const { validateLicense, startHeartbeat, startRevalidation } = require('../src/services/lmsService');
+    const { setFeatures, applyStarterFallback, getPlan } = require('../src/services/featureGate');
+
+    const result = await validateLicense(cfg.customerEmail);
+    _licenseValid = result.valid;
+    _licensePlan  = result.plan || 'Unknown';
+
+    if (result.valid) {
+      const previousPlan = getPlan();
+      setFeatures(result.features, result.plan);
+
+      // Send initial company usage to LMS on startup
+      const companies = getCompanies(cfg);
+      startHeartbeat(result.licenseId);
+      if (companies.length > 0) {
+        const { updateCompanyUsage } = require('../src/services/lmsService');
+        updateCompanyUsage(companies.length).catch(() => {});
+      }
+
+      // Start periodic re-validation every 6 hours
+      startRevalidation(cfg.customerEmail, async (newResult) => {
+        if (!newResult.valid) {
+          applyStarterFallback();
+          _licenseValid = false;
+          _licensePlan  = 'Starter (fallback)';
+          const { restartScheduler } = require('../src/scheduler');
+          restartScheduler();
+          dialog.showMessageBox(null, {
+            type: 'warning', title: 'License Expired',
+            message: 'Your license has expired. Sync stopped.',
+            buttons: ['OK']
+          });
+        } else if (newResult.plan !== previousPlan) {
+          // Plan changed — update features and restart scheduler
+          setFeatures(newResult.features, newResult.plan);
+          _licensePlan = newResult.plan;
+          const { restartScheduler } = require('../src/scheduler');
+          restartScheduler();
+          logger.info(`[LMS] Plan changed from ${previousPlan} to ${newResult.plan} — scheduler restarted`);
+        }
+        updateTray();
+      });
+      // Log registry info if available
+      if (result.registry?.features) {
+        logger.info && logger.info(`[LMS] Registry has ${result.registry.features.length} features for product`);
+      }
+      if (result.fromCache) {
+        dialog.showMessageBox(null, {
+          type: 'info', title: 'Offline Mode',
+          message: 'Running on cached license (48h grace). Check your internet connection.',
+          buttons: ['OK']
+        });
+      }
+    } else {
+      applyStarterFallback();
+      _licensePlan = 'Starter (fallback)';
+      dialog.showMessageBox(null, {
+        type: 'warning', title: 'License Issue',
+        message: `License validation failed: ${result.reason}`,
+        detail: 'Running in Starter mode — outstanding sync only, hourly.',
+        buttons: ['OK']
+      });
+    }
+    updateTray();
+  } catch(e) {
+    try {
+      const { applyStarterFallback } = require('../src/services/featureGate');
+      applyStarterFallback();
+    } catch {}
+    _licensePlan = 'Starter (fallback)';
+    updateTray();
+  }
+}
+
 app.on('before-quit', () => {
   if (serverProcess) { try { serverProcess.kill(); } catch {} }
+  try {
+    const { clearHeartbeatInterval } = require('../src/services/lmsService');
+    clearHeartbeatInterval();
+  } catch {}
 });
 
 app.on('window-all-closed', (e) => e.preventDefault()); // keep running in tray

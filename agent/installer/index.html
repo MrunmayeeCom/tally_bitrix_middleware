@@ -274,6 +274,11 @@
 
     <div class="step-panel active" id="panel-1">
       <div class="field">
+        <label>Registered Email</label>
+        <input id="customerEmail" type="email" placeholder="email used to purchase your license" autocomplete="off"/>
+        <div class="hint">This email is verified against your active TallyBitrixSync license</div>
+      </div>
+      <div class="field">
         <label>Bitrix24 Webhook URL</label>
         <input id="bitrixUrl" type="text" placeholder="https://yourcompany.bitrix24.com/rest/USER/TOKEN/" autocomplete="off"/>
         <div class="hint">Find this in Bitrix24 → Developer Resources → Other → Inbound Webhook</div>
@@ -287,9 +292,13 @@
         <div class="field"><label>Port</label><input id="tallyPort" type="number" placeholder="9000" value="9000"/></div>
       </div>
       <div class="field">
-        <label>Tally Company Name</label>
-        <input id="tallyCompany" type="text" placeholder="Exact name as shown in Tally"/>
-        <div class="hint">Must match exactly — case sensitive</div>
+        <label>Tally Companies</label>
+        <div id="company-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:8px;">
+          <input id="tallyCompanyInput" type="text" placeholder="Exact company name as shown in Tally" style="flex:1;padding:10px 14px;background:var(--surface);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;outline:none;"/>
+          <button onclick="addCompany()" style="padding:10px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13px;white-space:nowrap;">+ Add</button>
+        </div>
+        <div class="hint" id="company-limit-hint">Must match exactly — case sensitive</div>
       </div>
       <button class="btn btn-primary" onclick="goStep(3)">Continue →</button>
       <button class="btn btn-outline" onclick="goStep(1)">← Back</button>
@@ -456,6 +465,11 @@
       <div style="font-size:12px;color:var(--muted);">Update your connection details. Requires service restart.</div>
     </div>
     <div class="field">
+      <label>Registered Email</label>
+      <input id="s-customerEmail" type="email"/>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px;">License email — changing this requires service restart</div>
+    </div>
+    <div class="field">
       <label>Bitrix24 Webhook URL</label>
       <input id="s-bitrixUrl" type="text"/>
     </div>
@@ -464,8 +478,20 @@
       <div class="field"><label>Port</label><input id="s-tallyPort" type="number"/></div>
     </div>
     <div class="field">
-      <label>Tally Company</label>
-      <input id="s-tallyCompany" type="text"/>
+      <label>Tally Companies</label>
+      <div id="s-company-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"></div>
+      <div style="display:flex;gap:8px;">
+        <input id="s-tallyCompanyInput" type="text"
+          placeholder="Exact company name as shown in Tally"
+          style="flex:1;padding:10px 14px;background:var(--surface);border:1px solid var(--border2);
+          border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;outline:none;"/>
+        <button onclick="addSettingsCompany()"
+          style="padding:10px 16px;background:var(--accent);color:#fff;border:none;
+          border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13px;white-space:nowrap;">
+          + Add
+        </button>
+      </div>
+      <div class="hint" id="s-company-limit-hint">Must match exactly — case sensitive</div>
     </div>
     <button class="btn btn-primary" onclick="saveSettings()">Save & Restart Service</button>
     <button class="btn btn-outline" id="btn-test-settings" onclick="testSettingsConnection()">Test Connection</button>
@@ -473,11 +499,9 @@
 
     <div style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border2);">
       <div class="section-title">Sync Schedule</div>
-      <div style="background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--muted);line-height:1.8;">
-        ⏰ Full sync (Ledger + Outstanding) — 9:00 AM IST<br/>
-        🔄 Outstanding sync — Every 15 minutes<br/>
-        👥 Ledger sync (Tally → Bitrix24) — Every 5 minutes<br/>
-        🔔 Due date automation — Every 1 hour
+      <div id="sync-schedule-info" style="background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--muted);line-height:1.8;">
+        ⏰ Full sync — 9:00 AM IST<br/>
+        🔄 Outstanding sync — Loading…<br/>
       </div>
     </div>
 
@@ -608,17 +632,139 @@ ipcRenderer.on('navigate', (_, page) => navigateTo(page));
 ipcRenderer.on('config',   (_, cfg)  => { if (cfg) prefillSetup(cfg); });
 
 function prefillSetup(cfg) {
-  if (cfg.bitrixUrl)    document.getElementById('bitrixUrl').value    = cfg.bitrixUrl;
-  if (cfg.tallyHost)    document.getElementById('tallyHost').value    = cfg.tallyHost;
-  if (cfg.tallyPort)    document.getElementById('tallyPort').value    = cfg.tallyPort;
-  if (cfg.tallyCompany) document.getElementById('tallyCompany').value = cfg.tallyCompany;
+  if (cfg.customerEmail)  document.getElementById('customerEmail').value = cfg.customerEmail;
+  if (cfg.bitrixUrl)      document.getElementById('bitrixUrl').value     = cfg.bitrixUrl;
+  if (cfg.tallyHost)      document.getElementById('tallyHost').value     = cfg.tallyHost;
+  if (cfg.tallyPort)      document.getElementById('tallyPort').value     = cfg.tallyPort;
+  // Populate companies array
+  if (cfg.tallyCompanies?.length) {
+    _companies = [...cfg.tallyCompanies];
+  } else if (cfg.tallyCompany) {
+    _companies = [cfg.tallyCompany];
+  }
+  renderCompanyList();
+  updateCompanyHint();
 }
 
 // ── setup wizard ────────────────────────────────────────────────────────────
 let currentStep = 1;
+let _companies  = [];
+let _companyLimit = 1; // updated from license features
+
+function renderCompanyList() {
+  const box = document.getElementById('company-list');
+  if (!box) return;
+  if (_companies.length === 0) {
+    box.innerHTML = `<div style="font-size:11px;color:var(--muted);padding:4px 0;">No companies added yet</div>`;
+    return;
+  }
+  box.innerHTML = _companies.map((c, i) => `
+    <div style="display:flex;align-items:center;justify-content:space-between;
+      background:var(--surface);border:1px solid var(--border2);
+      border-radius:8px;padding:8px 12px;">
+      <span style="font-size:13px;">${i === 0 ? '⭐ ' : ''}${c}</span>
+      <button onclick="removeCompany(${i})"
+        style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:12px;padding:2px 6px;">✕</button>
+    </div>`).join('');
+}
+
+// Settings page company management — separate from setup wizard
+let _settingsCompanies = [];
+
+function renderSettingsCompanyList() {
+  const box = document.getElementById('s-company-list');
+  if (!box) return;
+  if (_settingsCompanies.length === 0) {
+    box.innerHTML = `<div style="font-size:11px;color:var(--muted);padding:4px 0;">No companies added yet</div>`;
+    return;
+  }
+  box.innerHTML = _settingsCompanies.map((c, i) => `
+    <div style="display:flex;align-items:center;justify-content:space-between;
+      background:var(--surface);border:1px solid var(--border2);
+      border-radius:8px;padding:8px 12px;">
+      <span style="font-size:13px;">${i === 0 ? '⭐ ' : ''}${c}</span>
+      <button onclick="removeSettingsCompany(${i})"
+        style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:12px;padding:2px 6px;">✕</button>
+    </div>`).join('');
+  const hint = document.getElementById('s-company-limit-hint');
+  if (hint) hint.textContent = `${_settingsCompanies.length} / ${_companyLimit} companies on your plan`;
+}
+
+function addSettingsCompany() {
+  const input = document.getElementById('s-tallyCompanyInput');
+  const name  = input?.value.trim();
+  if (!name) { showToast('Enter a company name', 'error'); return; }
+  if (_settingsCompanies.includes(name)) { showToast('Already added', 'error'); return; }
+  if (_settingsCompanies.length >= _companyLimit) {
+    showUpgradePrompt(_companyLimit);
+    return;
+  }
+  _settingsCompanies.push(name);
+  input.value = '';
+  renderSettingsCompanyList();
+}
+
+function removeSettingsCompany(index) {
+  _settingsCompanies.splice(index, 1);
+  renderSettingsCompanyList();
+}
+
+function addCompany() {
+  const input = document.getElementById('tallyCompanyInput');
+  const name  = input?.value.trim();
+  if (!name) { showToast('Enter a company name', 'error'); return; }
+  if (_companies.includes(name)) { showToast('Company already added', 'error'); return; }
+
+  if (_companies.length >= _companyLimit) {
+    // Show upgrade prompt
+    showUpgradePrompt(_companyLimit);
+    return;
+  }
+
+  _companies.push(name);
+  input.value = '';
+  renderCompanyList();
+  updateCompanyHint();
+}
+
+function removeCompany(index) {
+  _companies.splice(index, 1);
+  renderCompanyList();
+  updateCompanyHint();
+}
+
+function updateCompanyHint() {
+  const hint = document.getElementById('company-limit-hint');
+  if (!hint) return;
+  hint.textContent = `${_companies.length} / ${_companyLimit} companies on your plan · Must match exactly in Tally`;
+}
+
+function showUpgradePrompt(limit) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.7);
+    display:flex;align-items:center;justify-content:center;z-index:1000;`;
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border2);
+      border-radius:12px;padding:28px 24px;max-width:340px;text-align:center;">
+      <div style="font-size:32px;margin-bottom:12px;">🔒</div>
+      <div style="font-weight:600;font-size:15px;margin-bottom:8px;">Company Limit Reached</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:18px;">
+        Your current plan supports up to <strong style="color:var(--text)">${limit} ${limit === 1 ? 'company' : 'companies'}</strong>.<br/>
+        Upgrade to add more Tally companies.
+      </div>
+      <button onclick="this.closest('div[style*=fixed]').remove()"
+        style="width:100%;padding:10px;background:var(--accent);color:#fff;
+        border:none;border-radius:8px;cursor:pointer;font-size:13px;margin-bottom:8px;">
+        OK, Got it
+      </button>
+    </div>`;
+  document.body.appendChild(overlay);
+}
 
 function goStep(n) {
   if (n === 2) {
+    const email = document.getElementById('customerEmail')?.value.trim();
+    if (!email || !email.includes('@')) { showToast('Please enter your registered email', 'error'); return; }
     const url = document.getElementById('bitrixUrl').value.trim();
     if (!url || !url.includes('bitrix24')) { showToast('Please enter a valid Bitrix24 webhook URL', 'error'); return; }
   }
@@ -738,18 +884,30 @@ function showDashboard() { navigateTo('dashboard'); }
 
 function getFormConfig() {
   return {
-    bitrixUrl:    document.getElementById('bitrixUrl').value.trim(),
-    tallyHost:    document.getElementById('tallyHost').value.trim() || 'localhost',
-    tallyPort:    parseInt(document.getElementById('tallyPort').value) || 9000,
-    tallyCompany: document.getElementById('tallyCompany').value.trim(),
+    customerEmail  : document.getElementById('customerEmail')?.value.trim() || '',
+    bitrixUrl      : document.getElementById('bitrixUrl').value.trim(),
+    tallyHost      : document.getElementById('tallyHost').value.trim() || 'localhost',
+    tallyPort      : parseInt(document.getElementById('tallyPort').value) || 9000,
+    tallyCompany   : _companies[0] || '',        // backward compat
+    tallyCompanies : [..._companies],             // new array format
+    activeCompany  : _companies[0] || '',
   };
 }
 
 // ── dashboard ───────────────────────────────────────────────────────────────
-function updateStatusUI(running) {
+function updateStatusUI(running, features = {}) {
+  const interval = features['auto-sync']    || null;
+  const ledger   = features['contact-sync'] || features['company-sync'];
+
+  const subText = running
+    ? interval
+      ? `Outstanding every ${interval}min${ledger ? ` · Ledgers every ${interval}min` : ''}`
+      : 'Outstanding every 15min | Ledgers every 5min'
+    : 'Click Start Service to resume';
+
   document.getElementById('status-dot').className      = 'status-dot' + (running ? '' : ' stopped');
   document.getElementById('status-title').textContent  = running ? 'Service Running' : 'Service Stopped';
-  document.getElementById('status-sub').textContent    = running ? 'Outstanding every 15min | Ledgers every 5min' : 'Click Start Service to resume';
+  document.getElementById('status-sub').textContent    = subText;
   document.getElementById('status-badge').textContent  = running ? 'LIVE' : 'OFFLINE';
   document.getElementById('status-badge').className    = 'status-badge ' + (running ? 'live' : 'offline');
   document.getElementById('svc-icon').textContent      = running ? '⏹' : '▶';
@@ -759,12 +917,58 @@ function updateStatusUI(running) {
 
 async function loadDashboard() {
   const status = await ipcRenderer.invoke('get-status');
-  updateStatusUI(status.running);
+
+  // License features come from API status when service is running
+  // When service is offline, try to read from localStorage cache
+  let features = status.license?.features || status.config?.features || {};
+  if (Object.keys(features).length === 0) {
+    try {
+      const cached = JSON.parse(localStorage.getItem('tbs_license_features') || '{}');
+      if (Object.keys(cached).length > 0) features = cached;
+    } catch {}
+  } else {
+    // Cache features for offline use
+    try { localStorage.setItem('tbs_license_features', JSON.stringify(features)); } catch {}
+  }
+
+  updateStatusUI(status.running, features);
+  if (features['auto-sync']) {
+    _agentSyncMinutes = Number(features['auto-sync']) || 15;
+  }
+
+  // Update status sub with real plan info
+  const plan = status.license?.plan;
+  if (plan) {
+    const ledger   = features['contact-sync'] || features['company-sync'];
+    const dueDate  = features['due-date-automation'];
+    const interval = features['auto-sync'] || 60;
+    document.getElementById('status-sub').textContent =
+      `Outstanding every ${interval}min` +
+      (ledger  ? ` · Ledgers every ${interval}min` : '') +
+      (dueDate ? ' · Due dates every 1hr'          : '') +
+      ` · Plan: ${plan}`;
+  }
+
+  // Update company limit for setup wizard
+  _companyLimit = features['company-limit'] || 1;
+
+  // Grey out Sync Ledgers action card if not on plan
+  const ledgerEnabled = features['contact-sync'] || features['company-sync'];
+  document.querySelectorAll('.action-card').forEach(c => {
+    const label = c.querySelector('.ac-label')?.textContent;
+    if (label === 'Sync Ledgers') {
+      c.style.opacity       = ledgerEnabled ? '1'    : '0.4';
+      c.style.pointerEvents = ledgerEnabled ? 'auto' : 'none';
+      if (c.querySelector('.ac-sub'))
+        c.querySelector('.ac-sub').textContent = ledgerEnabled
+          ? 'Tally → Bitrix24 contacts' : 'Not on your plan';
+    }
+  });
+
   loadStats();
   updateNextSync();
-  // Refresh countdown every 30 seconds
   if (window._nextSyncInterval) clearInterval(window._nextSyncInterval);
-  window._nextSyncInterval = setInterval(updateNextSync, 30000);
+  window._nextSyncInterval = setInterval(updateNextSync, 1000);
 }
 
 async function loadStats() {
@@ -786,16 +990,16 @@ async function loadStats() {
   }
 }
 
+let _agentSyncMinutes = 15; // updated from get-status
+
 function updateNextSync() {
-  const now = new Date();
-  // Next 15-minute mark
-  const ms = now.getTime();
-  const interval = 15 * 60 * 1000;
-  const nextMs = Math.ceil(ms / interval) * interval;
-  const diff = nextMs - ms;
+  const now = new Date().getTime();
+  const interval = _agentSyncMinutes * 60 * 1000;
+  const nextMs = Math.ceil(now / interval) * interval;
+  const diff = nextMs - now;
   const m = Math.floor(diff / 60000);
   const s = Math.floor((diff % 60000) / 1000);
-  document.getElementById('next-sync-time').textContent = `Outstanding in ${m}m ${s}s | Ledger in <5min`;
+  document.getElementById('next-sync-time').textContent = `Next sync in ${m}m ${s}s`;
 }
 
 async function loadHistory() {
@@ -960,11 +1164,37 @@ async function toggleService() {
 // ── settings ─────────────────────────────────────────────────────────────────
 async function loadSettings() {
   const status = await ipcRenderer.invoke('get-status');
-  const cfg = status.config || {};
-  document.getElementById('s-bitrixUrl').value    = cfg.bitrixUrl    || '';
-  document.getElementById('s-tallyHost').value    = cfg.tallyHost    || 'localhost';
-  document.getElementById('s-tallyPort').value    = cfg.tallyPort    || 9000;
-  document.getElementById('s-tallyCompany').value = cfg.tallyCompany || '';
+  const cfg      = status.config   || {};
+  const features = status.license?.features || {};
+
+  document.getElementById('s-customerEmail').value = cfg.customerEmail || '';
+  document.getElementById('s-bitrixUrl').value     = cfg.bitrixUrl     || '';
+  document.getElementById('s-tallyHost').value     = cfg.tallyHost     || 'localhost';
+  document.getElementById('s-tallyPort').value     = cfg.tallyPort     || 9000;
+
+  // Load companies into settings company list
+  _settingsCompanies = cfg.tallyCompanies?.length
+    ? [...cfg.tallyCompanies]
+    : cfg.tallyCompany ? [cfg.tallyCompany] : [];
+  renderSettingsCompanyList();
+
+  // Update sync schedule display with real plan values
+  const interval  = features['auto-sync']          || 60;
+  const ledger    = features['contact-sync']        || features['company-sync'];
+  const dueDate   = features['due-date-automation'];
+  const plan      = status.license?.plan            || 'Unknown';
+  const userLimit    = features['user-limit']    || 'Unlimited';
+  const companyLimit = features['company-limit'] || 1;
+  const scheduleEl   = document.getElementById('sync-schedule-info');
+  if (scheduleEl) {
+    scheduleEl.innerHTML =
+      `⏰ Full sync (Ledger + Outstanding) — 9:00 AM IST<br/>` +
+      `🔄 Outstanding sync — Every ${interval} minutes · Plan: ${plan}<br/>` +
+      (ledger  ? `👥 Ledger sync — Every ${interval} minutes<br/>` : '') +
+      (dueDate ? `🔔 Due date automation — Every 1 hour<br/>`       : '') +
+      `👤 Max parties synced — ${userLimit}<br/>` +
+      `🏢 Tally companies — ${companyLimit}`;
+  }
 }
 
 async function testSettingsConnection() {
@@ -992,13 +1222,31 @@ async function testSettingsConnection() {
 }
 
 async function saveSettings() {
+  if (_settingsCompanies.length === 0) {
+    showToast('Add at least one Tally company', 'error');
+    return;
+  }
   const cfg = {
-    bitrixUrl:    document.getElementById('s-bitrixUrl').value.trim(),
-    tallyHost:    document.getElementById('s-tallyHost').value.trim(),
-    tallyPort:    parseInt(document.getElementById('s-tallyPort').value),
-    tallyCompany: document.getElementById('s-tallyCompany').value.trim(),
+    customerEmail  : document.getElementById('s-customerEmail').value.trim(),
+    bitrixUrl      : document.getElementById('s-bitrixUrl').value.trim(),
+    tallyHost      : document.getElementById('s-tallyHost').value.trim(),
+    tallyPort      : parseInt(document.getElementById('s-tallyPort').value),
+    tallyCompany   : _settingsCompanies[0] || '',
+    tallyCompanies : [..._settingsCompanies],
+    activeCompany  : _settingsCompanies[0] || '',
   };
   await ipcRenderer.invoke('save-and-restart', cfg);
+
+  // Update company usage in LMS
+  try {
+    const API = 'http://localhost:3000/api';
+    await fetch(`${API}/companies/update-usage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ count: _settingsCompanies.length })
+    });
+  } catch {}
+
   showToast('Settings saved — service restarting…', 'success');
   setTimeout(() => navigateTo('dashboard'), 2000);
 }

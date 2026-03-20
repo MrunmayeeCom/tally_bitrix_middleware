@@ -124,6 +124,14 @@ async function processTallyToContact({ manual = false } = {}) {
         // Try company first (most Tally ledgers are businesses)
         const existingCompany = await findBitrixCompany(ledger.ledgerName);
         if (existingCompany) {
+          // Only update existing records if bidirectional-sync is enabled
+          const fg = (() => { try { return require('../services/featureGate'); } catch { return null; } })();
+          const biDirectional = !fg || fg.isEnabled('bidirectional-sync');
+          if (!biDirectional) {
+            logger.info('bidirectional-sync not enabled — skipping update for existing company', { ledgerName: ledger.ledgerName });
+            skipped++;
+            continue;
+          }
           const updateFields = {};
           if (ledger.phone) updateFields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
           if (ledger.email) updateFields.EMAIL = [{ VALUE: ledger.email, VALUE_TYPE: 'WORK' }];
@@ -158,6 +166,13 @@ async function processTallyToContact({ manual = false } = {}) {
 
         const existingContact = await findBitrixContact(ledger.ledgerName);
         if (existingContact) {
+          const fg = (() => { try { return require('../services/featureGate'); } catch { return null; } })();
+          const biDirectional = !fg || fg.isEnabled('bidirectional-sync');
+          if (!biDirectional) {
+            logger.info('bidirectional-sync not enabled — skipping update for existing contact', { ledgerName: ledger.ledgerName });
+            skipped++;
+            continue;
+          }
           const updateFields = {};
           if (ledger.phone) updateFields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
           if (ledger.email) updateFields.EMAIL = [{ VALUE: ledger.email, VALUE_TYPE: 'WORK' }];

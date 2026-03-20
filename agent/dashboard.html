@@ -360,7 +360,7 @@ html,body{
         <div class="next-time" id="next-time">Calculating…</div>
       </div>
     </div>
-    <div class="next-meta">Outstanding · 15min<br/>Ledgers · 5min</div>
+    <div class="next-meta" id="next-meta">Loading plan…</div>
   </div>
 
   <!-- Triggers + History -->
@@ -558,15 +558,57 @@ async function loadHistory() {
 }
 
 const trigMap = {
-  outstanding: { path: '/sync/outstanding',     label: 'Outstanding sync' },
-  ledgers:     { path: '/sync/tally-to-bitrix', label: 'Ledger sync'      },
-  duedates:    { path: '/sync/duedates',        label: 'Due date check'   },
-  full:        { path: null,                    label: 'Full sync'        },
+  outstanding: { path: '/sync/outstanding',     label: 'Outstanding sync', slug: 'outstanding-sync'  },
+  ledgers:     { path: '/sync/tally-to-bitrix', label: 'Ledger sync',      slug: 'contact-sync'      },
+  duedates:    { path: '/sync/duedates',        label: 'Due date check',   slug: 'due-date-automation'},
+  full:        { path: null,                    label: 'Full sync',        slug: null                 },
 };
+
+let _planFeatures = {}; // populated from /api/status
+
+async function loadPlanFeatures() {
+  try {
+    const s = await get('/api/status');
+    _planFeatures = s.license?.features || {};
+
+    // Show/hide trigger buttons based on plan
+    const ledgerEnabled  = _planFeatures['contact-sync'] || _planFeatures['company-sync'];
+    const dueDateEnabled = _planFeatures['due-date-automation'];
+
+    const ledgerBtn  = document.getElementById('trig-ledgers');
+    const dueDateBtn = document.getElementById('trig-duedates');
+
+    if (ledgerBtn) {
+      ledgerBtn.style.opacity       = ledgerEnabled ? '1'    : '0.4';
+      ledgerBtn.style.pointerEvents = ledgerEnabled ? 'auto' : 'none';
+      ledgerBtn.querySelector('.trig-desc').textContent =
+        ledgerEnabled ? 'Tally → Bitrix contacts' : 'Not on your plan';
+    }
+    if (dueDateBtn) {
+      dueDateBtn.style.opacity       = dueDateEnabled ? '1'    : '0.4';
+      dueDateBtn.style.pointerEvents = dueDateEnabled ? 'auto' : 'none';
+      dueDateBtn.querySelector('.trig-desc').textContent =
+        dueDateEnabled ? 'Move overdue deals' : 'Not on your plan';
+    }
+  } catch {}
+}
 
 async function trigger(type) {
   const card = document.getElementById(`trig-${type}`);
   if (!card || card.classList.contains('running')) return;
+
+  // Check feature gate before firing
+  const slug = trigMap[type]?.slug;
+  if (slug && slug !== null) {
+    const enabled = slug === 'contact-sync'
+      ? (_planFeatures['contact-sync'] || _planFeatures['company-sync'])
+      : _planFeatures[slug];
+    if (enabled === false) {
+      toast(`${trigMap[type].label} not available on your plan`, 'fail');
+      return;
+    }
+  }
+
   card.classList.add('running');
   try {
     if (type === 'full') {
@@ -576,21 +618,23 @@ async function trigger(type) {
       await post(trigMap[type].path);
     }
     toast(`${trigMap[type].label} triggered ✓`, 'ok');
-    setTimeout(() => { loadStats(); loadHistory(); loadLogs(); }, 3000);
+    setTimeout(() => { loadStats(); loadHistory(); }, 3000);
   } catch(e) {
     toast(`Failed: ${e.message}`, 'fail');
   }
   setTimeout(() => card.classList.remove('running'), 4000);
 }
 
+let _syncIntervalMinutes = 15; // updated from /api/status
+
 function updateNextSync() {
   const now = Date.now();
-  const interval = 15 * 60 * 1000;
+  const interval = _syncIntervalMinutes * 60 * 1000;
   const nextMs = Math.ceil(now / interval) * interval;
   const diff = nextMs - now;
   const m = Math.floor(diff / 60000);
   const s = Math.floor((diff % 60000) / 1000);
-  document.getElementById('next-time').textContent = `Outstanding in ${m}m ${s}s  ·  Ledgers in <5min`;
+  document.getElementById('next-time').textContent = `Next sync in ${m}m ${s}s`;
 }
 
 async function refreshAll(btn) {
@@ -654,6 +698,60 @@ async function loadLastSync() {
   }
 }
 
+async function loadCompanySwitcher() {
+  try {
+    const data = await get('/api/companies');
+    if (!data.companies || data.companies.length === 0) return;
+    // Show switcher even with 1 company so user knows which is active
+
+    // Build company switcher UI if multiple companies
+    const bar = document.getElementById('next-bar');
+    if (!bar) return;
+
+    const switcher = document.createElement('div');
+    switcher.style.cssText = 'margin-bottom:14px;';
+    switcher.innerHTML = `
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+        padding:12px 18px;box-shadow:var(--shadow);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <span style="font-size:11px;font-weight:700;color:var(--sub);text-transform:uppercase;letter-spacing:.7px;">
+          🏢 Active Company
+        </span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          ${data.companies.map(c => `
+            <button onclick="switchCompany('${c}')"
+              style="padding:5px 14px;border-radius:20px;border:1.5px solid ${c === data.active ? 'var(--green)' : 'var(--border2)'};
+              background:${c === data.active ? 'var(--greenbg)' : 'var(--card2)'};
+              color:${c === data.active ? 'var(--green)' : 'var(--sub)'};
+              font-size:11px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;">
+              ${c === data.active ? '✓ ' : ''}${c}
+            </button>`).join('')}
+        </div>
+      </div>`;
+
+    bar.parentNode.insertBefore(switcher, bar);
+  } catch {}
+}
+
+async function switchCompany(company) {
+  try {
+    await post(`/api/companies/switch`);
+    // Re-post with body
+    const r = await fetch(`${API}/api/companies/switch`, {
+      method: 'POST',
+      headers: HEADERS,
+      body: JSON.stringify({ company }),
+      signal: AbortSignal.timeout(5000)
+    });
+    const data = await r.json();
+    if (data.success) {
+      toast(`Switched to ${company} ✓`, 'ok');
+      loadCompanySwitcher();
+    }
+  } catch(e) {
+    toast(`Switch failed: ${e.message}`, 'fail');
+  }
+}
+
 async function loadConnStatus() {
   // Service
   try {
@@ -664,16 +762,44 @@ async function loadConnStatus() {
     document.getElementById('cdot-service').className = 'conn-dot offline';
     document.getElementById('csub-service').textContent = 'Unreachable';
   }
-  // Bitrix
+
+  // Bitrix + License/Plan info
   try {
     const s = await get('/api/status');
     document.getElementById('cdot-bitrix').className = 'conn-dot live';
     document.getElementById('csub-bitrix').textContent = 'Connected';
+
+    // Read sync interval from live license features
+    if (s.license?.features?.['auto-sync']) {
+      _syncIntervalMinutes = Number(s.license.features['auto-sync']) || 15;
+    }
+
+    // Update plan info in next sync bar
+    const plan     = s.license?.plan    || 'Unknown';
+    const status   = s.license?.status  || 'unknown';
+    const endDate  = s.license?.endDate
+      ? new Date(s.license.endDate).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })
+      : '—';
+
+    // Build feature summary for display
+    const f = s.license?.features || {};
+    const ledgerEnabled  = f['contact-sync'] || f['company-sync'];
+    const dueDateEnabled = f['due-date-automation'];
+    const interval       = f['auto-sync'] || 60;
+
+    document.getElementById('next-meta').innerHTML =
+      `Plan: <strong>${plan}</strong> · Valid till ${endDate}<br/>` +
+      `Outstanding · ${interval}min` +
+      (ledgerEnabled  ? ` · Ledgers · ${interval}min` : '') +
+      (dueDateEnabled ? ' · Due Dates · 1hr'          : '');
+
   } catch {
     document.getElementById('cdot-bitrix').className = 'conn-dot offline';
     document.getElementById('csub-bitrix').textContent = 'Unreachable';
+    document.getElementById('next-meta').textContent = 'Service offline';
   }
-  // Tally — infer from last ledger sync result
+
+  // Tally — infer from last sync result
   try {
     const history = await get('/api/history');
     const last = history[0];
@@ -730,15 +856,22 @@ async function loadOverdue() {
   }
 }
 
-refreshAll(null);
-loadLastSync();
-loadConnStatus();
-loadOverdue();
+async function initDashboard() {
+  await loadConnStatus();
+  loadPlanFeatures();
+  loadCompanySwitcher();
+  refreshAll(null);
+  loadLastSync();
+  loadOverdue();
+}
+
+initDashboard();
 setInterval(updateNextSync, 1000);
 setInterval(() => refreshAll(null), 30000);
 setInterval(loadLastSync, 60000);
 setInterval(loadOverdue, 120000);
 setInterval(loadConnStatus, 30000);
+setInterval(loadPlanFeatures, 5 * 60 * 1000); // refresh plan features every 5 min
 </script>
 </body>
 </html>

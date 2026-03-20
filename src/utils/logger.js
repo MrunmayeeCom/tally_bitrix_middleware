@@ -36,22 +36,46 @@ function writeToFile(filename, message) {
   } catch {}
 }
 
+let _consecutiveErrors = 0;
+const ERROR_ALERT_THRESHOLD = 3;
+
 const logger = {
   info(message, data = '') {
     const log = `[${getTimestamp()}] INFO  ${message} ${data ? JSON.stringify(data) : ''}`;
     console.log(log);
     writeToFile('combined.log', log);
+    _consecutiveErrors = 0; // reset on success
   },
   error(message, data = '') {
     const log = `[${getTimestamp()}] ERROR ${message} ${data ? JSON.stringify(data) : ''}`;
     console.error(log);
     writeToFile('combined.log', log);
-    writeToFile('error.log', log);
+
+    // Only write to error.log and send alerts if error-logging is enabled on plan
+    try {
+      const featureGate = require('../services/featureGate');
+      if (featureGate.isEnabled('error-logging')) {
+        writeToFile('error.log', log);
+        _consecutiveErrors++;
+        if (_consecutiveErrors >= ERROR_ALERT_THRESHOLD) {
+          logger.warn(`[Alert] ${_consecutiveErrors} consecutive errors — admin notification would fire here`);
+          _consecutiveErrors = 0;
+        }
+      }
+    } catch {
+      writeToFile('error.log', log); // fallback — always write if featureGate unavailable
+    }
   },
   warn(message, data = '') {
     const log = `[${getTimestamp()}] WARN  ${message} ${data ? JSON.stringify(data) : ''}`;
     console.warn(log);
     writeToFile('combined.log', log);
+  },
+  debug(message, data = '') {
+    if (process.env.NODE_ENV !== 'production') {
+      const log = `[${getTimestamp()}] DEBUG ${message} ${data ? JSON.stringify(data) : ''}`;
+      console.log(log);
+    }
   }
 };
 

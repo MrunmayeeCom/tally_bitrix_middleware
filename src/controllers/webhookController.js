@@ -3,6 +3,7 @@ const { processContact } = require('../processors/contactProcessor');
 const { processCompany } = require('../processors/companyProcessor');
 const { processInvoice } = require('../processors/invoiceProcessor');
 const { processQuotation } = require('../processors/quotationProcessor');
+const featureGate = require('../services/featureGate');
 
 async function handleWebhook(req, res) {
   try {
@@ -22,6 +23,10 @@ async function handleWebhook(req, res) {
 
       case 'ONCRMCONTACTADD':
       case 'ONCRMCONTACTUPDATE': {
+        if (!featureGate.isEnabled('contact-sync')) {
+          logger.info('contact-sync not enabled on current plan — skipping', { entityId });
+          break;
+        }
         const contactSource = payload.data?.FIELDS?.SOURCE_DESCRIPTION || '';
         if (contactSource === 'TALLY_SYNC') {
           logger.info('Skipping webhook — contact was auto-created by Tally sync, not a user action', { entityId });
@@ -33,8 +38,10 @@ async function handleWebhook(req, res) {
 
       case 'ONCRMCOMPANYADD':
       case 'ONCRMCOMPANYUPDATE': {
-        // Skip if this company was auto-created by Tally ledger sync
-        // to avoid circular webhook loop (Tally→Bitrix→Tally→Bitrix...)
+        if (!featureGate.isEnabled('company-sync')) {
+          logger.info('company-sync not enabled on current plan — skipping', { entityId });
+          break;
+        }
         const companySource = payload.data?.FIELDS?.SOURCE_DESCRIPTION || '';
         if (companySource === 'TALLY_SYNC') {
           logger.info('Skipping webhook — company was auto-created by Tally sync, not a user action', { entityId });
@@ -48,6 +55,10 @@ async function handleWebhook(req, res) {
       case 'ONCRMINVOICEUPDATE':
       case 'ONCRMSMARTINVOICEADD':
       case 'ONCRMSMARTINVOICEUPDATE':
+        if (!featureGate.isEnabled('invoice-sync')) {
+          logger.info('invoice-sync not enabled on current plan — skipping', { entityId });
+          break;
+        }
         await processInvoice(entityId, isUpdate);
         break;
 
@@ -58,6 +69,10 @@ async function handleWebhook(req, res) {
         // entityTypeId 7 = Quote, ignore other smart process types
         if (payload.data?.FIELDS?.ENTITY_TYPE_ID && String(payload.data.FIELDS.ENTITY_TYPE_ID) !== '7') {
           logger.info('Smart process event ignored — not a Quote', { entityTypeId: payload.data?.FIELDS?.ENTITY_TYPE_ID });
+          break;
+        }
+        if (!featureGate.isEnabled('quotation-sync')) {
+          logger.info('quotation-sync not enabled on current plan — skipping', { entityId });
           break;
         }
         await processQuotation({ entityId, isUpdate: event === 'ONCRMQUOTEUPDATE' || event === 'ONCRMSMARTPROCESSELEMENTEDIT' });

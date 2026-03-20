@@ -14,9 +14,12 @@ const fs    = require('fs');
 const path  = require('path');
 const logger = require('../utils/logger');
 
-const LMS_BASE_URL          = process.env.LMS_BASE_URL || 'https://lisence-system-1.onrender.com';
-const HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-const LICENSE_CACHE_PATH    = path.join(__dirname, '../../logs/license-cache.json');
+const LMS_BASE_URL            = process.env.LMS_BASE_URL || 'https://lisence-system.onrender.com';
+const LMS_API_KEY             = process.env.LMS_API_KEY  || 'my-secret-key-123';
+const PRODUCT_ID              = '69ba90211cf0356ba779b317';
+const HEARTBEAT_INTERVAL_MS   = 30 * 60 * 1000; // 30 minutes
+const LICENSE_CACHE_PATH      = path.join(__dirname, '../../logs/license-cache.json');
+const REGISTRY_CACHE_PATH     = path.join(__dirname, '../../logs/feature-registry-cache.json');
 
 let APP_VERSION = '1.0.0';
 try { APP_VERSION = require('../../package.json').version || '1.0.0'; } catch {}
@@ -36,8 +39,9 @@ function lmsFetch(endpoint, options = {}) {
       method:   options.method || 'GET',
       headers: {
         'Content-Type': 'application/json',
+        'x-api-key':    LMS_API_KEY,          
         ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),
-        ...(options.headers || {}),
+        ...(options.headers || {}),           
       },
     };
 
@@ -80,6 +84,82 @@ function isCacheFresh(cache) {
   return (Date.now() - new Date(cache.cachedAt).getTime()) < 48 * 60 * 60 * 1000;
 }
 
+// Force clear registry cache so fresh features are fetched
+function clearRegistryCache() {
+  try {
+    const fs   = require('fs');
+    if (fs.existsSync(REGISTRY_CACHE_PATH)) fs.unlinkSync(REGISTRY_CACHE_PATH);
+    if (fs.existsSync(LICENSE_CACHE_PATH))  fs.unlinkSync(LICENSE_CACHE_PATH);
+    logger.info('[LMS] Cache cleared — will re-fetch from LMS on next validation');
+  } catch(e) { logger.warn('[LMS] Cache clear failed: ' + e.message); }
+}
+
+// ── Feature Registry cache ────────────────────────────────────────────────────
+function saveRegistryCache(data) {
+  try {
+    const dir = path.dirname(REGISTRY_CACHE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(REGISTRY_CACHE_PATH, JSON.stringify({
+      data,
+      cachedAt: Date.now()
+    }));
+  } catch(e) { logger.warn('[LMS] Registry cache save failed: ' + e.message); }
+}
+
+function loadRegistryCache() {
+  try {
+    if (fs.existsSync(REGISTRY_CACHE_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(REGISTRY_CACHE_PATH, 'utf8'));
+      // Registry cache valid for 24 hours
+      if (raw?.cachedAt && (Date.now() - raw.cachedAt) < 24 * 60 * 60 * 1000) {
+        return raw.data;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+// ── Fetch feature registry from LMS ──────────────────────────────────────────
+// GET /api/feature-registry/:productId  (requires x-api-key)
+// Returns all feature slugs, types and descriptions for this product
+async function fetchFeatureRegistry() {
+  // Try cache first
+  const cached = loadRegistryCache();
+  if (cached) {
+    logger.info('[LMS] Feature registry loaded from cache');
+    return cached;
+  }
+
+  try {
+    logger.info('[LMS] Fetching feature registry from LMS...');
+    const { status, data } = await lmsFetch(
+      `/api/feature-registry/${PRODUCT_ID}`,
+      { headers: { 'x-api-key': LMS_API_KEY } }
+    );
+
+    if (status !== 200) {
+      logger.warn(`[LMS] Feature registry fetch failed — HTTP ${status}`);
+      return null;
+    }
+
+    // Handle both response shapes from LMS
+    // Shape A: { success: true, data: { productId, features: [...] } }
+    // Shape B: { success: true, features: [...] }
+    const registry = data.data || data;
+    if (!registry?.features || !Array.isArray(registry.features)) {
+      logger.warn('[LMS] Feature registry response has no features array — response: ' + JSON.stringify(data).substring(0, 200));
+      return null;
+    }
+
+    saveRegistryCache(registry);
+    logger.info(`[LMS] Feature registry fetched — ${registry.features.length} features for product ${PRODUCT_ID}`);
+    return registry;
+  } catch(err) {
+    logger.warn('[LMS] Feature registry fetch error: ' + err.message);
+    return null;
+  }
+}
+
 // ── Feature parser ────────────────────────────────────────────────────────────
 // Maps LMS LicenseType.features keys → scheduler feature flags
 // Admin sets these keys in the LMS dashboard per plan.
@@ -91,16 +171,42 @@ function isCacheFresh(cache) {
 //   dueDateSync     (bool)             → Business+
 //   maxCompanies    (number)           → 1 or 3
 
-function parseFeatures(raw = {}) {
-  const bool = (v) => v === true || v === 'true' || v === 1;
-  const num  = (v, fb) => (v !== undefined && !isNaN(Number(v))) ? Number(v) : fb;
-  return {
-    syncIntervalMinutes: num(raw.syncInterval, 60),
-    outstandingSync:     bool(raw.outstandingSync ?? true),
-    ledgerSync:          bool(raw.ledgerSync     ?? false),
-    dueDateSync:         bool(raw.dueDateSync    ?? false),
-    maxCompanies:        num(raw.maxCompanies, 1),
-  };
+// LMS returns license features as array: [{ featureSlug, featureType, value }]
+// Registry provides the master list of all possible slugs + their types
+// We merge both: registry defines what exists, license defines what's enabled
+function parseFeatures(featuresArray = [], registry = null) {
+  if (!Array.isArray(featuresArray)) return featuresArray;
+
+  const map = {};
+
+  // Step 1 — seed all known slugs from registry with disabled defaults
+  // This ensures every slug exists in the map even if not in the license
+  if (registry?.features && Array.isArray(registry.features)) {
+    for (const regFeature of registry.features) {
+      const slug = regFeature.featureSlug;
+      if (!slug) continue;
+      if (regFeature.featureType === 'limit') {
+        map[slug] = 0; // default limit = 0
+      } else {
+        map[slug] = false; // default boolean = false
+      }
+    }
+  }
+
+  // Step 2 — overlay actual license values on top of registry defaults
+  for (const f of featuresArray) {
+    const slug = f.featureSlug;
+    if (!slug) continue;
+    if (f.featureType === 'boolean') {
+      map[slug] = f.value === true || f.value === 'true' || f.value === 1;
+    } else if (f.featureType === 'limit') {
+      map[slug] = Number(f.value) || 0;
+    } else {
+      map[slug] = f.value;
+    }
+  }
+
+  return map;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -117,12 +223,30 @@ async function validateLicense(customerEmail) {
   if (!customerEmail) return { valid: false, reason: 'No customer email configured' };
 
   try {
+    // Clear stale cache if it has wrong feature values (one-time fix)
+    const staleCache = loadLicenseCache();
+    if (staleCache && staleCache.features && 
+        staleCache.features['contact-sync'] === false &&
+        staleCache.customerEmail === customerEmail) {
+      logger.info('[LMS] Stale cache detected — clearing to re-fetch correct features');
+      clearRegistryCache();
+    }
+
+    // Step 1 — fetch feature registry first (dynamic, cached 24h)
+    const registry = await fetchFeatureRegistry();
+
     logger.info(`[LMS] Validating license for ${customerEmail}`);
+
+    // Step 2 — fetch active license for this email + product
     const { status, data } = await lmsFetch(
-      `/api/public-license/active-license/${encodeURIComponent(customerEmail)}`
+      `/api/external/actve-license/${encodeURIComponent(customerEmail)}?productId=${PRODUCT_ID}`,
+      { headers: { 'x-api-key': LMS_API_KEY } }
     );
 
-    if (status !== 200 || !data?.license) {
+    // LMS returns activeLicense (not license)
+    const license = data.activeLicense || data.license;
+
+    if (status !== 200 || !license) {
       const cache = loadLicenseCache();
       if (cache && isCacheFresh(cache) && cache.customerEmail === customerEmail) {
         logger.warn('[LMS] Unreachable — using cached license (48h grace)');
@@ -131,9 +255,13 @@ async function validateLicense(customerEmail) {
       return { valid: false, reason: data?.message || `HTTP ${status}` };
     }
 
-    const license    = data.license;
-    const licType    = license.licenseTypeId || {};
-    const rawFeatures = licType.features || license.features || {};
+    const licType     = license.licenseTypeId || {};
+    // Features are directly on activeLicense.features as array
+    // and also on licenseTypeId.features — prefer the direct one as it has values
+    const rawFeatures = license.features || licType.features || [];
+
+    // Step 3 — merge registry defaults + license values into flat slug map
+    const features = parseFeatures(rawFeatures, registry);
 
     const result = {
       valid         : license.status === 'active',
@@ -142,14 +270,22 @@ async function validateLicense(customerEmail) {
       plan          : licType.name || 'Unknown',
       status        : license.status,
       endDate       : license.endDate,
-      features      : parseFeatures(rawFeatures),
+      features,      // flat slug map — { 'contact-sync': true, 'auto-sync': 15, ... }
+      registry,      // full registry for reference
       customerEmail,
     };
 
     if (result.valid) {
       saveLicenseCache(result);
       _currentLicenseId = result.licenseId;
-      logger.info(`[LMS] License valid — Plan: ${result.plan}, expires: ${new Date(result.endDate).toLocaleDateString('en-IN')}`);
+      logger.info(`[LMS] License valid — Plan: ${result.plan} | expires: ${new Date(result.endDate).toLocaleDateString('en-IN')} | features: ${Object.keys(features).length}`);
+
+      // Log which features are enabled for this plan
+      const enabled = Object.entries(features)
+        .filter(([, v]) => v === true || (typeof v === 'number' && v > 0))
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ');
+      logger.info(`[LMS] Enabled features: ${enabled}`);
     } else {
       logger.warn(`[LMS] License status: "${license.status}"`);
     }
@@ -171,18 +307,20 @@ async function validateLicense(customerEmail) {
  * POST /api/heartbeat/:licenseId
  * Keeps the license ACTIVE in LMS. Non-fatal if it fails.
  */
-async function sendHeartbeat(licenseId) {
+async function sendHeartbeat(licenseId, usageFeatures = []) {
   const id = licenseId || _currentLicenseId;
   if (!id) return;
+
+  // Get userId from license cache
+  const cache = loadLicenseCache();
+  const userId = cache?.licenseId || id; // use licenseId as userId fallback
+
   try {
     const { status } = await lmsFetch(`/api/heartbeat/${id}`, {
       method: 'POST',
       body: {
-        licenseId  : id,
-        timestamp  : new Date().toISOString(),
-        version    : APP_VERSION,
-        usage_data : { app: 'TallyBitrixSync' },
-        device_info: { platform: process.platform, nodeVersion: process.version },
+        userId,
+        features: usageFeatures, // [{ slug, value }]
       },
     });
     if (status === 200) logger.debug(`[LMS] Heartbeat OK`);
@@ -195,13 +333,48 @@ async function sendHeartbeat(licenseId) {
 function startHeartbeat(licenseId) {
   clearHeartbeatInterval();
   _currentLicenseId = licenseId || _currentLicenseId;
-  sendHeartbeat(_currentLicenseId);
-  _heartbeatTimer = setInterval(() => sendHeartbeat(_currentLicenseId), HEARTBEAT_INTERVAL_MS);
+  sendHeartbeat(_currentLicenseId, []);
+  _heartbeatTimer = setInterval(() => sendHeartbeat(_currentLicenseId, []), HEARTBEAT_INTERVAL_MS);
   logger.info('[LMS] Heartbeat loop started (every 30 min)');
+}
+
+/**
+ * Update company-limit usage in LMS via heartbeat
+ * value = number of companies currently configured
+ * LMS increments usage, so we send the delta (not absolute count)
+ */
+async function updateCompanyUsage(companyCount) {
+  const id = _currentLicenseId;
+  if (!id) {
+    logger.warn('[LMS] Cannot update company usage — no active licenseId');
+    return;
+  }
+  const cache = loadLicenseCache();
+  const userId = cache?.licenseId || id;
+
+  try {
+    logger.info(`[LMS] Updating company-limit usage: ${companyCount}`);
+    const { status, data } = await lmsFetch(`/api/heartbeat/${id}`, {
+      method: 'POST',
+      body: {
+        userId,
+        features: [
+          { slug: 'company-limit', value: companyCount }
+        ]
+      }
+    });
+    if (status === 200) {
+      logger.info(`[LMS] company-limit usage updated to ${companyCount}`);
+    } else {
+      logger.warn(`[LMS] company-limit update failed — HTTP ${status}`);
+    }
+  } catch(e) {
+    logger.warn(`[LMS] updateCompanyUsage error: ${e.message}`);
+  }
 }
 
 function clearHeartbeatInterval() {
   if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
 }
 
-module.exports = { validateLicense, startHeartbeat, clearHeartbeatInterval, parseFeatures, loadLicenseCache };
+module.exports = { validateLicense, fetchFeatureRegistry, startHeartbeat, clearHeartbeatInterval, parseFeatures, loadLicenseCache, clearRegistryCache, updateCompanyUsage };

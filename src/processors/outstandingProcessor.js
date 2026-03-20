@@ -211,6 +211,16 @@ async function processOutstanding() {
   try {
     logger.info('Outstanding sync started');
 
+    // Enforce user-limit — cap how many unique parties are synced
+    let _userLimit = 0;
+    try {
+      const featureGate = require('../services/featureGate');
+      _userLimit = featureGate.getLimit('user-limit', 0);
+      const companyLimit = featureGate.getLimit('company-limit', 1);
+      logger.info(`[LMS] Plan limits — user-limit: ${_userLimit || 'unlimited'} | company-limit: ${companyLimit}`);
+    } catch {}
+
+
     // Reset per-run cache, circuit breaker, and dedup set
     partyCache.clear();
     tallyLedgerCircuitOpen = false;
@@ -232,8 +242,18 @@ async function processOutstanding() {
     let processed = 0;
     let failed    = 0;
 
+    let _syncedParties = new Set();
+
     await processInBatches(outstandingList, async (outstanding) => {
       try {
+        // Enforce user-limit — stop syncing new parties once limit reached
+        if (_userLimit > 0 && _syncedParties.size >= _userLimit) {
+          if (!_syncedParties.has(outstanding.partyName)) {
+            logger.warn(`[LMS] user-limit (${_userLimit}) reached — skipping new party`, { partyName: outstanding.partyName });
+            return;
+          }
+        }
+        _syncedParties.add(outstanding.partyName);
         outstanding.daysPending   = daysPending(outstanding.dueDate);
         outstanding.pendingAmount = formatAmount(outstanding.pendingAmount);
         outstanding.billAmount    = formatAmount(outstanding.billAmount);
@@ -244,16 +264,22 @@ async function processOutstanding() {
         const dealFields     = mapOutstandingToDeal(outstanding);
         const dealKey = `${outstanding.partyName}||${outstanding.voucherNumber}`;
 
-        // Guard 1: skip if another parallel batch item is already creating this deal
-        if (inFlightVouchers.has(dealKey)) {
-          logger.warn('Duplicate in-flight — skipping', { dealKey });
-          return;
-        }
-        // Guard 2: skip if this deal was already created earlier in this sync run
-        if (createdThisRun.has(dealKey)) {
-          logger.warn('Already created this run — skipping duplicate', { dealKey });
-          processed++;
-          return;
+        // Duplicate prevention — only if enabled on plan
+        const featureGateDP = (() => { try { return require('../services/featureGate'); } catch { return null; } })();
+        const dedupEnabled = !featureGateDP || featureGateDP.isEnabled('duplicate-prevention');
+
+        if (dedupEnabled) {
+          // Guard 1: skip if another parallel batch item is already creating this deal
+          if (inFlightVouchers.has(dealKey)) {
+            logger.warn('Duplicate in-flight — skipping', { dealKey });
+            return;
+          }
+          // Guard 2: skip if this deal was already created earlier in this sync run
+          if (createdThisRun.has(dealKey)) {
+            logger.warn('Already created this run — skipping duplicate', { dealKey });
+            processed++;
+            return;
+          }
         }
 
         inFlightVouchers.add(dealKey);
