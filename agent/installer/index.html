@@ -1041,13 +1041,14 @@ async function loadHistory() {
       const detail  = isError
                     ? (record.error || `${record.failed} failed`)
                     : `${record.processed} bills synced`;
+      const company = record.company ? ` · ${record.company}` : '';
 
       return `
         <div class="history-item">
           <div class="history-left">
             <div class="history-dot ${isError ? 'error' : 'success'}"></div>
             <div class="history-info">
-              <div class="history-title">${label}</div>
+              <div class="history-title">${label}${company}</div>
               <div class="history-time">${time} — ${detail}</div>
             </div>
           </div>

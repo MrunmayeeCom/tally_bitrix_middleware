@@ -22,13 +22,21 @@ function saveHistory(history) {
 
 function recordSync(result) {
   const history = loadHistory();
+
+  // Read active company at time of sync
+  let company = '';
+  try {
+    company = require('../config/tallyConfig').company || '';
+  } catch {}
+
   history.push({
     timestamp:  new Date().toISOString(),
     processed:  result.processed  || 0,
     failed:     result.failed     || 0,
     success:    result.success    || false,
     trigger:    result.trigger    || 'scheduled',
-    error:      result.error      || null
+    error:      result.error      || null,
+    company,                          // ← which company was active during this sync
   });
   saveHistory(history);
 }

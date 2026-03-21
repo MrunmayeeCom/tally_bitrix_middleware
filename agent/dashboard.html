@@ -540,12 +540,13 @@ async function loadHistory() {
                    : trigger === 'manual'    ? '🖱 Manual'
                    : trigger.includes('ledger') ? '👥 Ledger Sync'
                    : '🔄 Sync Run';
-      const detail = isErr ? (r.error || `${r.failed} failed`) : `${r.processed} bills synced`;
+      const detail  = isErr ? (r.error || `${r.failed} failed`) : `${r.processed} bills synced`;
+      const company = r.company ? ` · ${r.company}` : '';
       return `<div class="hi">
         <div class="hi-left">
           <div class="hi-dot ${isErr?'err':'ok'}"></div>
           <div class="hi-info">
-            <div class="hi-title">${label}</div>
+            <div class="hi-title">${label}${company}</div>
             <div class="hi-time">${time} · ${detail}</div>
           </div>
         </div>
@@ -745,8 +746,11 @@ async function switchCompany(company) {
     });
     const data = await r.json();
     if (data.success) {
-      toast(`Switched to ${company} ✓`, 'ok');
+      toast(`Switched to ${company} ✓ — next sync will run for this company`, 'ok');
+      // Refresh switcher UI + connection status to show new active company
       loadCompanySwitcher();
+      loadConnStatus();
+      loadHistory();
     }
   } catch(e) {
     toast(`Switch failed: ${e.message}`, 'fail');

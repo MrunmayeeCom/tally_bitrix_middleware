@@ -176,8 +176,9 @@ app.get('/api/lastsync', (req, res) => {
 
 // Get list of configured companies
 app.get('/api/companies', (req, res) => {
-  const companies = (process.env.TALLY_COMPANIES || process.env.TALLY_COMPANY || '').split(',').filter(Boolean);
-  const active    = process.env.TALLY_COMPANY || companies[0] || '';
+  const tallyConfig = require('./config/tallyConfig');
+  const companies   = tallyConfig.getCompanies();
+  const active      = tallyConfig.company || companies[0] || '';
   res.json({ companies, active });
 });
 
@@ -196,16 +197,14 @@ app.post('/api/companies/update-usage', authMiddleware, async (req, res) => {
 // Switch active company — writes to config and restarts Tally connector
 app.post('/api/companies/switch', authMiddleware, (req, res) => {
   const { company } = req.body;
-  const companies   = (process.env.TALLY_COMPANIES || '').split(',').filter(Boolean);
+  const tallyConfig = require('./config/tallyConfig');
+  const companies   = tallyConfig.getCompanies();
+
   if (!companies.includes(company)) {
     return res.status(400).json({ success: false, message: 'Company not in configured list' });
   }
-  process.env.TALLY_COMPANY = company;
-  // Update tallyConfig dynamically
-  try {
-    const tallyConfig = require('./config/tallyConfig');
-    tallyConfig.company = company;
-  } catch {}
+
+  tallyConfig.setCompany(company);
   logger.info(`Active Tally company switched to: ${company}`);
   res.json({ success: true, active: company });
 });
