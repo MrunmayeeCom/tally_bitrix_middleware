@@ -299,13 +299,14 @@ async function validateLicense(customerEmail) {
       valid         : license.status === 'active',
       licenseId     : license._id,
       licenseKey    : license.licenseKey,
+      userId        : license.userId || license.user?._id || license._id, // store for heartbeat
       plan          : licType.name || 'Unknown',
       status        : license.status,
       endDate       : license.endDate,
       features,
       registry,
       customerEmail,
-      lmsCompanyUsage, // actual current usage from LMS (null if not in response)
+      lmsCompanyUsage,
     };
 
     if (result.valid) {
@@ -344,9 +345,9 @@ async function sendHeartbeat(licenseId, usageFeatures = []) {
   const id = licenseId || _currentLicenseId;
   if (!id) return;
 
-  // Get userId from license cache
+  // Get userId from license cache — LMS expects the user's _id, not licenseId
   const cache = loadLicenseCache();
-  const userId = cache?.licenseId || id; // use licenseId as userId fallback
+  const userId = cache?.userId || cache?.licenseId || id;
 
   try {
     const { status } = await lmsFetch(`/api/heartbeat/${id}`, {

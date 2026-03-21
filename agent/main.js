@@ -371,11 +371,13 @@ ipcMain.handle('test-connections', async (_, cfg) => {
 
 ipcMain.handle('install-service', async (_, cfg) => {
   saveConfig(cfg);
+  const savedCfg = loadConfig() || cfg; // reload from disk after save
+
   if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
   exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {});
 
   await new Promise(r => setTimeout(r, 1500));
-  spawnServer(cfg);
+  spawnServer(savedCfg);
 
   for (let i = 0; i < 10; i++) {
     await new Promise(r => setTimeout(r, 1000));
@@ -496,11 +498,18 @@ ipcMain.handle('stop-service', async () => {
 
 ipcMain.handle('save-and-restart', async (_, cfg) => {
   saveConfig(cfg);
+
+  // Always reload from disk after save — ensures spawnServer sees the full
+  // tallyCompanies array, not a potentially trimmed in-memory copy
+  const savedCfg = loadConfig() || cfg;
+
   if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
   exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {});
   await new Promise(r => setTimeout(r, 1500));
-  spawnServer(cfg);
+  spawnServer(savedCfg);
   updateTray();
+
+  logger.info(`[Config] Service restarted with companies: [${getCompanies(savedCfg).join(', ')}]`);
   return { success: true };
 });
 
@@ -595,6 +604,66 @@ app.whenReady().then(async () => {
   }
 });
 
+// ── Plan transition handler ───────────────────────────────────────────────────
+// Called when re-validation detects a plan change (expiry → new purchase, upgrade, downgrade)
+async function handlePlanTransition(newResult) {
+  try {
+    const newCompanyLimit = Number(newResult.features['company-limit']) || 1;
+    const currentCfg      = loadConfig() || {};
+    const currentCompanies = getCompanies(currentCfg);
+
+    if (currentCompanies.length > newCompanyLimit) {
+      // New plan allows fewer companies — trim excess automatically
+      const trimmed = currentCompanies.slice(0, newCompanyLimit);
+      const removed = currentCompanies.slice(newCompanyLimit);
+
+      currentCfg.tallyCompanies = trimmed;
+      currentCfg.tallyCompany   = trimmed[0] || '';
+      currentCfg.activeCompany  = trimmed[0] || '';
+      saveConfig(currentCfg);
+
+      // Sync corrected count to LMS
+      try {
+        const { updateCompanyUsage } = require('../src/services/lmsService');
+        await updateCompanyUsage(trimmed.length);
+      } catch(e) {
+        logger.warn('[LMS] Company usage sync after plan transition failed: ' + e.message);
+      }
+
+      // Restart server with trimmed company list
+      spawnServer(currentCfg);
+
+      logger.info(`[LMS] Plan transition — companies trimmed: ${currentCompanies.length} → ${trimmed.length}`, {
+        kept: trimmed, removed
+      });
+
+      dialog.showMessageBox(null, {
+        type: 'warning',
+        title: 'Companies Adjusted',
+        message: `Your new plan (${newResult.plan}) supports up to ${newCompanyLimit} ${newCompanyLimit === 1 ? 'company' : 'companies'}.`,
+        detail: `Kept: ${trimmed.join(', ')}\nRemoved: ${removed.join(', ')}\n\nYou can update this in Settings.`,
+        buttons: ['OK']
+      });
+
+    } else {
+      // New plan allows same or more — just restart with existing config
+      spawnServer(currentCfg);
+      logger.info(`[LMS] Plan transition — no company trim needed (${currentCompanies.length} companies within new limit of ${newCompanyLimit})`);
+    }
+
+    // Reset usage cache to match actual company count
+    try {
+      const { saveUsageCache } = require('../src/services/lmsService');
+      saveUsageCache({ companyCount: Math.min(currentCompanies.length, newCompanyLimit) });
+    } catch(e) {
+      logger.warn('[LMS] Usage cache reset after plan transition failed: ' + e.message);
+    }
+
+  } catch(e) {
+    logger.error('[LMS] handlePlanTransition failed: ' + e.message);
+  }
+}
+
 async function bootstrapLicense(cfg) {
   try {
     const { validateLicense, startHeartbeat, startRevalidation } = require('../src/services/lmsService');
@@ -609,18 +678,27 @@ async function bootstrapLicense(cfg) {
       setFeatures(result.features, result.plan);
 
       startHeartbeat(result.licenseId);
+      logger.info(`[LMS] Heartbeat started for licenseId: ${result.licenseId}`);
 
-      // On restart: only correct cache upward — LMS count never goes down
+      // On startup: always read fresh config from disk — cfg param may be stale
+      // if settings were saved and service restarted before bootstrapLicense ran
       try {
-        const { loadUsageCache, saveUsageCache } = require('../src/services/lmsService');
-        const companies   = getCompanies(cfg);
+        const { loadUsageCache, saveUsageCache, updateCompanyUsage } = require('../src/services/lmsService');
+        const freshCfg    = loadConfig() || cfg;           // always read from disk
+        const companies   = getCompanies(freshCfg);
         const usageCache  = loadUsageCache();
         const cachedCount = usageCache.companyCount || 0;
+
+        logger.info(`[LMS] Startup company check — disk: ${companies.length}, cache: ${cachedCount}, companies: [${companies.join(', ')}]`);
+
         if (companies.length > cachedCount) {
-          logger.info(`[LMS] Startup: local count (${companies.length}) > cache (${cachedCount}) — correcting cache upward`);
+          logger.info(`[LMS] Startup: local count (${companies.length}) > cache (${cachedCount}) — syncing delta to LMS`);
+          await updateCompanyUsage(companies.length);
+        } else if (companies.length < cachedCount) {
+          logger.info(`[LMS] Startup: local count (${companies.length}) < cache (${cachedCount}) — updating local cache only`);
           saveUsageCache({ companyCount: companies.length });
         } else {
-          logger.info(`[LMS] Startup: cache (${cachedCount}) >= local (${companies.length}) — no correction needed`);
+          logger.info(`[LMS] Startup: company count in sync (${companies.length}) — no correction needed`);
         }
       } catch(e) {
         logger.warn('[LMS] Startup usage cache sync failed: ' + e.message);
@@ -628,25 +706,45 @@ async function bootstrapLicense(cfg) {
 
       // Start periodic re-validation every 6 hours
       startRevalidation(cfg.customerEmail, async (newResult) => {
+
+        // ── Case 1: License expired / no longer valid ────────────────────
         if (!newResult.valid) {
           applyStarterFallback();
           _licenseValid = false;
-          _licensePlan  = 'Starter (fallback)';
+          _licensePlan  = 'Expired';
           const { restartScheduler } = require('../src/scheduler');
           restartScheduler();
           dialog.showMessageBox(null, {
             type: 'warning', title: 'License Expired',
-            message: 'Your license has expired. Sync stopped.',
+            message: 'Your license has expired. Running in Starter mode (outstanding sync only) until you renew or purchase a new plan.',
             buttons: ['OK']
           });
-        } else if (newResult.plan !== previousPlan) {
-          // Plan changed — update features and restart scheduler
+          updateTray();
+          return;
+        }
+
+        // ── Case 2: New license purchased after expiry OR plan changed ───
+        if (newResult.plan !== previousPlan) {
+          logger.info(`[LMS] Plan transition: ${previousPlan} → ${newResult.plan}`);
+
           setFeatures(newResult.features, newResult.plan);
-          _licensePlan = newResult.plan;
+          _licenseValid = true;
+          _licensePlan  = newResult.plan;
+
+          // Auto-enforce company limit — trim excess if new plan allows fewer
+          await handlePlanTransition(newResult);
+
           const { restartScheduler } = require('../src/scheduler');
           restartScheduler();
-          logger.info(`[LMS] Plan changed from ${previousPlan} to ${newResult.plan} — scheduler restarted`);
+
+          dialog.showMessageBox(null, {
+            type: 'info', title: 'Plan Updated',
+            message: `Your plan has been updated to ${newResult.plan}.`,
+            detail: 'Sync schedule and features have been updated automatically.',
+            buttons: ['OK']
+          });
         }
+
         updateTray();
       });
       // Log registry info if available

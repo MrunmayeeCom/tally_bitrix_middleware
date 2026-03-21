@@ -845,6 +845,8 @@ function removeCompanyTag(company, context) {
     _settingsCompanies = _settingsCompanies.filter(c => c !== company);
     renderSettingsTags();
     populateDropdown('s-company-dropdown', _settingsScannedList, _settingsCompanies);
+    // ── Sync removal to LMS immediately ──
+    syncCompanyUsageToLMS(_settingsCompanies.length);
   } else {
     _companies = _companies.filter(c => c !== company);
     renderSetupTags();
@@ -923,6 +925,8 @@ function removeSettingsCompany(index) {
   _settingsCompanies.splice(index, 1);
   renderSettingsTags();
   populateDropdown('s-company-dropdown', _settingsScannedList, _settingsCompanies);
+  // ── Sync removal to LMS immediately ──
+  syncCompanyUsageToLMS(_settingsCompanies.length);
 }
 
 // keep legacy list render for backward compat (used in loadSettings)
@@ -1517,6 +1521,22 @@ async function loadSettings() {
   _settingsCompanies = Array.isArray(cfg.tallyCompanies) && cfg.tallyCompanies.length
     ? [...cfg.tallyCompanies]
     : cfg.tallyCompany ? [cfg.tallyCompany] : [];
+
+  // Auto-enforce company limit — if plan was downgraded, trim excess silently
+  _companyLimit = Number(features['company-limit']) || 1;
+  if (_settingsCompanies.length > _companyLimit) {
+    const removed = _settingsCompanies.splice(_companyLimit);
+    showToast(`Plan limit: removed ${removed.join(', ')} — only ${_companyLimit} ${_companyLimit === 1 ? 'company' : 'companies'} allowed on your plan`, 'error');
+    // Auto-save trimmed list
+    const trimmedCfg = {
+      ...cfg,
+      tallyCompanies: [..._settingsCompanies],
+      tallyCompany:   _settingsCompanies[0] || '',
+      activeCompany:  _settingsCompanies[0] || ''
+    };
+    ipcRenderer.invoke('save-and-restart', trimmedCfg).catch(() => {});
+  }
+
   _settingsCompaniesBaseline = _settingsCompanies.length;
   renderSettingsCompanyList();
   renderSettingsSelectedPills();
