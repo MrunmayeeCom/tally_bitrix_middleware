@@ -21,6 +21,14 @@ function saveHistory(history) {
 }
 
 function recordSync(result) {
+  // Gate: sync-history — if disabled on plan, don't write history
+  try {
+    const featureGate = require('../services/featureGate');
+    if (!featureGate.isEnabled('sync-history')) {
+      return; // silently skip — no history on this plan
+    }
+  } catch {} // if featureGate unavailable, always write
+
   const history = loadHistory();
 
   // Read active company at time of sync

@@ -75,19 +75,25 @@ function mapInvoiceToVoucher(invoice) {
 
 // Map Tally Outstanding → Bitrix24 Deal fields
 function mapOutstandingToDeal(outstanding) {
+  const featureGate = (() => { try { return require('../services/featureGate'); } catch { return null; } })();
+  const fullMapping = !featureGate || featureGate.isEnabled('deal-field-mapping');
+
   const fields = {
-    TITLE:           outstanding.partyName
-                       ? `${outstanding.partyName} - ${outstanding.voucherNumber}`
-                       : `Invoice - ${outstanding.voucherNumber}`,
-    OPPORTUNITY:     outstanding.pendingAmount,
-    CURRENCY_ID:     outstanding.currency || 'INR',
-    CLOSEDATE:       outstanding.dueDate || '',
-    COMMENTS:        `Bill Date: ${outstanding.billDate} | Days Pending: ${outstanding.daysPending}`,
-    UF_BILL_DATE:    outstanding.billDate,
-    UF_DUE_DATE:     outstanding.dueDate,
-    UF_BILL_AMOUNT:  outstanding.billAmount,
-    UF_OUTSTANDING:  outstanding.pendingAmount,
-    UF_DAYS_PENDING: outstanding.daysPending
+    TITLE:       outstanding.partyName
+                   ? `${outstanding.partyName} - ${outstanding.voucherNumber}`
+                   : `Invoice - ${outstanding.voucherNumber}`,
+    OPPORTUNITY: outstanding.pendingAmount,
+    CURRENCY_ID: outstanding.currency || 'INR',
+    CLOSEDATE:   outstanding.dueDate || '',
+    // Extended fields — only when deal-field-mapping is enabled
+    ...(fullMapping ? {
+      COMMENTS:        `Bill Date: ${outstanding.billDate} | Days Pending: ${outstanding.daysPending}`,
+      UF_BILL_DATE:    outstanding.billDate,
+      UF_DUE_DATE:     outstanding.dueDate,
+      UF_BILL_AMOUNT:  outstanding.billAmount,
+      UF_OUTSTANDING:  outstanding.pendingAmount,
+      UF_DAYS_PENDING: outstanding.daysPending
+    } : {})
   };
 
   if (outstanding.bitrixContactId) fields.CONTACT_ID = outstanding.bitrixContactId;

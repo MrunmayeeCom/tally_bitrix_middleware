@@ -75,9 +75,13 @@ async function findBitrixParty(partyName) {
         logger.info('Fetching ledger details from Tally', { partyName });
         ledger = await getLedgerByName(partyName);
         if (ledger) {
-          if (ledger.phone) fields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
-          if (ledger.email) fields.EMAIL = [{ VALUE: ledger.email, VALUE_TYPE: 'WORK' }];
-          if (ledger.gstin) fields.UF_CRM_GSTIN = ledger.gstin;
+          const fgCDM = (() => { try { return require('../services/featureGate'); } catch { return null; } })();
+          const customerMapping = !fgCDM || fgCDM.isEnabled('customer-details-mapping');
+          if (customerMapping) {
+            if (ledger.phone) fields.PHONE = [{ VALUE: ledger.phone, VALUE_TYPE: 'WORK' }];
+            if (ledger.email) fields.EMAIL = [{ VALUE: ledger.email, VALUE_TYPE: 'WORK' }];
+            if (ledger.gstin) fields.UF_CRM_GSTIN = ledger.gstin;
+          }
           logger.info('Ledger enrichment successful', {
             partyName,
             phone:   ledger.phone   || '—',
@@ -210,6 +214,15 @@ async function closePaidDeals(currentVoucherNumbers) {
 async function processOutstanding() {
   try {
     logger.info('Outstanding sync started');
+
+    // Gate: bill-as-deal — if disabled, skip entire outstanding sync
+    try {
+      const featureGate = require('../services/featureGate');
+      if (!featureGate.isEnabled('bill-as-deal')) {
+        logger.info('[LMS] bill-as-deal not enabled on plan — skipping outstanding sync');
+        return { success: true, processed: 0, skipped: true };
+      }
+    } catch {}
 
     // Enforce user-limit — cap how many unique parties are synced
     let _userLimit = 0;

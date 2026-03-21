@@ -27,6 +27,10 @@ async function handleWebhook(req, res) {
           logger.info('contact-sync not enabled on current plan — skipping', { entityId });
           break;
         }
+        if (!featureGate.isEnabled('ledger-creation')) {
+          logger.info('ledger-creation not enabled on current plan — skipping Tally ledger write', { entityId });
+          break;
+        }
         const contactSource = payload.data?.FIELDS?.SOURCE_DESCRIPTION || '';
         if (contactSource === 'TALLY_SYNC') {
           logger.info('Skipping webhook — contact was auto-created by Tally sync, not a user action', { entityId });
@@ -40,6 +44,10 @@ async function handleWebhook(req, res) {
       case 'ONCRMCOMPANYUPDATE': {
         if (!featureGate.isEnabled('company-sync')) {
           logger.info('company-sync not enabled on current plan — skipping', { entityId });
+          break;
+        }
+        if (!featureGate.isEnabled('ledger-creation')) {
+          logger.info('ledger-creation not enabled on current plan — skipping Tally ledger write', { entityId });
           break;
         }
         const companySource = payload.data?.FIELDS?.SOURCE_DESCRIPTION || '';
