@@ -234,6 +234,25 @@
   ::-webkit-scrollbar-track{background:transparent;}
   ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px;}
 
+  /* ── dropdown select styling ── */
+  select{
+    background:var(--surface) !important;
+    color:var(--text) !important;
+    border:1px solid var(--border2);
+    border-radius:8px;
+    font-family:'DM Sans',sans-serif;
+  }
+  select option{
+    background:var(--surface2);
+    color:var(--text);
+    padding:8px;
+  }
+  select:focus{
+    border-color:var(--accent);
+    outline:none;
+    box-shadow:0 0 0 3px rgba(79,123,255,.1);
+  }
+
   .toast{
     position:fixed;bottom:14px;left:50%;transform:translateX(-50%) translateY(100px);
     background:#1e2a3a;border:1px solid var(--border2);border-radius:8px;
@@ -293,12 +312,56 @@
       </div>
       <div class="field">
         <label>Tally Companies</label>
-        <div id="company-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"></div>
-        <div style="display:flex;gap:8px;">
-          <input id="tallyCompanyInput" type="text" placeholder="Exact company name as shown in Tally" style="flex:1;padding:10px 14px;background:var(--surface);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;outline:none;"/>
-          <button onclick="addCompany()" style="padding:10px 16px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13px;white-space:nowrap;">+ Add</button>
+
+        <!-- Scan + Dropdown row -->
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <div style="position:relative;flex:1;">
+            <select id="setup-company-dropdown"
+              style="width:100%;padding:10px 36px 10px 14px;
+              background:var(--surface);border:1px solid var(--border2);
+              border-radius:8px;color:var(--muted);font-family:'DM Sans',sans-serif;
+              font-size:13px;outline:none;appearance:none;cursor:pointer;transition:.2s;"
+              onchange="addCompanyFromDropdown(this.value, 'setup')">
+              <option value="">— Select a company —</option>
+            </select>
+            <span style="position:absolute;right:12px;top:50%;transform:translateY(-50%);
+              pointer-events:none;color:var(--muted);font-size:11px;">▼</span>
+          </div>
+          <button id="scan-btn" onclick="scanTallyCompanies()"
+            title="Scan Tally for companies"
+            style="padding:10px 14px;border-radius:8px;border:1.5px solid var(--accent);
+            background:rgba(79,123,255,.1);color:var(--accent);font-size:13px;
+            cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap;
+            display:flex;align-items:center;gap:6px;transition:.2s;flex-shrink:0;">
+            <span id="scan-icon">🔍</span>
+            <span id="scan-label">Scan</span>
+          </button>
         </div>
-        <div class="hint" id="company-limit-hint">Must match exactly — case sensitive</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">
+          Make sure Tally is open — click Scan to load companies
+        </div>
+
+        <!-- Selected company tags -->
+        <div id="setup-selected-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;min-height:0;"></div>
+
+        <!-- Manual fallback -->
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+          <span style="font-size:11px;color:var(--muted);">Not in list?</span>
+          <span onclick="toggleManualEntry()"
+            style="font-size:11px;color:var(--accent);cursor:pointer;font-weight:500;">Add manually</span>
+        </div>
+        <div id="manual-entry" style="display:none;margin-bottom:8px;">
+          <div style="display:flex;gap:8px;">
+            <input id="tallyCompanyInput" type="text" placeholder="Exact name as in Tally"
+              style="flex:1;padding:9px 12px;background:var(--surface);border:1px solid var(--border2);
+              border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;"
+              onkeydown="if(event.key==='Enter')addManualCompany()"/>
+            <button onclick="addManualCompany()"
+              style="padding:9px 14px;background:var(--accent);color:#fff;border:none;
+              border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;">+ Add</button>
+          </div>
+        </div>
+        <div class="hint" id="company-limit-hint">Select companies to sync — case sensitive</div>
       </div>
       <button class="btn btn-primary" onclick="goStep(3)">Continue →</button>
       <button class="btn btn-outline" onclick="goStep(1)">← Back</button>
@@ -482,19 +545,53 @@
     </div>
     <div class="field">
       <label>Tally Companies</label>
-      <div id="s-company-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"></div>
-      <div style="display:flex;gap:8px;">
-        <input id="s-tallyCompanyInput" type="text"
-          placeholder="Exact company name as shown in Tally"
-          style="flex:1;padding:10px 14px;background:var(--surface);border:1px solid var(--border2);
-          border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;outline:none;"/>
-        <button onclick="addSettingsCompany()"
-          style="padding:10px 16px;background:var(--accent);color:#fff;border:none;
-          border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13px;white-space:nowrap;">
-          + Add
+
+      <!-- Scan + Dropdown row -->
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="position:relative;flex:1;">
+          <select id="s-company-dropdown"
+            style="width:100%;padding:10px 36px 10px 14px;
+            background:var(--surface);border:1px solid var(--border2);
+            border-radius:8px;color:var(--muted);font-family:'DM Sans',sans-serif;
+            font-size:13px;outline:none;appearance:none;cursor:pointer;transition:.2s;"
+            onchange="addCompanyFromDropdown(this.value, 'settings')">
+            <option value="">— Select a company —</option>
+          </select>
+          <span style="position:absolute;right:12px;top:50%;transform:translateY(-50%);
+            pointer-events:none;color:var(--muted);font-size:11px;">▼</span>
+        </div>
+        <button id="s-scan-btn" onclick="scanSettingsCompanies()"
+          title="Scan Tally for companies"
+          style="padding:10px 14px;border-radius:8px;border:1.5px solid var(--accent);
+          background:rgba(79,123,255,.1);color:var(--accent);font-size:13px;
+          cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap;
+          display:flex;align-items:center;gap:6px;transition:.2s;flex-shrink:0;">
+          <span id="s-scan-icon">🔍</span>
+          <span id="s-scan-label">Scan</span>
         </button>
       </div>
-      <div class="hint" id="s-company-limit-hint">Must match exactly — case sensitive</div>
+
+      <!-- Selected company tags -->
+      <div id="s-selected-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;min-height:0;"></div>
+
+      <!-- Manual fallback -->
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+        <span style="font-size:11px;color:var(--muted);">Not in list?</span>
+        <span onclick="toggleSettingsManual()"
+          style="font-size:11px;color:var(--accent);cursor:pointer;font-weight:500;">Add manually</span>
+      </div>
+      <div id="s-manual-entry" style="display:none;margin-bottom:8px;">
+        <div style="display:flex;gap:8px;">
+          <input id="s-tallyCompanyInput" type="text" placeholder="Exact name as in Tally"
+            style="flex:1;padding:9px 12px;background:var(--surface);border:1px solid var(--border2);
+            border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;"
+            onkeydown="if(event.key==='Enter')addSettingsCompany()"/>
+          <button onclick="addSettingsCompany()"
+            style="padding:9px 14px;background:var(--accent);color:#fff;border:none;
+            border-radius:8px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;">+ Add</button>
+        </div>
+      </div>
+      <div class="hint" id="s-company-limit-hint">Select companies to sync</div>
     </div>
     <button class="btn btn-primary" onclick="saveSettings()">Save & Restart Service</button>
     <button class="btn btn-outline" id="btn-test-settings" onclick="testSettingsConnection()">Test Connection</button>
@@ -645,8 +742,12 @@ function prefillSetup(cfg) {
   } else if (cfg.tallyCompany) {
     _companies = [cfg.tallyCompany];
   }
-  renderCompanyList();
+  renderSelectedPills();
   updateCompanyHint();
+  // If we have companies, show them in scan results as pre-checked
+  if (_companies.length > 0) {
+    renderScannedCompanies(_companies);
+  }
 }
 
 // ── setup wizard ────────────────────────────────────────────────────────────
@@ -702,49 +803,219 @@ async function syncCompanyUsageToLMS(count) {
   }
 }
 
+// ── shared dropdown helpers ────────────────────────────────────────────────
+
+function populateDropdown(selectId, companies, selectedList) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const current = sel.value;
+  // Keep placeholder, rebuild options
+  sel.innerHTML = '<option value="">— Select a company —</option>';
+  companies.forEach(c => {
+    if (selectedList.includes(c)) return; // already selected — hide from dropdown
+    const opt = document.createElement('option');
+    opt.value = c;
+    opt.textContent = c;
+    sel.appendChild(opt);
+  });
+  sel.value = '';
+}
+
+function addCompanyFromDropdown(company, context) {
+  if (!company) return;
+  if (context === 'settings') {
+    if (_settingsCompanies.includes(company)) return;
+    if (_settingsCompanies.length >= _companyLimit) { showUpgradePrompt(_companyLimit); return; }
+    _settingsCompanies.push(company);
+    renderSettingsTags();
+    populateDropdown('s-company-dropdown', _settingsScannedList, _settingsCompanies);
+    syncCompanyUsageToLMS(_settingsCompanies.length);
+  } else {
+    if (_companies.includes(company)) return;
+    if (_companies.length >= _companyLimit) { showUpgradePrompt(_companyLimit); return; }
+    _companies.push(company);
+    renderSetupTags();
+    populateDropdown('setup-company-dropdown', _setupScannedList, _companies);
+    updateCompanyHint();
+  }
+}
+
+function removeCompanyTag(company, context) {
+  if (context === 'settings') {
+    _settingsCompanies = _settingsCompanies.filter(c => c !== company);
+    renderSettingsTags();
+    populateDropdown('s-company-dropdown', _settingsScannedList, _settingsCompanies);
+  } else {
+    _companies = _companies.filter(c => c !== company);
+    renderSetupTags();
+    populateDropdown('setup-company-dropdown', _setupScannedList, _companies);
+    updateCompanyHint();
+  }
+}
+
+// ── Settings company UI ────────────────────────────────────────────────────
+
+let _settingsScannedList = [];
+
+function renderSettingsTags() {
+  const wrap = document.getElementById('s-selected-tags');
+  if (!wrap) return;
+  if (_settingsCompanies.length === 0) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = _settingsCompanies.map((c, i) => `
+    <span style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;
+      border-radius:20px;border:1.5px solid var(--accent2);background:rgba(56,217,169,.08);
+      font-size:12px;color:var(--accent2);font-weight:500;">
+      ${i === 0 ? '⭐ ' : ''}${c}
+      <span onclick="removeCompanyTag('${c.replace(/'/g,"\\'")}','settings')"
+        style="cursor:pointer;opacity:.5;font-size:14px;line-height:1;margin-left:2px;">×</span>
+    </span>`).join('');
+  const hint = document.getElementById('s-company-limit-hint');
+  if (hint) hint.textContent = `${_settingsCompanies.length} / ${_companyLimit} companies selected`;
+}
+
+async function scanSettingsCompanies() {
+  const btn   = document.getElementById('s-scan-btn');
+  const icon  = document.getElementById('s-scan-icon');
+  const label = document.getElementById('s-scan-label');
+  icon.textContent = '⏳'; label.textContent = 'Scanning…';
+  btn.style.opacity = '0.6'; btn.style.pointerEvents = 'none';
+  try {
+    const r = await fetch('http://localhost:3000/api/tally/companies', { signal: AbortSignal.timeout(5000) });
+    const data = await r.json();
+    if (!data.success || !data.companies?.length) throw new Error(data.error || 'No companies found');
+    _settingsScannedList = data.companies;
+    populateDropdown('s-company-dropdown', _settingsScannedList, _settingsCompanies);
+    icon.textContent = '✓'; label.textContent = `${data.companies.length} found`;
+    btn.style.background = 'rgba(56,217,169,.1)';
+    btn.style.borderColor = 'var(--accent2)'; btn.style.color = 'var(--accent2)';
+    showToast(`Found ${data.companies.length} companies ✓`, 'success');
+  } catch(e) {
+    icon.textContent = '⚠️'; label.textContent = 'Failed';
+    btn.style.borderColor = 'var(--danger)'; btn.style.color = 'var(--danger)';
+    btn.style.background = 'rgba(255,92,106,.1)';
+    showToast('Scan failed — is Tally running?', 'error');
+  }
+  btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
+}
+
+function toggleSettingsManual() {
+  const el = document.getElementById('s-manual-entry');
+  el.style.display = el.style.display === 'none' || !el.style.display ? 'block' : 'none';
+}
+
 function addSettingsCompany() {
   const input = document.getElementById('s-tallyCompanyInput');
   const name  = input?.value.trim();
   if (!name) { showToast('Enter a company name', 'error'); return; }
   if (_settingsCompanies.includes(name)) { showToast('Already added', 'error'); return; }
-  if (_settingsCompanies.length >= _companyLimit) {
-    showUpgradePrompt(_companyLimit);
-    return;
-  }
+  if (_settingsCompanies.length >= _companyLimit) { showUpgradePrompt(_companyLimit); return; }
   _settingsCompanies.push(name);
-  input.value = '';
-  renderSettingsCompanyList();
+  if (input) input.value = '';
+  renderSettingsTags();
+  // Add to scanned list if not present so it shows in dropdown for others
+  if (!_settingsScannedList.includes(name)) _settingsScannedList.push(name);
+  populateDropdown('s-company-dropdown', _settingsScannedList, _settingsCompanies);
   syncCompanyUsageToLMS(_settingsCompanies.length);
 }
 
 function removeSettingsCompany(index) {
+  const company = _settingsCompanies[index];
   _settingsCompanies.splice(index, 1);
-  renderSettingsCompanyList();
-  syncCompanyUsageToLMS(_settingsCompanies.length);
+  renderSettingsTags();
+  populateDropdown('s-company-dropdown', _settingsScannedList, _settingsCompanies);
 }
 
-function addCompany() {
+// keep legacy list render for backward compat (used in loadSettings)
+function renderSettingsCompanyList() { renderSettingsTags(); }
+function renderSettingsSelectedPills() { renderSettingsTags(); }
+
+// ── Setup wizard company UI ────────────────────────────────────────────────
+
+let _setupScannedList = [];
+
+function renderSetupTags() {
+  const wrap = document.getElementById('setup-selected-tags');
+  if (!wrap) return;
+  if (_companies.length === 0) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = _companies.map((c, i) => `
+    <span style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;
+      border-radius:20px;border:1.5px solid var(--accent2);background:rgba(56,217,169,.08);
+      font-size:12px;color:var(--accent2);font-weight:500;">
+      ${i === 0 ? '⭐ ' : ''}${c}
+      <span onclick="removeCompanyTag('${c.replace(/'/g,"\\'")}','setup')"
+        style="cursor:pointer;opacity:.5;font-size:14px;line-height:1;margin-left:2px;">×</span>
+    </span>`).join('');
+}
+
+async function scanTallyCompanies() {
+  const btn   = document.getElementById('scan-btn');
+  const icon  = document.getElementById('scan-icon');
+  const label = document.getElementById('scan-label');
+  icon.textContent = '⏳'; label.textContent = 'Scanning…';
+  btn.style.opacity = '0.6'; btn.style.pointerEvents = 'none';
+  try {
+    let data;
+    try {
+      const r = await fetch('http://localhost:3000/api/tally/companies', { signal: AbortSignal.timeout(4000) });
+      data = await r.json();
+    } catch {
+      data = await ipcRenderer.invoke('scan-tally-companies');
+    }
+    if (!data.success || !data.companies?.length) throw new Error(data.error || 'No companies found');
+    _setupScannedList = data.companies;
+    populateDropdown('setup-company-dropdown', _setupScannedList, _companies);
+    icon.textContent = '✓'; label.textContent = `${data.companies.length} found`;
+    btn.style.background = 'rgba(56,217,169,.1)';
+    btn.style.borderColor = 'var(--accent2)'; btn.style.color = 'var(--accent2)';
+    showToast(`Found ${data.companies.length} companies ✓`, 'success');
+  } catch(e) {
+    icon.textContent = '⚠️'; label.textContent = 'Failed';
+    btn.style.borderColor = 'var(--danger)'; btn.style.color = 'var(--danger)';
+    btn.style.background = 'rgba(255,92,106,.1)';
+    showToast('Scan failed — is Tally open?', 'error');
+  }
+  btn.style.pointerEvents = 'auto'; btn.style.opacity = '1';
+}
+
+function toggleManualEntry() {
+  const el = document.getElementById('manual-entry');
+  el.style.display = el.style.display === 'none' || !el.style.display ? 'block' : 'none';
+}
+
+function addManualCompany() {
   const input = document.getElementById('tallyCompanyInput');
   const name  = input?.value.trim();
   if (!name) { showToast('Enter a company name', 'error'); return; }
-  if (_companies.includes(name)) { showToast('Company already added', 'error'); return; }
-
-  if (_companies.length >= _companyLimit) {
-    // Show upgrade prompt
-    showUpgradePrompt(_companyLimit);
-    return;
-  }
-
+  if (_companies.includes(name)) { showToast('Already added', 'error'); return; }
+  if (_companies.length >= _companyLimit) { showUpgradePrompt(_companyLimit); return; }
   _companies.push(name);
-  input.value = '';
-  renderCompanyList();
+  if (input) input.value = '';
+  renderSetupTags();
+  if (!_setupScannedList.includes(name)) _setupScannedList.push(name);
+  populateDropdown('setup-company-dropdown', _setupScannedList, _companies);
   updateCompanyHint();
 }
 
+function addCompany() { addManualCompany(); }
+
 function removeCompany(index) {
+  const company = _companies[index];
   _companies.splice(index, 1);
-  renderCompanyList();
+  renderSetupTags();
+  populateDropdown('setup-company-dropdown', _setupScannedList, _companies);
   updateCompanyHint();
+}
+
+// keep legacy pill renders as aliases
+function renderSelectedPills()  { renderSetupTags(); }
+function renderCompanyList()    { renderSetupTags(); }
+function renderScannedCompanies(companies) {
+  _setupScannedList = companies;
+  populateDropdown('setup-company-dropdown', _setupScannedList, _companies);
+}
+function renderSettingsScanResults(companies) {
+  _settingsScannedList = companies;
+  populateDropdown('s-company-dropdown', _settingsScannedList, _settingsCompanies);
 }
 
 function updateCompanyHint() {
@@ -1000,11 +1271,13 @@ async function loadDashboard() {
   if (plan) {
     // Cache plan name for offline display
     try { localStorage.setItem('tbs_license_plan', plan); } catch {}
+    const userLimitVal = Number(features['user-limit']) || 0;
     document.getElementById('status-sub').textContent =
       `Outstanding every ${interval}min` +
       (ledger  ? ` · Ledgers every ${interval}min` : '') +
       (dueDate ? ' · Due dates every 1hr'          : '') +
-      ` · Plan: ${plan}`;
+      ` · Plan: ${plan}` +
+      ` · Parties: ${userLimitVal > 0 ? userLimitVal : 'Unlimited'}`;
   }
 
   // Update company limit for setup wizard and settings
@@ -1246,13 +1519,18 @@ async function loadSettings() {
     : cfg.tallyCompany ? [cfg.tallyCompany] : [];
   _settingsCompaniesBaseline = _settingsCompanies.length;
   renderSettingsCompanyList();
+  renderSettingsSelectedPills();
+  // Pre-populate scan results with existing companies so user can see them checked
+  if (_settingsCompanies.length > 0) {
+    renderSettingsScanResults(_settingsCompanies);
+  }
 
   // Sync schedule — uses features with fallback so never shows Unknown
   const interval     = Number(features['auto-sync'])   || 60;
   const ledger       = features['contact-sync']        || features['company-sync'];
   const dueDate      = features['due-date-automation'];
   const plan         = status.license?.plan            || 'Business';
-  const userLimit    = features['user-limit']          || 'Unlimited';
+  const userLimit    = Number(features['user-limit'])  || 0;
   const companyLimit = features['company-limit']       || 5;
   const scheduleEl   = document.getElementById('sync-schedule-info');
   if (scheduleEl) {
@@ -1261,8 +1539,8 @@ async function loadSettings() {
       `🔄 Outstanding sync — Every ${interval} minutes · Plan: ${plan}<br/>` +
       (ledger  ? `👥 Ledger sync — Every ${interval} minutes<br/>` : '') +
       (dueDate ? `🔔 Due date automation — Every 1 hour<br/>`       : '') +
-      `👤 Max parties synced — ${userLimit}<br/>` +
-      `🏢 Tally companies — ${companyLimit}`;
+      `👤 Parties per sync — <strong style="color:var(--accent2)">${userLimit > 0 ? userLimit : 'Unlimited'}</strong><br/>` +
+      `🏢 Tally companies — <strong style="color:var(--accent2)">${companyLimit}</strong>`;
   }
 }
 

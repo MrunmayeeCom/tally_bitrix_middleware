@@ -564,6 +564,15 @@ ipcMain.handle('update-company-usage', async (_, count) => {
   }
 });
 
+ipcMain.handle('scan-tally-companies', async () => {
+  try {
+    const { getCompanyList } = require('../src/connectors/tallyConnector');
+    return await getCompanyList();
+  } catch(e) {
+    return { success: false, error: e.message, companies: [] };
+  }
+});
+
 ipcMain.on('close-window',    () => { if (mainWindow) mainWindow.hide(); });
 ipcMain.on('minimize-window', () => { if (mainWindow) mainWindow.minimize(); });
 
@@ -600,6 +609,22 @@ async function bootstrapLicense(cfg) {
       setFeatures(result.features, result.plan);
 
       startHeartbeat(result.licenseId);
+
+      // On restart: only correct cache upward — LMS count never goes down
+      try {
+        const { loadUsageCache, saveUsageCache } = require('../src/services/lmsService');
+        const companies   = getCompanies(cfg);
+        const usageCache  = loadUsageCache();
+        const cachedCount = usageCache.companyCount || 0;
+        if (companies.length > cachedCount) {
+          logger.info(`[LMS] Startup: local count (${companies.length}) > cache (${cachedCount}) — correcting cache upward`);
+          saveUsageCache({ companyCount: companies.length });
+        } else {
+          logger.info(`[LMS] Startup: cache (${cachedCount}) >= local (${companies.length}) — no correction needed`);
+        }
+      } catch(e) {
+        logger.warn('[LMS] Startup usage cache sync failed: ' + e.message);
+      }
 
       // Start periodic re-validation every 6 hours
       startRevalidation(cfg.customerEmail, async (newResult) => {

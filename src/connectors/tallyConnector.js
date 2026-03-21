@@ -52,4 +52,27 @@ async function sendToTally(xml) {
   }, { maxAttempts: 1, delayMs: 3000, label: 'Tally request', silent: true });
 }
 
-module.exports = { sendToTally };
+async function getCompanyList() {
+  const xml = `<ENVELOPE>
+    <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
+    <BODY>
+      <EXPORTDATA>
+        <REQUESTDESC>
+          <REPORTNAME>List of Companies</REPORTNAME>
+        </REQUESTDESC>
+      </EXPORTDATA>
+    </BODY>
+  </ENVELOPE>`;
+
+  try {
+    const response = await getTallyClient().post('/', xml);
+    const raw = response.data || '';
+    const matches = [...raw.matchAll(/<BASICCOMPANYNAME[^>]*>(.*?)<\/BASICCOMPANYNAME>/gi)];
+    const companies = matches.map(m => m[1].trim()).filter(Boolean);
+    return { success: true, companies };
+  } catch(e) {
+    return { success: false, error: e.message, companies: [] };
+  }
+}
+
+module.exports = { sendToTally, getTallyClient, getCompanyList };

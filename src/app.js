@@ -174,6 +174,17 @@ app.get('/api/lastsync', (req, res) => {
   res.json(getLastSync() || {});
 });
 
+// Scan Tally for available companies
+app.get('/api/tally/companies', async (req, res) => {
+  try {
+    const { getCompanyList } = require('./connectors/tallyConnector');
+    const result = await getCompanyList();
+    res.json(result);
+  } catch(e) {
+    res.json({ success: false, error: e.message, companies: [] });
+  }
+});
+
 // Get list of configured companies
 app.get('/api/companies', (req, res) => {
   const tallyConfig = require('./config/tallyConfig');

@@ -791,11 +791,13 @@ async function loadConnStatus() {
     const dueDateEnabled = f['due-date-automation'];
     const interval       = f['auto-sync'] || 60;
 
+    const userLimit = f['user-limit'];
     document.getElementById('next-meta').innerHTML =
       `Plan: <strong>${plan}</strong> · Valid till ${endDate}<br/>` +
       `Outstanding · ${interval}min` +
       (ledgerEnabled  ? ` · Ledgers · ${interval}min` : '') +
-      (dueDateEnabled ? ' · Due Dates · 1hr'          : '');
+      (dueDateEnabled ? ' · Due Dates · 1hr'          : '') +
+      `<br/>Parties per sync: <strong>${userLimit > 0 ? userLimit : 'Unlimited'}</strong>`;
 
   } catch {
     document.getElementById('cdot-bitrix').className = 'conn-dot offline';
