@@ -83,10 +83,10 @@ function getNodeExecutable() {
 
 function checkServiceStatus(cb) {
   if (userStoppedService) { serviceRunning = false; cb(false); return; }
-  // Primary check — is port 3000 actually responding?
+  // Primary check — is port 5050 actually responding?
   const http = require('http');
   const req = http.request({
-    hostname: 'localhost', port: 3000, path: '/health', method: 'GET', timeout: 2000
+    hostname: 'localhost', port: 5050, path: '/health', method: 'GET', timeout: 2000
   }, (res) => {
     serviceRunning = res.statusCode === 200;
     cb(serviceRunning);
@@ -107,7 +107,7 @@ function spawnServer(cfg) {
 
   const env = Object.assign({}, process.env, {
     NODE_ENV:           'production',
-    PORT:               '3000',
+    PORT:               '5050',
     BITRIX_WEBHOOK_URL: cfg.bitrixUrl,
     TALLY_HOST:         cfg.tallyHost,
     TALLY_PORT:         String(cfg.tallyPort),
@@ -174,7 +174,7 @@ function triggerLedgerSync() {
   if (cfg.apiKey) headers['x-api-key'] = cfg.apiKey;
 
   const probe = http.request(
-    { hostname: 'localhost', port: 3000, path: '/health', method: 'GET', timeout: 3000 },
+    { hostname: 'localhost', port: 5050, path: '/health', method: 'GET', timeout: 3000 },
     (res) => {
       res.resume();
       if (res.statusCode !== 200) {
@@ -183,7 +183,7 @@ function triggerLedgerSync() {
       }
       try {
         const req = http.request({
-          hostname: 'localhost', port: 3000,
+          hostname: 'localhost', port: 5050,
           path: '/sync/tally-to-bitrix', method: 'POST', headers
         }, (res) => { res.resume(); });
         req.on('error', () => {});
@@ -192,7 +192,7 @@ function triggerLedgerSync() {
       } catch {}
     }
   );
-  probe.on('error', () => dialog.showErrorBox('Service Not Running', 'Could not reach the sync service on port 3000.'));
+  probe.on('error', () => dialog.showErrorBox('Service Not Running', 'Could not reach the sync service on port 5050.'));
   probe.on('timeout', () => { probe.destroy(); dialog.showErrorBox('Timeout', 'Sync service timed out.'); });
   probe.end();
 }
@@ -206,7 +206,7 @@ function triggerSync() {
   function fireRequest(path) {
     try {
       const req = http.request({
-        hostname: 'localhost', port: 3000,
+        hostname: 'localhost', port: 5050,
         path, method: 'POST', headers
       }, (res) => { res.resume(); });
       req.on('error', () => {});
@@ -216,7 +216,7 @@ function triggerSync() {
   }
 
   const probe = http.request(
-    { hostname: 'localhost', port: 3000, path: '/health', method: 'GET', timeout: 3000 },
+    { hostname: 'localhost', port: 5050, path: '/health', method: 'GET', timeout: 3000 },
     (res) => {
       res.resume();
       if (res.statusCode !== 200) {
@@ -226,7 +226,7 @@ function triggerSync() {
       fireRequest('/sync/outstanding');
     }
   );
-  probe.on('error', () => dialog.showErrorBox('Service Not Running', 'Could not reach the sync service on port 3000.'));
+  probe.on('error', () => dialog.showErrorBox('Service Not Running', 'Could not reach the sync service on port 5050.'));
   probe.on('timeout', () => { probe.destroy(); dialog.showErrorBox('Timeout', 'Sync service timed out.'); });
   probe.end();
 }
@@ -258,7 +258,7 @@ function stopService() {
     try { serverProcess.kill(); } catch {}
     serverProcess = null;
   }
-  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {});
+  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5050\') do taskkill /F /PID %a', () => {});
   serviceRunning = false;
   updateTray();
 }
@@ -317,9 +317,9 @@ ipcMain.handle('test-connections', async (_, cfg) => {
     results.nodeError = 'Node.js is not installed. Download from nodejs.org';
     return results;
   }
-  exec('netstat -aon | findstr :3000', (err, stdout) => {
+  exec('netstat -aon | findstr :5050', (err, stdout) => {
     if (stdout && stdout.includes('LISTENING')) {
-      results.portWarning = 'Port 3000 is in use — existing service will be restarted';
+      results.portWarning = 'Port 5050 is in use — existing service will be restarted';
     }
   });
   // Test Bitrix24
@@ -374,7 +374,7 @@ ipcMain.handle('install-service', async (_, cfg) => {
   const savedCfg = loadConfig() || cfg; // reload from disk after save
 
   if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
-  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {});
+  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5050\') do taskkill /F /PID %a', () => {});
 
   await new Promise(r => setTimeout(r, 1500));
   spawnServer(savedCfg);
@@ -391,7 +391,7 @@ ipcMain.handle('install-service', async (_, cfg) => {
 ipcMain.handle('uninstall-service', async () => {
   userStoppedService = true;
   if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
-  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {});
+  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5050\') do taskkill /F /PID %a', () => {});
   try { fs.unlinkSync(CONFIG_PATH); } catch {}
   serviceRunning = false;
   updateTray();
@@ -436,7 +436,7 @@ ipcMain.handle('trigger-ledger-sync', async () => {
 
   try {
     const req = http.request({
-      hostname: 'localhost', port: 3000,
+      hostname: 'localhost', port: 5050,
       path: '/sync/tally-to-bitrix', method: 'POST', headers
     }, (res) => { res.resume(); });
     req.on('error', () => {});
@@ -533,7 +533,7 @@ ipcMain.handle('switch-company', async (_, company) => {
     const result = await new Promise((resolve, reject) => {
       const body = JSON.stringify({ company });
       const req = http.request({
-        hostname: 'localhost', port: 3000,
+        hostname: 'localhost', port: 5050,
         path: '/api/companies/switch', method: 'POST',
         headers: { ...headers, 'Content-Length': Buffer.byteLength(body) }
       }, (res) => {

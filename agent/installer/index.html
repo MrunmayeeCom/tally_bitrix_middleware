@@ -657,7 +657,7 @@ const ipcRenderer = (function() {
         return { success: true };
       }
 
-      const API = 'http://localhost:3000/api';
+      const API = 'http://localhost:5050/api';
       async function api(path, method = 'GET') {
         const res = await fetch(`${API}${path}`, { method });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -882,7 +882,7 @@ async function scanSettingsCompanies() {
   icon.textContent = '⏳'; label.textContent = 'Scanning…';
   btn.style.opacity = '0.6'; btn.style.pointerEvents = 'none';
   try {
-    const r = await fetch('http://localhost:3000/api/tally/companies', { signal: AbortSignal.timeout(5000) });
+    const r = await fetch('http://localhost:5050/api/tally/companies', { signal: AbortSignal.timeout(5000) });
     const data = await r.json();
     if (!data.success || !data.companies?.length) throw new Error(data.error || 'No companies found');
     _settingsScannedList = data.companies;
@@ -960,7 +960,7 @@ async function scanTallyCompanies() {
   try {
     let data;
     try {
-      const r = await fetch('http://localhost:3000/api/tally/companies', { signal: AbortSignal.timeout(4000) });
+      const r = await fetch('http://localhost:5050/api/tally/companies', { signal: AbortSignal.timeout(4000) });
       data = await r.json();
     } catch {
       data = await ipcRenderer.invoke('scan-tally-companies');

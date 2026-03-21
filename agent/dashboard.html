@@ -761,7 +761,7 @@ async function loadConnStatus() {
   try {
     await get('/health');
     document.getElementById('cdot-service').className = 'conn-dot live';
-    document.getElementById('csub-service').textContent = 'Running on port 3000';
+    document.getElementById('csub-service').textContent = 'Running on port 5050';
   } catch {
     document.getElementById('cdot-service').className = 'conn-dot offline';
     document.getElementById('csub-service').textContent = 'Unreachable';

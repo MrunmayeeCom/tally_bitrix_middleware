@@ -17,7 +17,7 @@ Node.js middleware that syncs data between Bitrix24 CRM and TallyPrime ERP.
 
 ## Environment Variables
 ```
-PORT=3000
+PORT=5050
 NODE_ENV=development
 BITRIX_WEBHOOK_URL=https://your-domain.bitrix24.com/rest/USER_ID/TOKEN
 TALLY_HOST=localhost
