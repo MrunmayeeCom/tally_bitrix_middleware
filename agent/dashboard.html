@@ -352,6 +352,17 @@ html,body{
     </div>
   </div>
 
+  <!-- Company switcher — populated by loadCompanySwitcher() -->
+  <div id="company-switcher-wrap" style="margin-bottom:14px;display:none;">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+      padding:12px 18px;box-shadow:var(--shadow);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span style="font-size:11px;font-weight:700;color:var(--sub);text-transform:uppercase;letter-spacing:.7px;">
+        🏢 Active Company
+      </span>
+      <div id="company-pills" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+    </div>
+  </div>
+
   <div class="next-bar">
     <div class="next-left">
       <span class="next-icon">🕐</span>
@@ -702,37 +713,25 @@ async function loadLastSync() {
 async function loadCompanySwitcher() {
   try {
     const data = await get('/api/companies');
-    if (!data.companies || data.companies.length === 0) return;
+    const wrap  = document.getElementById('company-switcher-wrap');
+    const pills = document.getElementById('company-pills');
+    if (!wrap || !pills) return;
 
-    const bar = document.getElementById('next-bar');
-    if (!bar) return;
+    if (!data.companies || data.companies.length <= 1) {
+      wrap.style.display = 'none';
+      return;
+    }
 
-    // Remove existing switcher to avoid duplicates on refresh
-    const existing = document.getElementById('company-switcher');
-    if (existing) existing.remove();
+    pills.innerHTML = data.companies.map(c => `
+      <button onclick="switchCompany('${c}')"
+        style="padding:5px 14px;border-radius:20px;border:1.5px solid ${c === data.active ? 'var(--green)' : 'var(--border2)'};
+        background:${c === data.active ? 'var(--greenbg)' : 'var(--card2)'};
+        color:${c === data.active ? 'var(--green)' : 'var(--sub)'};
+        font-size:11px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;transition:.15s;">
+        ${c === data.active ? '✓ ' : ''}${c}
+      </button>`).join('');
 
-    const switcher = document.createElement('div');
-    switcher.id = 'company-switcher';
-    switcher.style.cssText = 'margin-bottom:14px;';
-    switcher.innerHTML = `
-      <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--r);
-        padding:12px 18px;box-shadow:var(--shadow);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-        <span style="font-size:11px;font-weight:700;color:var(--sub);text-transform:uppercase;letter-spacing:.7px;">
-          🏢 Active Company
-        </span>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          ${data.companies.map(c => `
-            <button onclick="switchCompany('${c}')"
-              style="padding:5px 14px;border-radius:20px;border:1.5px solid ${c === data.active ? 'var(--green)' : 'var(--border2)'};
-              background:${c === data.active ? 'var(--greenbg)' : 'var(--card2)'};
-              color:${c === data.active ? 'var(--green)' : 'var(--sub)'};
-              font-size:11px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;">
-              ${c === data.active ? '✓ ' : ''}${c}
-            </button>`).join('')}
-        </div>
-      </div>`;
-
-    bar.parentNode.insertBefore(switcher, bar);
+    wrap.style.display = 'block';
   } catch {}
 }
 

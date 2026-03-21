@@ -395,6 +395,9 @@
         </div>
       </div>
 
+      <!-- Company Switcher -->
+      <div id="electron-company-switcher" style="margin-bottom:10px;"></div>
+
       <!-- Next Sync -->
       <div class="next-sync">
         <div>
@@ -926,6 +929,48 @@ function updateStatusUI(running, features = {}) {
   document.getElementById('svc-sub').textContent       = running ? 'Pause all syncing' : 'Resume syncing';
 }
 
+async function loadElectronCompanySwitcher() {
+  const box = document.getElementById('electron-company-switcher');
+  if (!box) return;
+  try {
+    const data = await ipcRenderer.invoke('get-companies');
+    if (!data.companies || data.companies.length <= 1) {
+      box.innerHTML = ''; // hide if only 1 company
+      return;
+    }
+    box.innerHTML = `
+      <div style="background:var(--surface);border:1px solid var(--border2);
+        border-radius:var(--radius);padding:10px 14px;
+        display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:10px;font-weight:600;color:var(--muted);
+          text-transform:uppercase;letter-spacing:.5px;">🏢 Company</span>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${data.companies.map(c => `
+            <button onclick="electronSwitchCompany('${c}')"
+              style="padding:4px 12px;border-radius:20px;
+              border:1.5px solid ${c === data.active ? 'var(--accent2)' : 'var(--border2)'};
+              background:${c === data.active ? 'rgba(56,217,169,.15)' : 'var(--surface)'};
+              color:${c === data.active ? 'var(--accent2)' : 'var(--muted)'};
+              font-size:11px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;">
+              ${c === data.active ? '✓ ' : ''}${c}
+            </button>`).join('')}
+        </div>
+      </div>`;
+  } catch {
+    box.innerHTML = '';
+  }
+}
+
+async function electronSwitchCompany(company) {
+  const result = await ipcRenderer.invoke('switch-company', company);
+  if (result.success) {
+    showToast(`Switched to ${company} ✓`, 'success');
+    loadElectronCompanySwitcher();
+  } else {
+    showToast(`Switch failed: ${result.error || 'unknown error'}`, 'error');
+  }
+}
+
 async function loadDashboard() {
   const status = await ipcRenderer.invoke('get-status');
 
@@ -979,6 +1024,7 @@ async function loadDashboard() {
   });
 
   loadStats();
+  loadElectronCompanySwitcher();
   updateNextSync();
   if (window._nextSyncInterval) clearInterval(window._nextSyncInterval);
   window._nextSyncInterval = setInterval(updateNextSync, 1000);

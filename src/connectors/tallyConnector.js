@@ -3,11 +3,15 @@ const tallyConfig = require('../config/tallyConfig');
 const logger = require('../utils/logger');
 const { withRetry } = require('../utils/retry');
 
-const tallyClient = axios.create({
-  baseURL: `http://${tallyConfig.host}:${tallyConfig.port}`,
-  headers: { 'Content-Type': 'text/xml' },
-  timeout: 8000 // 8 seconds — if Tally doesn't respond fast, it's lagging; abort immediately
-});
+// Do NOT cache tallyClient — create fresh on each request
+// so host/port changes are picked up immediately
+function getTallyClient() {
+  return axios.create({
+    baseURL: `http://${tallyConfig.host}:${tallyConfig.port}`,
+    headers: { 'Content-Type': 'text/xml' },
+    timeout: 8000
+  });
+}
 
 async function sendToTally(xml) {
   // Pre-check: is Tally port even open? Fast 3s TCP check before sending heavy XML
@@ -29,7 +33,7 @@ async function sendToTally(xml) {
   return withRetry(async () => {
     try {
       logger.info('Sending request to Tally');
-      const response = await tallyClient.post('/', xml);
+      const response = await getTallyClient().post('/', xml);
       logger.info('Tally response received');
       return response.data;
     } catch (error) {

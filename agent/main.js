@@ -504,6 +504,56 @@ ipcMain.handle('save-and-restart', async (_, cfg) => {
   return { success: true };
 });
 
+ipcMain.handle('get-companies', async () => {
+  const cfg = loadConfig();
+  const companies = getCompanies(cfg);
+  const active    = getActiveCompany(cfg);
+  return { companies, active };
+});
+
+ipcMain.handle('switch-company', async (_, company) => {
+  try {
+    const http = require('http');
+    const cfg  = loadConfig() || {};
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg.apiKey) headers['x-api-key'] = cfg.apiKey;
+
+    const alive = await new Promise(r => checkServiceStatus(r));
+    if (!alive) return { success: false, error: 'Service not running' };
+
+    const result = await new Promise((resolve, reject) => {
+      const body = JSON.stringify({ company });
+      const req = http.request({
+        hostname: 'localhost', port: 3000,
+        path: '/api/companies/switch', method: 'POST',
+        headers: { ...headers, 'Content-Length': Buffer.byteLength(body) }
+      }, (res) => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => {
+          try { resolve(JSON.parse(d)); } catch { resolve({ success: false }); }
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(5000, () => req.destroy());
+      req.write(body);
+      req.end();
+    });
+
+    // Also update the saved config so it persists across restarts
+    if (result.success) {
+      const currentCfg = loadConfig() || {};
+      currentCfg.activeCompany = company;
+      currentCfg.tallyCompany  = company;
+      saveConfig(currentCfg);
+    }
+
+    return result;
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle('update-company-usage', async (_, count) => {
   try {
     const { updateCompanyUsage } = require('../src/services/lmsService');
