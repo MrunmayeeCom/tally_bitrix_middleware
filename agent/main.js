@@ -490,7 +490,7 @@ ipcMain.handle('start-service', async () => {
 ipcMain.handle('stop-service', async () => {
   userStoppedService = true;
   if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
-  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {});
+  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5050\') do taskkill /F /PID %a', () => {});
   serviceRunning = false;
   updateTray();
   return { success: true };
@@ -504,7 +504,7 @@ ipcMain.handle('save-and-restart', async (_, cfg) => {
   const savedCfg = loadConfig() || cfg;
 
   if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
-  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :3000\') do taskkill /F /PID %a', () => {});
+  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5050\') do taskkill /F /PID %a', () => {});
   await new Promise(r => setTimeout(r, 1500));
   spawnServer(savedCfg);
   updateTray();

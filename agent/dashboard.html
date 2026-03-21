@@ -322,7 +322,7 @@ html,body{
   </div>
 
   <div class="offline-banner" id="offline-banner">
-    ⚠️ Local service unreachable — make sure TallyBitrixSync is running on this machine (<code>localhost:3000</code>)
+    ⚠️ Local service unreachable — make sure TallyBitrixSync is running on this machine (<code>localhost:5050</code>)
   </div>
 
   <div class="stats">
@@ -479,7 +479,7 @@ html,body{
 <script>
 // Use same origin if served via ngrok/remote, fallback to localhost for direct access
 const API = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-  ? 'http://localhost:3000'
+  ? 'http://localhost:5050'
   : location.origin;
 
 const HEADERS = {
