@@ -1492,8 +1492,12 @@ async function toggleService() {
     await ipcRenderer.invoke('stop-service');
     showToast('Service stopped', 'error');
   } else {
+    const result = await ipcRenderer.invoke('start-service');
+    if (result && result.success === false) {
+      showToast(result.error || 'Cannot start — no active license', 'error');
+      return;
+    }
     updateStatusUI(true);
-    await ipcRenderer.invoke('start-service');
     showToast('Service started', 'success');
   }
 }
@@ -1549,7 +1553,7 @@ async function loadSettings() {
   const interval     = Number(features['auto-sync'])   || 60;
   const ledger       = features['contact-sync']        || features['company-sync'];
   const dueDate      = features['due-date-automation'];
-  const plan         = status.license?.plan            || 'Business';
+  const plan         = status.license?.plan            || 'Unknown';
   const userLimit    = Number(features['user-limit'])  || 0;
   const companyLimit = features['company-limit']       || 5;
   const scheduleEl   = document.getElementById('sync-schedule-info');

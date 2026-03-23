@@ -106,9 +106,19 @@ function startScheduler() {
   }
   schedulerStarted = true;
 
-  // Read features via featureGate slugs — set after LMS validation
-  // Falls back to applyStarterFallback() values if LMS not yet validated
-  const syncMinutes = featureGate.getLimit('auto-sync', 60);
+  // Block scheduler entirely if no active license
+  if (!featureGate.isLicenseActive()) {
+    logger.warn('[Scheduler] No active license — all scheduled sync is disabled');
+    schedulerStarted = false; // allow restart once license activates
+    return;
+  }
+
+  const syncMinutes = featureGate.getLimit('auto-sync', 0);
+  if (!syncMinutes) {
+    logger.warn('[Scheduler] auto-sync limit is 0 — no sync interval configured on this plan');
+    schedulerStarted = false;
+    return;
+  }
   const syncCron    = intervalToCron(syncMinutes);
 
   logger.info(`[Scheduler] Plan: ${featureGate.getPlan()} | interval: ${syncMinutes}min`);

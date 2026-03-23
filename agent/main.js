@@ -246,6 +246,13 @@ function openSettings() {
 }
 
 function startService() {
+  try {
+    const { isLicenseActive } = require('../src/services/featureGate');
+    if (!isLicenseActive()) {
+      dialog.showErrorBox('No Active License', 'Cannot start service — no active license found.\nPlease purchase or renew a license.');
+      return;
+    }
+  } catch {}
   userStoppedService = false;
   const cfg = loadConfig();
   if (cfg) spawnServer(cfg);
@@ -354,9 +361,12 @@ ipcMain.handle('test-connections', async (_, cfg) => {
         let d = '';
         res.on('data', c => d += c);
         res.on('end', () => {
-          // Any HTTP response from Tally = it is running
-          results.tally = true;
-          resolve();
+          if (d.includes('<ENVELOPE>') || d.includes('<TALLYMESSAGE>') || d.includes('<COMPANY>') || d.includes('TallyPrime') || d.includes('<LINEERROR>')) {
+            results.tally = true;
+            resolve();
+          } else {
+            reject(new Error('Response received but not from Tally — is Tally open?'));
+          }
         });
       });
       req.on('error', reject);
@@ -390,11 +400,52 @@ ipcMain.handle('install-service', async (_, cfg) => {
 
 ipcMain.handle('uninstall-service', async () => {
   userStoppedService = true;
+
+  // Step 1 — Kill the spawned server process
   if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
-  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5050\') do taskkill /F /PID %a', () => {});
+
+  // Step 2 — Force kill anything still on port 5050
+  await new Promise(r => exec(
+    'for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5050\') do taskkill /F /PID %a',
+    () => r()
+  ));
+
+  // Step 3 — Wait for process to fully die
+  await new Promise(r => setTimeout(r, 1500));
+
+  // Step 4 — Remove config
   try { fs.unlinkSync(CONFIG_PATH); } catch {}
+
+  // Step 5 — Remove all cache files
+  const cacheFiles = [
+    path.join(__dirname, '..', 'logs', 'license-cache.json'),
+    path.join(__dirname, '..', 'logs', 'feature-registry-cache.json'),
+    path.join(__dirname, '..', 'logs', 'usage-cache.json'),
+    path.join(__dirname, '..', 'logs', 'pipeline-cache.json'),
+    path.join(__dirname, '..', 'logs', 'tally-snapshot.json'),
+    path.join(__dirname, '..', 'logs', 'sync-history.json'),
+    path.join(__dirname, '..', 'logs', 'escalation-cooldown.json'),
+  ];
+  for (const f of cacheFiles) {
+    try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+  }
+
+  // Step 6 — Disable Windows auto-start
+  try { app.setLoginItemSettings({ openAtLogin: false }); } catch {}
+
   serviceRunning = false;
   updateTray();
+
+  // Step 7 — Show confirmation and quit
+  await dialog.showMessageBox(null, {
+    type: 'info',
+    title: 'Uninstalled',
+    message: 'TallyBitrixSync has been uninstalled.',
+    detail: 'Service stopped and all data cleared.\nYou can now delete the application folder.',
+    buttons: ['OK']
+  });
+
+  app.quit();
   return { success: true };
 });
  
@@ -481,6 +532,12 @@ ipcMain.handle('get-logs', async () => {
 });
 
 ipcMain.handle('start-service', async () => {
+  try {
+    const { isLicenseActive } = require('../src/services/featureGate');
+    if (!isLicenseActive()) {
+      return { success: false, error: 'No active license — cannot start service' };
+    }
+  } catch {}
   const cfg = loadConfig();
   if (cfg) spawnServer(cfg);
   updateTray();
@@ -499,8 +556,6 @@ ipcMain.handle('stop-service', async () => {
 ipcMain.handle('save-and-restart', async (_, cfg) => {
   saveConfig(cfg);
 
-  // Always reload from disk after save — ensures spawnServer sees the full
-  // tallyCompanies array, not a potentially trimmed in-memory copy
   const savedCfg = loadConfig() || cfg;
 
   if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
@@ -508,6 +563,10 @@ ipcMain.handle('save-and-restart', async (_, cfg) => {
   await new Promise(r => setTimeout(r, 1500));
   spawnServer(savedCfg);
   updateTray();
+
+  // Re-validate license after settings change — email may have changed,
+  // or service was previously stopped for no-license and now needs reactivation
+  setTimeout(() => bootstrapLicense(savedCfg), 3000);
 
   logger.info(`[Config] Service restarted with companies: [${getCompanies(savedCfg).join(', ')}]`);
   return { success: true };
@@ -597,8 +656,10 @@ app.whenReady().then(async () => {
   } else {
     const cfg = loadConfig();
     if (cfg) {
-      spawnServer(cfg);
-      setTimeout(() => bootstrapLicense(cfg), 3000);
+      // Hold auto-restart until license is confirmed — bootstrapLicense
+      // will clear userStoppedService and spawn the server if valid
+      userStoppedService = true;
+      setTimeout(() => bootstrapLicense(cfg), 500);
     }
     createMainWindow('dashboard');
   }
@@ -665,6 +726,19 @@ async function handlePlanTransition(newResult) {
 }
 
 async function bootstrapLicense(cfg) {
+  // ── Clear stale bundled cache on first run ──────────────────────────
+  try {
+    const { loadLicenseCache, clearRegistryCache } = require('../src/services/lmsService');
+    const cache = loadLicenseCache();
+    // If cached email doesn't match configured email → wipe cache
+    if (cache && cache.customerEmail && cfg.customerEmail &&
+        cache.customerEmail !== cfg.customerEmail) {
+      logger.info('[LMS] Different email detected — clearing stale license cache');
+      clearRegistryCache();
+    }
+  } catch {}
+  // ───────────────────────────────────────────────────────────────────
+
   try {
     const { validateLicense, startHeartbeat, startRevalidation } = require('../src/services/lmsService');
     const { setFeatures, applyStarterFallback, getPlan } = require('../src/services/featureGate');
@@ -674,8 +748,12 @@ async function bootstrapLicense(cfg) {
     _licensePlan  = result.plan || 'Unknown';
 
     if (result.valid) {
-      const previousPlan = getPlan();
-      setFeatures(result.features, result.plan);
+      let previousPlan = getPlan();
+      setFeatures(result.features, result.plan, result.valid);
+
+      // License confirmed — allow server to run and (re)spawn if needed
+      userStoppedService = false;
+      if (!serverProcess) spawnServer(cfg);
 
       startHeartbeat(result.licenseId);
       logger.info(`[LMS] Heartbeat started for licenseId: ${result.licenseId}`);
@@ -709,14 +787,18 @@ async function bootstrapLicense(cfg) {
 
         // ── Case 1: License expired / no longer valid ────────────────────
         if (!newResult.valid) {
-          applyStarterFallback();
+          applyStarterFallback(); // locks all features
           _licenseValid = false;
           _licensePlan  = 'Expired';
+          userStoppedService = true; // prevents spawnServer auto-restart on exit
+          if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
+          serviceRunning = false;
           const { restartScheduler } = require('../src/scheduler');
           restartScheduler();
           dialog.showMessageBox(null, {
             type: 'warning', title: 'License Expired',
-            message: 'Your license has expired. Running in Starter mode (outstanding sync only) until you renew or purchase a new plan.',
+            message: 'Your license has expired. All sync has been stopped.',
+            detail: 'Purchase or renew a license (Starter, Professional, Business or Enterprise) to resume.',
             buttons: ['OK']
           });
           updateTray();
@@ -727,9 +809,10 @@ async function bootstrapLicense(cfg) {
         if (newResult.plan !== previousPlan) {
           logger.info(`[LMS] Plan transition: ${previousPlan} → ${newResult.plan}`);
 
-          setFeatures(newResult.features, newResult.plan);
+          setFeatures(newResult.features, newResult.plan, newResult.valid);
           _licenseValid = true;
           _licensePlan  = newResult.plan;
+          previousPlan  = newResult.plan; // prevent repeat dialog on next revalidation cycle
 
           // Auto-enforce company limit — trim excess if new plan allows fewer
           await handlePlanTransition(newResult);
@@ -759,12 +842,18 @@ async function bootstrapLicense(cfg) {
         });
       }
     } else {
-      applyStarterFallback();
-      _licensePlan = 'Starter (fallback)';
+      // No valid license — lock featureGate and kill server completely
+      applyStarterFallback(); // sets _isActive = false, blocks all sync
+      _licenseValid = false;
+      _licensePlan  = 'No License';
+      userStoppedService = true; // prevents spawnServer auto-restart on exit
+      if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
+      serviceRunning = false;
+      updateTray();
       dialog.showMessageBox(null, {
-        type: 'warning', title: 'License Issue',
-        message: `License validation failed: ${result.reason}`,
-        detail: 'Running in Starter mode — outstanding sync only, hourly.',
+        type: 'warning', title: 'No Active License',
+        message: `No active license found for ${cfg.customerEmail}.`,
+        detail: 'Please purchase or renew a license (Starter, Professional, Business or Enterprise).\n\nReason: ' + result.reason,
         buttons: ['OK']
       });
     }
@@ -772,9 +861,13 @@ async function bootstrapLicense(cfg) {
   } catch(e) {
     try {
       const { applyStarterFallback } = require('../src/services/featureGate');
-      applyStarterFallback();
+      applyStarterFallback(); // locks all features on unexpected error
     } catch {}
-    _licensePlan = 'Starter (fallback)';
+    _licenseValid      = false;
+    _licensePlan       = 'No License';
+    userStoppedService = true; // prevent auto-restart loop
+    if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
+    serviceRunning = false;
     updateTray();
   }
 }
