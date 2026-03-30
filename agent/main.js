@@ -106,13 +106,16 @@ function spawnServer(cfg) {
   const scriptPath = getServiceScript();
 
   const env = Object.assign({}, process.env, {
-    NODE_ENV:           'production',
-    PORT:               '5050',
-    BITRIX_WEBHOOK_URL: cfg.bitrixUrl,
-    TALLY_HOST:         cfg.tallyHost,
-    TALLY_PORT:         String(cfg.tallyPort),
-    TALLY_COMPANY:      getActiveCompany(cfg),
-    TALLY_COMPANIES:    getCompanies(cfg).join(','),
+    NODE_ENV:            'production',
+    PORT:                '5050',
+    BITRIX_WEBHOOK_URL:  cfg.bitrixUrl,
+    TALLY_HOST:          cfg.tallyHost,
+    TALLY_PORT:          String(cfg.tallyPort),
+    TALLY_COMPANY:       getActiveCompany(cfg),
+    TALLY_COMPANIES:     getCompanies(cfg).join(','),
+    CUSTOMER_EMAIL:      cfg.customerEmail || '',
+    RENDER_SERVER_URL:   'https://yourapp.onrender.com',
+    CLIENT_ID:           require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0],
   });
 
   serverProcess = spawn(nodePath, [scriptPath], {

@@ -22,4 +22,16 @@ app.listen(config.port, async () => {
 
   await ensureTallyDefaults();
   startScheduler();
+
+  // Start event poller — connects to Render server for Bitrix24 webhook events
+  try {
+    const { startPoller } = require('./services/eventPoller');
+    const cfg = {
+      customerEmail: process.env.CUSTOMER_EMAIL || '',
+      bitrixUrl:     process.env.BITRIX_WEBHOOK_URL || '',
+    };
+    startPoller(cfg);
+  } catch (err) {
+    logger.warn('[Poller] Could not start event poller:', err.message);
+  }
 });

@@ -104,4 +104,51 @@ async function handleWebhook(req, res) {
   }
 }
 
-module.exports = { handleWebhook };
+// Called by eventPoller directly (no req/res)
+async function handleWebhookPayload(payload) {
+  const event    = payload.event;
+  const entityId = payload.data?.FIELDS?.ID;
+
+  logger.info('Webhook received via poller', { event, entityId });
+
+  if (!event) return;
+
+  const isUpdate = event.includes('UPDATE');
+
+  switch (event) {
+    case 'ONCRMCONTACTADD':
+    case 'ONCRMCONTACTUPDATE': {
+      if (!featureGate.isEnabled('contact-sync')) break;
+      if (!featureGate.isEnabled('ledger-creation')) break;
+      const contactSource = payload.data?.FIELDS?.SOURCE_DESCRIPTION || '';
+      if (contactSource === 'TALLY_SYNC') break;
+      await processContact(entityId, isUpdate);
+      break;
+    }
+    case 'ONCRMCOMPANYADD':
+    case 'ONCRMCOMPANYUPDATE': {
+      if (!featureGate.isEnabled('company-sync')) break;
+      if (!featureGate.isEnabled('ledger-creation')) break;
+      const companySource = payload.data?.FIELDS?.SOURCE_DESCRIPTION || '';
+      if (companySource === 'TALLY_SYNC') break;
+      await processCompany(entityId, isUpdate);
+      break;
+    }
+    case 'ONCRMINVOICEADD':
+    case 'ONCRMINVOICEUPDATE':
+    case 'ONCRMSMARTINVOICEADD':
+    case 'ONCRMSMARTINVOICEUPDATE':
+      if (!featureGate.isEnabled('invoice-sync')) break;
+      await processInvoice(entityId, isUpdate);
+      break;
+    case 'ONCRMQUOTEADD':
+    case 'ONCRMQUOTEUPDATE':
+      if (!featureGate.isEnabled('quotation-sync')) break;
+      await processQuotation({ entityId, isUpdate });
+      break;
+    default:
+      logger.warn(`[Poller] Unhandled event: ${event}`);
+  }
+}
+
+module.exports = { handleWebhook, handleWebhookPayload };
