@@ -21,9 +21,25 @@ app.listen(config.port, async () => {
   }
 
   await ensureTallyDefaults();
+
+  // Load license features passed from Electron via env vars
+  // This avoids waiting for LMS validation on every server start
+  try {
+    const featuresJson = process.env.LICENSE_FEATURES;
+    const plan         = process.env.LICENSE_PLAN;
+    if (featuresJson && plan) {
+      const features = JSON.parse(featuresJson);
+      const { setFeatures } = require('./services/featureGate');
+      setFeatures(features, plan, true);
+      logger.info(`[Server] License loaded from Electron env — Plan: ${plan}`);
+    }
+  } catch(e) {
+    logger.warn('[Server] Could not load license from env: ' + e.message);
+  }
+
   startScheduler();
 
-  // Start event poller — connects to Render server for Bitrix24 webhook events
+  // Start event poller
   try {
     const { startPoller } = require('./services/eventPoller');
     const cfg = {

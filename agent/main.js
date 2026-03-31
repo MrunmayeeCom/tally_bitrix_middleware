@@ -105,6 +105,18 @@ function spawnServer(cfg) {
   const nodePath   = getNodeExecutable();
   const scriptPath = getServiceScript();
 
+  // Load license features from cache to pass to Node.js process
+  let licenseFeatures = '{}';
+  let licensePlan = '';
+  try {
+    const { loadLicenseCache } = require('../src/services/lmsService');
+    const cache = loadLicenseCache();
+    if (cache && cache.features) {
+      licenseFeatures = JSON.stringify(cache.features);
+      licensePlan = cache.plan || '';
+    }
+  } catch {}
+
   const env = Object.assign({}, process.env, {
     NODE_ENV:            'production',
     PORT:                '5050',
@@ -116,6 +128,8 @@ function spawnServer(cfg) {
     CUSTOMER_EMAIL:      cfg.customerEmail || '',
     RENDER_SERVER_URL:   'https://tally-bitrix-middleware.onrender.com',
     CLIENT_ID:           require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0],
+    LICENSE_FEATURES:    licenseFeatures,
+    LICENSE_PLAN:        licensePlan,
   });
 
   serverProcess = spawn(nodePath, [scriptPath], {
