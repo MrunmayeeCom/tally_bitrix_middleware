@@ -114,7 +114,7 @@ function spawnServer(cfg) {
     TALLY_COMPANY:       getActiveCompany(cfg),
     TALLY_COMPANIES:     getCompanies(cfg).join(','),
     CUSTOMER_EMAIL:      cfg.customerEmail || '',
-    RENDER_SERVER_URL:   'https://yourapp.onrender.com',
+    RENDER_SERVER_URL:   'https://tally-bitrix-middleware.onrender.com',
     CLIENT_ID:           require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0],
   });
 

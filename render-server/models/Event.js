@@ -12,7 +12,5 @@ const eventSchema = new mongoose.Schema({
 // Auto delete processed events after 24 hours
 eventSchema.index({ processedAt: 1 }, { expireAfterSeconds: 86400 });
 
-// Auto delete unprocessed events after 48 hours (cleanup)
-eventSchema.index({ createdAt: 1 }, { expireAfterSeconds: 172800 });
 
 module.exports = mongoose.model('Event', eventSchema);
