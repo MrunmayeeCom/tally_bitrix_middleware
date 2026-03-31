@@ -33,18 +33,15 @@ router.post('/clients/register', async (req, res) => {
       { upsert: true, new: true }
     );
 
-    // Register webhooks in Bitrix24 using client's inbound URL
-    const webhookResult = await registerBitrixWebhooks(bitrixUrl, clientId);
-
-    console.log(`[Register] Client registered: ${clientId} | ${email} | webhooks: ${webhookResult}`);
+    console.log(`[Register] Client registered: ${clientId} | ${email} | domain: ${bitrixDomain}`);
+    console.log(`[Register] Bitrix24 outbound webhook URL: ${process.env.APP_URL}/webhook`);
 
     res.json({
       success: true,
       clientId,
-      webhooksRegistered: webhookResult,
-      message: webhookResult
-        ? 'Client registered and webhooks configured'
-        : 'Client registered — webhook registration failed, will retry'
+      webhooksRegistered: false,
+      manualWebhookUrl: `${process.env.APP_URL}/webhook`,
+      message: `Client registered. Set Bitrix24 outbound webhook URL to: ${process.env.APP_URL}/webhook`
     });
 
   } catch (err) {
@@ -119,6 +116,16 @@ router.post('/events/confirm', async (req, res) => {
   }
 });
 
+// GET /api/clients/list — debug: see all registered clients
+router.get('/clients/list', async (req, res) => {
+  try {
+    const clients = await Client.find({}).lean();
+    res.json({ success: true, count: clients.length, clients });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // GET /api/clients/status?clientId=xxx
 // Check if client is registered
 router.get('/clients/status', async (req, res) => {
@@ -144,12 +151,14 @@ router.get('/clients/status', async (req, res) => {
 // ── Register webhooks in Bitrix24 ──────────────────────────────────────────
 async function registerBitrixWebhooks(bitrixUrl, clientId) {
   const APP_URL = process.env.APP_URL;
+  console.log('[Webhooks] APP_URL =', APP_URL || 'NOT SET');
   if (!APP_URL) {
-    console.warn('[Webhooks] APP_URL not set — skipping webhook registration');
+    console.error('[Webhooks] APP_URL not set in environment — Bitrix24 webhooks will NOT be registered. Set APP_URL=https://your-render-url.onrender.com in Render environment variables.');
     return false;
   }
 
   const handlerBase = `${APP_URL}/webhook?clientId=${clientId}`;
+  console.log('[Webhooks] Registering handler URL:', handlerBase);
 
   const events = [
     'ONCRMCONTACTADD',
@@ -175,9 +184,10 @@ async function registerBitrixWebhooks(bitrixUrl, clientId) {
           event,
           handler: handlerBase,
         });
+        console.log(`[Webhooks] ✓ Registered ${event} → ${handlerBase}`);
         console.log(`[Webhooks] Registered: ${event}`);
       } catch (e) {
-        console.warn(`[Webhooks] Failed to register ${event}: ${e.message}`);
+        console.warn(`[Webhooks] Failed to register ${event}: ${e.message}`, e.response?.data || '');
         allOk = false;
       }
     }
@@ -194,5 +204,21 @@ async function registerBitrixWebhooks(bitrixUrl, clientId) {
     return false;
   }
 }
+
+// POST /api/clients/reregister — force re-register webhooks for a client
+router.post('/clients/reregister', async (req, res) => {
+  try {
+    const { clientId } = req.body;
+    if (!clientId) return res.status(400).json({ success: false, message: 'clientId required' });
+
+    const client = await Client.findOne({ clientId });
+    if (!client) return res.status(404).json({ success: false, message: 'Client not found' });
+
+    const result = await registerBitrixWebhooks(client.bitrixUrl, clientId);
+    res.json({ success: true, webhooksRegistered: result, handlerUrl: `${process.env.APP_URL}/webhook?clientId=${clientId}` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 module.exports = router;

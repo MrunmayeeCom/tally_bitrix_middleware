@@ -13,9 +13,11 @@ function getClientId() {
 let _pollerInterval = null;
 let _isPolling      = false;
 let _registered     = false;
+let _lockedClientId = null; // locked at registration time, used for all subsequent polls
 
 async function registerClient(cfg) {
   const clientId  = getClientId();
+  _lockedClientId = clientId; // lock it so polls always use same ID
   const email     = cfg.customerEmail || process.env.CUSTOMER_EMAIL || '';
   const bitrixUrl = cfg.bitrixUrl     || process.env.BITRIX_WEBHOOK_URL || '';
 
@@ -26,6 +28,7 @@ async function registerClient(cfg) {
 
   try {
     const axios = require('axios');
+    console.log('[Poller] Registering with Render server:', { url: `${RENDER_URL}/api/clients/register`, clientId, email, bitrixUrl: bitrixUrl ? bitrixUrl.substring(0, 40) + '...' : 'NOT SET' });
     const res = await axios.post(`${RENDER_URL}/api/clients/register`, {
       clientId,
       email,
@@ -49,7 +52,7 @@ async function registerClient(cfg) {
 async function fetchPendingEvents() {
   try {
     const axios    = require('axios');
-    const clientId = getClientId();
+    const clientId = _lockedClientId || getClientId();
     const res = await axios.get(`${RENDER_URL}/api/events/pending`, {
       params:  { clientId },
       timeout: 8000,
@@ -64,7 +67,7 @@ async function confirmEvents(eventIds) {
   if (!eventIds || eventIds.length === 0) return;
   try {
     const axios    = require('axios');
-    const clientId = getClientId();
+    const clientId = _lockedClientId || getClientId();
     await axios.post(`${RENDER_URL}/api/events/confirm`, {
       clientId,
       eventIds,
@@ -98,6 +101,7 @@ async function pollOnce() {
       _isPolling = false;
       return;
     }
+    logger.info(`[Poller] ${events.length} events received from Render server`);
 
     logger.info(`[Poller] Received ${events.length} pending events | clientId: ${getClientId()}`);
 

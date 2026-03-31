@@ -51,5 +51,10 @@ app.use((err, req, res, next) => {
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`[Server] TallySync Render Server running on port ${PORT}`);
-  console.log(`[Server] APP_URL: ${process.env.APP_URL || 'not set'}`);
+  if (!process.env.APP_URL) {
+    console.error('[Server] ⚠️  APP_URL is NOT SET — Bitrix24 webhook registration will fail. Add APP_URL to Render environment variables.');
+  } else {
+    console.log(`[Server] APP_URL: ${process.env.APP_URL}`);
+    console.log(`[Server] Webhook endpoint: ${process.env.APP_URL}/webhook`);
+  }
 });

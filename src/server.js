@@ -24,6 +24,7 @@ app.listen(config.port, async () => {
       const { setFeatures } = require('./services/featureGate');
       setFeatures(features, plan, true);
       logger.info(`[Server] License loaded from Electron env — Plan: ${plan}`);
+      logger.info(`[Server] Features loaded:`, features);
     } else {
       logger.warn('[Server] No LICENSE_FEATURES in env — featureGate will be empty until LMS validates');
     }
