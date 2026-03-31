@@ -110,6 +110,13 @@ async function handleWebhookPayload(payload) {
   const entityId = payload.data?.FIELDS?.ID;
 
   logger.info('Webhook received via poller', { event, entityId });
+  logger.info('[Poller] Feature gate state', {
+    contactSync:   featureGate.isEnabled('contact-sync'),
+    companySync:   featureGate.isEnabled('company-sync'),
+    ledgerCreation:featureGate.isEnabled('ledger-creation'),
+    licenseActive: featureGate.isLicenseActive(),
+    plan:          featureGate.getPlan(),
+  });
 
   if (!event) return;
 

@@ -959,11 +959,18 @@ async function scanTallyCompanies() {
   btn.style.opacity = '0.6'; btn.style.pointerEvents = 'none';
   try {
     let data;
+
+    // Get host/port from form — user may have changed from defaults
+    const tallyHost = document.getElementById('tallyHost')?.value.trim() || 'localhost';
+    const tallyPort = parseInt(document.getElementById('tallyPort')?.value) || 9000;
+
     try {
-      const r = await fetch('http://localhost:5050/api/tally/companies', { signal: AbortSignal.timeout(4000) });
+      // If service is already running (e.g. reinstall), use HTTP
+      const r = await fetch('http://localhost:5050/api/tally/companies', { signal: AbortSignal.timeout(3000) });
       data = await r.json();
     } catch {
-      data = await ipcRenderer.invoke('scan-tally-companies');
+      // Service not running yet (first install) — use IPC directly from Electron
+      data = await ipcRenderer.invoke('scan-tally-companies', { tallyHost, tallyPort });
     }
     if (!data.success || !data.companies?.length) throw new Error(data.error || 'No companies found');
     _setupScannedList = data.companies;

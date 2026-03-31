@@ -649,10 +649,26 @@ ipcMain.handle('update-company-usage', async (_, count) => {
   }
 });
 
-ipcMain.handle('scan-tally-companies', async () => {
+ipcMain.handle('scan-tally-companies', async (_, cfg = {}) => {
   try {
+    // Use host/port from payload if provided (setup wizard sends them)
+    const host = cfg.tallyHost || 'localhost';
+    const port = cfg.tallyPort || 9000;
+
+    // Temporarily override env so tallyConnector uses the right host/port
+    const prevHost = process.env.TALLY_HOST;
+    const prevPort = process.env.TALLY_PORT;
+    process.env.TALLY_HOST = String(host);
+    process.env.TALLY_PORT = String(port);
+
     const { getCompanyList } = require('../src/connectors/tallyConnector');
-    return await getCompanyList();
+    const result = await getCompanyList();
+
+    // Restore
+    process.env.TALLY_HOST = prevHost || 'localhost';
+    process.env.TALLY_PORT = prevPort || '9000';
+
+    return result;
   } catch(e) {
     return { success: false, error: e.message, companies: [] };
   }
@@ -668,15 +684,16 @@ app.whenReady().then(async () => {
   app.setLoginItemSettings({ openAtLogin: true });
   createTray();
 
+  // Kill any leftover process on port 5050 before starting fresh
+  exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5050\') do taskkill /F /PID %a', () => {});
+
   if (!isConfigured()) {
     createMainWindow('setup');
   } else {
     const cfg = loadConfig();
     if (cfg) {
-      // Hold auto-restart until license is confirmed — bootstrapLicense
-      // will clear userStoppedService and spawn the server if valid
       userStoppedService = true;
-      setTimeout(() => bootstrapLicense(cfg), 500);
+      setTimeout(() => bootstrapLicense(cfg), 1000);
     }
     createMainWindow('dashboard');
   }
@@ -768,9 +785,18 @@ async function bootstrapLicense(cfg) {
       let previousPlan = getPlan();
       setFeatures(result.features, result.plan, result.valid);
 
-      // License confirmed — allow server to run and (re)spawn if needed
+      // Kill any existing server before spawning fresh with correct license env
+      if (serverProcess) {
+        try { serverProcess.kill(); } catch {}
+        serverProcess = null;
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5050\') do taskkill /F /PID %a', () => {});
+      await new Promise(r => setTimeout(r, 500));
+
+      // License confirmed — spawn server NOW with features baked into env
       userStoppedService = false;
-      if (!serverProcess) spawnServer(cfg);
+      spawnServer(cfg);
 
       startHeartbeat(result.licenseId);
       logger.info(`[LMS] Heartbeat started for licenseId: ${result.licenseId}`);

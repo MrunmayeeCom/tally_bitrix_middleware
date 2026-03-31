@@ -1,29 +1,41 @@
 const logger = require('../utils/logger');
+const os     = require('os');
 
-const RENDER_URL  = process.env.RENDER_SERVER_URL || 'https://tally-bitrix-middleware.onrender.com';
-const POLL_INTERVAL_MS = 5000; // poll every 5 seconds
-const CLIENT_ID   = process.env.CLIENT_ID || require('os').hostname();
+const RENDER_URL       = process.env.RENDER_SERVER_URL || 'https://tally-bitrix-middleware.onrender.com';
+const POLL_INTERVAL_MS = 5000;
+
+// CLIENT_ID must be a function — reads env at call time, not module load time
+function getClientId() {
+  const email = (process.env.CUSTOMER_EMAIL || '').split('@')[0];
+  return process.env.CLIENT_ID || (email ? `${os.hostname()}-${email}` : os.hostname());
+}
 
 let _pollerInterval = null;
 let _isPolling      = false;
 let _registered     = false;
 
-// ── Register this client with Render server ───────────────────────────────────
 async function registerClient(cfg) {
-  try {
-    const http  = require('https');
-    const axios = require('axios');
+  const clientId  = getClientId();
+  const email     = cfg.customerEmail || process.env.CUSTOMER_EMAIL || '';
+  const bitrixUrl = cfg.bitrixUrl     || process.env.BITRIX_WEBHOOK_URL || '';
 
+  if (!email || !bitrixUrl) {
+    logger.warn('[Poller] Skipping registration — email or bitrixUrl not set');
+    return;
+  }
+
+  try {
+    const axios = require('axios');
     const res = await axios.post(`${RENDER_URL}/api/clients/register`, {
-      clientId: CLIENT_ID,
-      email:    cfg.customerEmail || '',
-      bitrixUrl:cfg.bitrixUrl     || process.env.BITRIX_WEBHOOK_URL,
+      clientId,
+      email,
+      bitrixUrl,
     }, { timeout: 10000 });
 
     if (res.data.success) {
       _registered = true;
-      logger.info(`[Poller] Client registered with Render server`, {
-        clientId: CLIENT_ID,
+      logger.info('[Poller] Client registered with Render server', {
+        clientId,
         webhooksRegistered: res.data.webhooksRegistered,
       });
     } else {
@@ -31,32 +43,30 @@ async function registerClient(cfg) {
     }
   } catch (err) {
     logger.warn(`[Poller] Could not register with Render server: ${err.message}`);
-    // Non-fatal — will retry on next poll cycle
   }
 }
 
-// ── Fetch pending events from Render ─────────────────────────────────────────
 async function fetchPendingEvents() {
   try {
-    const axios = require('axios');
+    const axios    = require('axios');
+    const clientId = getClientId();
     const res = await axios.get(`${RENDER_URL}/api/events/pending`, {
-      params:  { clientId: CLIENT_ID },
+      params:  { clientId },
       timeout: 8000,
     });
     return res.data.events || [];
   } catch (err) {
-    // Silently fail — Render may be briefly unavailable
     return [];
   }
 }
 
-// ── Confirm processed events ──────────────────────────────────────────────────
 async function confirmEvents(eventIds) {
   if (!eventIds || eventIds.length === 0) return;
   try {
-    const axios = require('axios');
+    const axios    = require('axios');
+    const clientId = getClientId();
     await axios.post(`${RENDER_URL}/api/events/confirm`, {
-      clientId: CLIENT_ID,
+      clientId,
       eventIds,
     }, { timeout: 5000 });
   } catch (err) {
@@ -64,27 +74,21 @@ async function confirmEvents(eventIds) {
   }
 }
 
-// ── Process a single event ────────────────────────────────────────────────────
 async function processEvent(event) {
   try {
     logger.info(`[Poller] Processing event: ${event.eventType}`);
-
-    // Route to existing webhook handler
     const { handleWebhookPayload } = require('../controllers/webhookController');
     await handleWebhookPayload(event.payload);
-
     logger.info(`[Poller] Event processed: ${event.eventType}`);
   } catch (err) {
     logger.error(`[Poller] Event processing failed: ${event.eventType}`, {
       message: err.message
     });
-    // Still confirm — prevents infinite retry loop for bad events
   }
 }
 
-// ── Main poll loop ────────────────────────────────────────────────────────────
 async function pollOnce() {
-  if (_isPolling) return; // prevent overlapping polls
+  if (_isPolling) return;
   _isPolling = true;
 
   try {
@@ -95,16 +99,14 @@ async function pollOnce() {
       return;
     }
 
-    logger.info(`[Poller] Received ${events.length} pending events`);
+    logger.info(`[Poller] Received ${events.length} pending events | clientId: ${getClientId()}`);
 
     const confirmedIds = [];
-
     for (const event of events) {
       await processEvent(event);
       confirmedIds.push(event.eventId);
     }
 
-    // Confirm all processed events
     await confirmEvents(confirmedIds);
 
   } catch (err) {
@@ -114,19 +116,16 @@ async function pollOnce() {
   }
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
 async function startPoller(cfg) {
   if (_pollerInterval) {
-    logger.warn('[Poller] Already running');
+    logger.warn('[Poller] Already running — skipping duplicate start');
     return;
   }
 
-  logger.info(`[Poller] Starting event poller | clientId: ${CLIENT_ID}`);
+  logger.info(`[Poller] Starting event poller | clientId: ${getClientId()}`);
 
-  // Register with Render server first
   await registerClient(cfg);
 
-  // Start polling
   _pollerInterval = setInterval(pollOnce, POLL_INTERVAL_MS);
 
   logger.info(`[Poller] Polling every ${POLL_INTERVAL_MS / 1000}s`);
