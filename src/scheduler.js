@@ -140,14 +140,14 @@ function startScheduler() {
     }, { timezone: 'Asia/Kolkata' }));
   }
 
-  // Ledger sync — Professional+ (contact-sync or company-sync slug enabled)
+  // Ledger sync — Custom+ (contact-sync or company-sync slug enabled)
   if (featureGate.isEnabled('contact-sync') || featureGate.isEnabled('company-sync')) {
     _activeTasks.push(cron.schedule(syncCron, () => {
       runLedgerSync(`${syncMinutes}min — ledger sync`, () => processTallyToContact({ manual: true }));
     }, { timezone: 'Asia/Kolkata' }));
   }
 
-  // Due date automation — Business+ only
+  // Due date automation — Custom+ only
   if (featureGate.isEnabled('due-date-automation')) {
     _activeTasks.push(cron.schedule('0 * * * *', () => {
       runDueDateSync('1hr — due date automation', processDueDates);

@@ -481,6 +481,7 @@ async function alterVoucher(voucher) {
     return `${dd}-${mm}-${yyyy}`;
   };
 
+  const voucherTypeName = voucher.voucherType || 'Sales';
   const fetchXml = `
     <ENVELOPE>
       <HEADER>
@@ -493,7 +494,6 @@ async function alterVoucher(voucher) {
             <STATICVARIABLES>
               <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
               <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-              <VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME>
               <SVFROMDATE>${fmt(fromDate)}</SVFROMDATE>
               <SVTODATE>${fmt(today)}</SVTODATE>
             </STATICVARIABLES>
@@ -508,6 +508,10 @@ async function alterVoucher(voucher) {
 
   try {
     const fetchResponse = await sendToTally(fetchXml);
+    logger.info('Raw Day Book fetch response for alter', {
+      voucherNumber: voucher.voucherNumber,
+      responseSnippet: (fetchResponse || '').substring(0, 600)
+    });
     const voucherBlockRegex = /<VOUCHER\b[^>]*>([\s\S]*?)<\/VOUCHER>/gi;
     let vBlock;
     while ((vBlock = voucherBlockRegex.exec(fetchResponse)) !== null) {
@@ -552,9 +556,9 @@ async function alterVoucher(voucher) {
           </REQUESTDESC>
           <REQUESTDATA>
             <TALLYMESSAGE xmlns:UDF="TallyUDF">
-              <VOUCHER VCHTYPE="Sales Order" ACTION="Alter" MASTERID="${masterId}">
+              <VOUCHER VCHTYPE="${voucherTypeName}" ACTION="Alter" MASTERID="${masterId}">
                 <DATE>${voucher.date.replace(/-/g, '')}</DATE>
-                <VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME>
+                <VOUCHERTYPENAME>${voucherTypeName}</VOUCHERTYPENAME>
                 <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
                 <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
                 <MASTERID>${masterId}</MASTERID>
@@ -618,7 +622,6 @@ async function deleteVoucher(voucherNumber) {
             <STATICVARIABLES>
               <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
               <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-              <VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME>
               <SVFROMDATE>${fmt(fromDate)}</SVFROMDATE>
               <SVTODATE>${fmt(today)}</SVTODATE>
             </STATICVARIABLES>
@@ -629,6 +632,7 @@ async function deleteVoucher(voucherNumber) {
 
   let masterId = null;
   let voucherDate = null;
+  let detectedVoucherTypeName = null;
   try {
     const fetchResponse = await sendToTally(fetchXml);
 
@@ -648,9 +652,11 @@ async function deleteVoucher(voucherNumber) {
 
       if (idMatch && (vNum === voucherNumber || vRef === voucherNumber)) {
         masterId = idMatch[1];
-        const dateMatch = block.match(/<DATE>\s*(\d+)\s*<\/DATE>/i);
-        voucherDate = dateMatch ? dateMatch[1].trim() : null;
-        logger.info('Found voucher MASTERID for delete', { voucherNumber, masterId, voucherDate, matchedOn: vNum === voucherNumber ? 'VOUCHERNUMBER' : 'REFERENCE' });
+        const dateMatch    = block.match(/<DATE>\s*(\d+)\s*<\/DATE>/i);
+        const vtypeMatch   = block.match(/<VOUCHERTYPENAME[^>]*>(.*?)<\/VOUCHERTYPENAME>/i);
+        voucherDate            = dateMatch  ? dateMatch[1].trim()  : null;
+        detectedVoucherTypeName = vtypeMatch ? vtypeMatch[1].trim() : null;
+        logger.info('Found voucher MASTERID for delete', { voucherNumber, masterId, voucherDate, detectedVoucherTypeName, matchedOn: vNum === voucherNumber ? 'VOUCHERNUMBER' : 'REFERENCE' });
         break;
       }
     }
@@ -683,13 +689,13 @@ async function deleteVoucher(voucherNumber) {
           </REQUESTDESC>
           <REQUESTDATA>
             <TALLYMESSAGE xmlns:UDF="TallyUDF">
-              <VOUCHER VCHTYPE="Sales Order" ACTION="Delete" MASTERID="${masterId}">
+              <VOUCHER VCHTYPE="${detectedVoucherTypeName || 'Sales'}" ACTION="Delete" MASTERID="${masterId}">
                 <DATE>${voucherDate || new Date().toISOString().slice(0,10).replace(/-/g,'')}</DATE>
-                <VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME>
+                <VOUCHERTYPENAME>${detectedVoucherTypeName || 'Sales'}</VOUCHERTYPENAME>
                 <VOUCHERNUMBER>${escapeXml(voucherNumber)}</VOUCHERNUMBER>
                 <REFERENCE>${escapeXml(voucherNumber)}</REFERENCE>
                 <MASTERID>${masterId}</MASTERID>
-                <PERSISTEDVIEW>Sales Order Voucher View</PERSISTEDVIEW>
+                <PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>
               </VOUCHER>
             </TALLYMESSAGE>
           </REQUESTDATA>
@@ -738,6 +744,8 @@ async function getVoucherTypes() {
   try {
     const response = await sendToTally(xml);
     const names = [];
+
+    // Try 1 — VOUCHERTYPE blocks with NAME child tag
     const regex = /<VOUCHERTYPE\b[^>]*>([\s\S]*?)<\/VOUCHERTYPE>/gi;
     let match;
     while ((match = regex.exec(response)) !== null) {
@@ -746,6 +754,13 @@ async function getVoucherTypes() {
       const name = (nameMatch && nameMatch[1].trim()) || (nameAttr && nameAttr[1].trim()) || '';
       if (name) names.push(name);
     }
+
+    // Try 2 — TALLYMESSAGE/NAME tags (some TallyPrime versions return flat list)
+    if (names.length === 0) {
+      const flat = [...response.matchAll(/<NAME>(.*?)<\/NAME>/gi)];
+      flat.forEach(m => { if (m[1].trim()) names.push(m[1].trim()); });
+    }
+
     logger.info('Fetched voucher types from Tally', { count: names.length, names });
     return names;
   } catch (err) {

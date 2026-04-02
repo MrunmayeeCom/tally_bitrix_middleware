@@ -5,6 +5,7 @@ const logger = require('../utils/logger');
 
 // In-memory dedup set — prevents duplicate vouchers if webhook fires twice within 60s
 const quotationDedup = new Set();
+const recentlyCreated = new Map();
 
 async function processQuotation({ entityId, isUpdate = false }) {
   try {
@@ -52,10 +53,11 @@ async function processQuotation({ entityId, isUpdate = false }) {
     if (!TALLY_SALES_ORDER_TYPE) {
       const { getVoucherTypes } = require('../services/tallyService');
       const availableTypes = await getVoucherTypes();
-      const preferred = ['Sales Order', 'Sales Orders', 'Sales Invoice'];
+      const preferred = ['Sales Order', 'Sales Orders', 'Sales Invoice', 'Sales'];
       TALLY_SALES_ORDER_TYPE = preferred.find(t =>
         availableTypes.some(a => a.toLowerCase() === t.toLowerCase())
       ) || 'Sales';
+    logger.info('Voucher type resolution', { availableTypes, selected: TALLY_SALES_ORDER_TYPE });
       logger.info('Auto-detected Tally voucher type', {
         selected: TALLY_SALES_ORDER_TYPE,
         availableTypes
@@ -93,8 +95,17 @@ async function processQuotation({ entityId, isUpdate = false }) {
     }
 
     if (isUpdate) {
-      // Wait 2s — ADD and UPDATE webhooks fire simultaneously from Bitrix24
-      await new Promise(r => setTimeout(r, 2000));
+      // Wait 5s — ADD and UPDATE webhooks fire simultaneously from Bitrix24
+      await new Promise(r => setTimeout(r, 5000));
+
+      // If this voucher was just created in the last 15s, the UPDATE is a Bitrix24 echo — skip
+      const createdAt = recentlyCreated.get(String(voucher.voucherNumber));
+      if (createdAt && (Date.now() - createdAt) < 15000) {
+        logger.info('Skipping alter — voucher was just created, UPDATE is a Bitrix24 echo', {
+          entityId, voucherNumber: voucher.voucherNumber
+        });
+        return { success: true, voucher, skipped: true };
+      }
 
       logger.info('Quotation updated — altering existing Tally voucher in place', {
         entityId, voucherNumber: voucher.voucherNumber
@@ -108,6 +119,8 @@ async function processQuotation({ entityId, isUpdate = false }) {
 
     // Create voucher in Tally (new quotations only)
     const result = await createVoucher(voucher);
+    recentlyCreated.set(String(voucher.voucherNumber), Date.now());
+    setTimeout(() => recentlyCreated.delete(String(voucher.voucherNumber)), 30000);
     logger.info('Quotation processor completed', {
       entityId,
       voucherNumber: voucher.voucherNumber,

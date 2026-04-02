@@ -841,7 +841,7 @@ async function bootstrapLicense(cfg) {
           dialog.showMessageBox(null, {
             type: 'warning', title: 'License Expired',
             message: 'Your license has expired. All sync has been stopped.',
-            detail: 'Purchase or renew a license (Starter, Professional, Business or Enterprise) to resume.',
+            detail: 'Purchase or renew a license (Enterprise) to resume.',
             buttons: ['OK']
           });
           updateTray();
@@ -896,7 +896,7 @@ async function bootstrapLicense(cfg) {
       dialog.showMessageBox(null, {
         type: 'warning', title: 'No Active License',
         message: `No active license found for ${cfg.customerEmail}.`,
-        detail: 'Please purchase or renew a license (Starter, Professional, Business or Enterprise).\n\nReason: ' + result.reason,
+        detail: 'Please purchase or renew a license (Enterprise).\n\nReason: ' + result.reason,
         buttons: ['OK']
       });
     }

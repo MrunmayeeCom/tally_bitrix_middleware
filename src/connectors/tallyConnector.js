@@ -53,26 +53,194 @@ async function sendToTally(xml) {
 }
 
 async function getCompanyList() {
-  const xml = `<ENVELOPE>
-    <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
-    <BODY>
-      <EXPORTDATA>
-        <REQUESTDESC>
-          <REPORTNAME>List of Companies</REPORTNAME>
-        </REQUESTDESC>
-      </EXPORTDATA>
-    </BODY>
-  </ENVELOPE>`;
+  const xmlVariants = [
+    // Variant 1 — Correct TallyPrime Collection API (per official docs TYPE=Collection)
+    `<ENVELOPE>
+      <HEADER>
+        <VERSION>1</VERSION>
+        <TALLYREQUEST>Export</TALLYREQUEST>
+        <TYPE>Collection</TYPE>
+        <ID>List of Companies</ID>
+      </HEADER>
+      <BODY>
+        <DESC>
+          <STATICVARIABLES>
+            <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+          </STATICVARIABLES>
+          <TDL>
+            <TDLMESSAGE>
+              <COLLECTION NAME="List of Companies" ISMODIFY="Yes">
+                <TYPE>Company</TYPE>
+                <NATIVEMETHOD>Name</NATIVEMETHOD>
+              </COLLECTION>
+            </TDLMESSAGE>
+          </TDL>
+        </DESC>
+      </BODY>
+    </ENVELOPE>`,
 
-  try {
-    const response = await getTallyClient().post('/', xml);
-    const raw = response.data || '';
-    const matches = [...raw.matchAll(/<BASICCOMPANYNAME[^>]*>(.*?)<\/BASICCOMPANYNAME>/gi)];
-    const companies = matches.map(m => m[1].trim()).filter(Boolean);
-    return { success: true, companies };
-  } catch(e) {
-    return { success: false, error: e.message, companies: [] };
+    // Variant 2 — Export Data style with SVCURRENTCOMPANY wildcard
+    `<ENVELOPE>
+      <HEADER>
+        <VERSION>1</VERSION>
+        <TALLYREQUEST>Export</TALLYREQUEST>
+        <TYPE>Data</TYPE>
+        <ID>List of Accounts</ID>
+      </HEADER>
+      <BODY>
+        <DESC>
+          <STATICVARIABLES>
+            <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+            <AccountType>Companies</AccountType>
+          </STATICVARIABLES>
+        </DESC>
+      </BODY>
+    </ENVELOPE>`,
+
+    // Variant 3 — TDL inline report (most compatible across Silver/Gold/Server)
+    `<ENVELOPE>
+      <HEADER>
+        <VERSION>1</VERSION>
+        <TALLYREQUEST>Export</TALLYREQUEST>
+        <TYPE>Data</TYPE>
+        <ID>MyCompanyList</ID>
+      </HEADER>
+      <BODY>
+        <DESC>
+          <STATICVARIABLES>
+            <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+          </STATICVARIABLES>
+          <TDL>
+            <TDLMESSAGE>
+              <REPORT NAME="MyCompanyList">
+                <FORMS>MyCompanyList</FORMS>
+              </REPORT>
+              <FORM NAME="MyCompanyList">
+                <TOPPARTS>MyCompanyList</TOPPARTS>
+                <XMLTAG>MyCompanyList</XMLTAG>
+              </FORM>
+              <PART NAME="MyCompanyList">
+                <TOPLINES>MyCompanyList</TOPLINES>
+                <REPEAT>MyCompanyList : MyCompanyColl</REPEAT>
+                <SCROLLED>Vertical</SCROLLED>
+              </PART>
+              <LINE NAME="MyCompanyList">
+                <LEFTFIELDS>MyCompanyName</LEFTFIELDS>
+                <XMLTAG>COMPANY</XMLTAG>
+              </LINE>
+              <FIELD NAME="MyCompanyName">
+                <SET>$Name</SET>
+                <XMLTAG>NAME</XMLTAG>
+              </FIELD>
+              <COLLECTION NAME="MyCompanyColl">
+                <TYPE>Company</TYPE>
+                <NATIVEMETHOD>Name</NATIVEMETHOD>
+              </COLLECTION>
+            </TDLMESSAGE>
+          </TDL>
+        </DESC>
+      </BODY>
+    </ENVELOPE>`,
+
+    // Variant 4 — Object export for currently loaded company (fallback for Silver single-company)
+    `<ENVELOPE>
+      <HEADER>
+        <VERSION>1</VERSION>
+        <TALLYREQUEST>Export</TALLYREQUEST>
+        <TYPE>Object</TYPE>
+        <SUBTYPE>Company</SUBTYPE>
+        <ID TYPE="Name">##SVCurrentCompany</ID>
+      </HEADER>
+      <BODY>
+        <DESC>
+          <STATICVARIABLES>
+            <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+          </STATICVARIABLES>
+          <FETCHLIST>
+            <FETCH>Name</FETCH>
+          </FETCHLIST>
+        </DESC>
+      </BODY>
+    </ENVELOPE>`
+  ];
+
+  // Try each XML variant until one works
+  for (const xml of xmlVariants) {
+    try {
+      const response = await getTallyClient().post('/', xml);
+      const raw = response.data || '';
+
+      logger.info('[Tally] Raw company list response (first 500 chars):', raw.substring(0, 500));
+
+      // Skip if Tally returned a LINEERROR for this report name
+      if (raw.includes('<LINEERROR>')) {
+        logger.warn('[Tally] Report not found — trying next variant');
+        continue;
+      }
+
+      let companies = [];
+
+      // Try 1 — BASICCOMPANYNAME (Tally ERP 9)
+      const match1 = [...raw.matchAll(/<BASICCOMPANYNAME[^>]*>(.*?)<\/BASICCOMPANYNAME>/gi)];
+      if (match1.length > 0) {
+        companies = match1.map(m => m[1].trim()).filter(Boolean);
+        logger.info('[Tally] Companies found via BASICCOMPANYNAME:', companies);
+      }
+
+      // Try 2 — CMPSTKNAME (TallyPrime some versions)
+      if (companies.length === 0) {
+        const match2 = [...raw.matchAll(/<CMPSTKNAME[^>]*>(.*?)<\/CMPSTKNAME>/gi)];
+        companies = match2.map(m => m[1].trim()).filter(Boolean);
+        if (companies.length > 0)
+          logger.info('[Tally] Companies found via CMPSTKNAME:', companies);
+      }
+
+      // Try 3 — NAME inside COMPANY block (TDL response)
+      if (companies.length === 0) {
+        const match3 = [...raw.matchAll(/<COMPANY[^>]*>[\s\S]*?<NAME>(.*?)<\/NAME>[\s\S]*?<\/COMPANY>/gi)];
+        companies = match3.map(m => m[1].trim()).filter(Boolean);
+        if (companies.length > 0)
+          logger.info('[Tally] Companies found via COMPANY/NAME block:', companies);
+      }
+
+      // Try 4 — COMPANY tag with NAME child (TDL collection response)
+      if (companies.length === 0) {
+        const match4 = [...raw.matchAll(/<COMPANY[^>]*>\s*<NAME>(.*?)<\/NAME>/gi)];
+        companies = match4.map(m => m[1].trim()).filter(Boolean);
+        if (companies.length > 0)
+          logger.info('[Tally] Companies found via COMPANY>NAME block:', companies);
+      }
+
+      // Try 5 — bare NAME tags anywhere (Object export / last resort)
+      if (companies.length === 0) {
+        const match5 = [...raw.matchAll(/<NAME>(.*?)<\/NAME>/gi)];
+        // Filter out obviously non-company values (empty, numeric-only, XML artifacts)
+        companies = match5
+          .map(m => m[1].trim())
+          .filter(n => n && n.length > 1 && !/^\d+$/.test(n) && !n.startsWith('$$'));
+        if (companies.length > 0)
+          logger.info('[Tally] Companies found via NAME tag (last resort):', companies);
+      }
+
+      if (companies.length > 0) {
+        return { success: true, companies };
+      }
+
+      logger.warn('[Tally] No company tags found in this response — trying next variant');
+
+    } catch(e) {
+      logger.warn('[Tally] Variant failed:', e.message);
+      continue;
+    }
   }
+
+  // All variants exhausted
+  logger.warn('[Tally] All report variants failed — TallyPrime Silver may restrict company list export');
+  return {
+    success: false,
+    error: 'TallyPrime could not export company list — please use "Add manually" option and type the exact company name as shown in Tally (e.g. "Averlon" or "Test Company")',
+    companies: []
+  };
 }
 
 module.exports = { sendToTally, getTallyClient, getCompanyList };

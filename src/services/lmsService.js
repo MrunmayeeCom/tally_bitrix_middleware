@@ -192,8 +192,8 @@ async function fetchFeatureRegistry() {
 // Expected LMS feature keys:
 //   syncInterval   (number, minutes)   → 5 / 15 / 60
 //   outstandingSync (bool)             → true for all plans
-//   ledgerSync      (bool)             → Professional+
-//   dueDateSync     (bool)             → Business+
+//   ledgerSync      (bool)             → Custom+
+//   dueDateSync     (bool)             → Custom+
 //   maxCompanies    (number)           → 1 or 3
 
 // LMS returns license features as array: [{ featureSlug, featureType, value }]

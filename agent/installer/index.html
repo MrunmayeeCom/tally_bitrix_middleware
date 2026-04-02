@@ -881,16 +881,35 @@ async function scanSettingsCompanies() {
   const label = document.getElementById('s-scan-label');
   icon.textContent = '⏳'; label.textContent = 'Scanning…';
   btn.style.opacity = '0.6'; btn.style.pointerEvents = 'none';
+  
   try {
-    const r = await fetch('http://localhost:5050/api/tally/companies', { signal: AbortSignal.timeout(5000) });
-    const data = await r.json();
-    if (!data.success || !data.companies?.length) throw new Error(data.error || 'No companies found');
+    let data;
+    
+    // Get host/port from settings form
+    const tallyHost = document.getElementById('s-tallyHost')?.value.trim() || 'localhost';
+    const tallyPort = parseInt(document.getElementById('s-tallyPort')?.value) || 9000;
+
+    try {
+      // Try HTTP first — if service is running
+      const r = await fetch('http://localhost:5050/api/tally/companies', { 
+        signal: AbortSignal.timeout(8000) 
+      });
+      data = await r.json();
+    } catch {
+      // Fallback to IPC — same as setup wizard
+      data = await ipcRenderer.invoke('scan-tally-companies', { tallyHost, tallyPort });
+    }
+
+    if (!data.success || !data.companies?.length) 
+      throw new Error(data.error || 'No companies found');
+
     _settingsScannedList = data.companies;
     populateDropdown('s-company-dropdown', _settingsScannedList, _settingsCompanies);
     icon.textContent = '✓'; label.textContent = `${data.companies.length} found`;
     btn.style.background = 'rgba(56,217,169,.1)';
     btn.style.borderColor = 'var(--accent2)'; btn.style.color = 'var(--accent2)';
     showToast(`Found ${data.companies.length} companies ✓`, 'success');
+
   } catch(e) {
     icon.textContent = '⚠️'; label.textContent = 'Failed';
     btn.style.borderColor = 'var(--danger)'; btn.style.color = 'var(--danger)';
@@ -966,7 +985,7 @@ async function scanTallyCompanies() {
 
     try {
       // If service is already running (e.g. reinstall), use HTTP
-      const r = await fetch('http://localhost:5050/api/tally/companies', { signal: AbortSignal.timeout(3000) });
+      const r = await fetch('http://localhost:5050/api/tally/companies', { signal: AbortSignal.timeout(8000) });
       data = await r.json();
     } catch {
       // Service not running yet (first install) — use IPC directly from Electron
