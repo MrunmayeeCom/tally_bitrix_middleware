@@ -61,13 +61,20 @@ async function handleWebhook(req, res) {
 
       case 'ONCRMINVOICEADD':
       case 'ONCRMINVOICEUPDATE':
+        if (!featureGate.isEnabled('invoice-sync')) {
+          logger.info('invoice-sync not enabled on current plan — skipping', { entityId });
+          break;
+        }
+        await processInvoice(entityId, isUpdate, 'legacy');
+        break;
+
       case 'ONCRMSMARTINVOICEADD':
       case 'ONCRMSMARTINVOICEUPDATE':
         if (!featureGate.isEnabled('invoice-sync')) {
           logger.info('invoice-sync not enabled on current plan — skipping', { entityId });
           break;
         }
-        await processInvoice(entityId, isUpdate);
+        await processInvoice(entityId, isUpdate, 'smart');
         break;
 
       case 'ONCRMQUOTEADD':
@@ -143,10 +150,13 @@ async function handleWebhookPayload(payload) {
     }
     case 'ONCRMINVOICEADD':
     case 'ONCRMINVOICEUPDATE':
+      if (!featureGate.isEnabled('invoice-sync')) break;
+      await processInvoice(entityId, isUpdate, 'legacy');
+      break;
     case 'ONCRMSMARTINVOICEADD':
     case 'ONCRMSMARTINVOICEUPDATE':
       if (!featureGate.isEnabled('invoice-sync')) break;
-      await processInvoice(entityId, isUpdate);
+      await processInvoice(entityId, isUpdate, 'smart');
       break;
     case 'ONCRMQUOTEADD':
     case 'ONCRMQUOTEUPDATE':

@@ -6,12 +6,12 @@ const logger = require('../utils/logger');
 // In-memory dedup set — prevents duplicate vouchers if webhook fires twice within 60s
 const invoiceDedup = new Set();
 
-async function processInvoice(entityId, isUpdate = false) {
+async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart') {
   try {
-    logger.info(`Processing invoice — ${isUpdate ? 'UPDATE' : 'CREATE'}`, { entityId });
+    logger.info(`Processing invoice — ${isUpdate ? 'UPDATE' : 'CREATE'} — type: ${invoiceType}`, { entityId });
 
     // Step 1: Fetch real invoice data from Bitrix24
-    const invoice = await getInvoice(entityId);
+    const invoice = await getInvoice(entityId, invoiceType);
     if (!invoice) throw new Error(`Invoice not found: ${entityId}`);
 
     // Step 1b: Ensure the party ledger exists in Tally before pushing the voucher

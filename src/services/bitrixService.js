@@ -123,33 +123,63 @@ async function sendNotification(userId, message, dealId = null) {
 }
 
 // ── Invoices (Smart Invoice = entityTypeId 31) ──────────────────────────
-async function getInvoice(id) {
-  logger.info('Fetching invoice:', id);
-  const data = await callBitrix('crm.item.get', { 
-    entityTypeId: 31,
-    id 
-  });
-  const item = data.result?.item || data.result || data;
+async function getInvoice(id, invoiceType = 'smart') {
+  logger.info(`Fetching invoice: ${id} | type: ${invoiceType}`);
 
-  // Enrich partyName — fetch real contact/company name if linked
-  if (!item.clientTitle && !item.CLIENT_TITLE) {
-    if (item.contactId > 0) {
+  let item;
+
+  if (invoiceType === 'legacy') {
+    const data = await callBitrix('crm.invoice.get', { id });
+    item = data.result || data;
+
+    // Try to get party name from linked company
+    if (item.UF_CRM_CRM_INVOICE_M_COMPANY_ID) {
       try {
-        const contactData = await callBitrix('crm.contact.get', { id: item.contactId });
-        const c = contactData.result || contactData;
-        item.clientTitle = `${c.NAME || ''} ${c.LAST_NAME || ''}`.trim();
-        logger.info('Invoice contact enriched', { contactId: item.contactId, name: item.clientTitle });
+        const co = await callBitrix('crm.company.get', { id: item.UF_CRM_CRM_INVOICE_M_COMPANY_ID });
+        item.clientTitle = (co.result || co).TITLE || '';
+        logger.info('Legacy invoice company enriched', { name: item.clientTitle });
       } catch (e) {
-        logger.warn('Could not enrich invoice contact', { contactId: item.contactId });
+        logger.warn('Could not enrich legacy invoice company', { id });
       }
-    } else if (item.companyId > 0) {
+    }
+    // Try contact if no company
+    if (!item.clientTitle && item.UF_CRM_CRM_INVOICE_M_CONTACT_ID) {
       try {
-        const companyData = await callBitrix('crm.company.get', { id: item.companyId });
-        const co = companyData.result || companyData;
-        item.clientTitle = co.TITLE || '';
-        logger.info('Invoice company enriched', { companyId: item.companyId, name: item.clientTitle });
+        const ct = await callBitrix('crm.contact.get', { id: item.UF_CRM_CRM_INVOICE_M_CONTACT_ID });
+        const c = ct.result || ct;
+        item.clientTitle = `${c.NAME || ''} ${c.LAST_NAME || ''}`.trim();
+        logger.info('Legacy invoice contact enriched', { name: item.clientTitle });
       } catch (e) {
-        logger.warn('Could not enrich invoice company', { companyId: item.companyId });
+        logger.warn('Could not enrich legacy invoice contact', { id });
+      }
+    }
+
+  } else {
+    const data = await callBitrix('crm.item.get', { 
+      entityTypeId: 31,
+      id 
+    });
+    item = data.result?.item || data.result || data;
+
+    if (!item.clientTitle && !item.CLIENT_TITLE) {
+      if (item.contactId > 0) {
+        try {
+          const contactData = await callBitrix('crm.contact.get', { id: item.contactId });
+          const c = contactData.result || contactData;
+          item.clientTitle = `${c.NAME || ''} ${c.LAST_NAME || ''}`.trim();
+          logger.info('Invoice contact enriched', { contactId: item.contactId, name: item.clientTitle });
+        } catch (e) {
+          logger.warn('Could not enrich invoice contact', { contactId: item.contactId });
+        }
+      } else if (item.companyId > 0) {
+        try {
+          const companyData = await callBitrix('crm.company.get', { id: item.companyId });
+          const co = companyData.result || companyData;
+          item.clientTitle = co.TITLE || '';
+          logger.info('Invoice company enriched', { companyId: item.companyId, name: item.clientTitle });
+        } catch (e) {
+          logger.warn('Could not enrich invoice company', { companyId: item.companyId });
+        }
       }
     }
   }

@@ -61,9 +61,9 @@ function mapInvoiceToVoucher(invoice) {
 
   const today = new Date().toISOString().split('T')[0];
   return {
-    voucherType:   'Sales',
+    voucherType:   process.env.TALLY_INVOICE_VOUCHER_TYPE || 'Sales Invoice',
     voucherNumber,
-    date:          dateRaw?.split('T')[0]      || today,
+    date:          (dateRaw || today).split('T')[0],
     partyName,
     amount:        parseFloat(amount)          || 0,
     currency:      currency                    || 'INR',

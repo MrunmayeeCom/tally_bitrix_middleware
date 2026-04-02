@@ -107,9 +107,10 @@ async function processQuotation({ entityId, isUpdate = false }) {
         return { success: true, voucher, skipped: true };
       }
 
-      logger.info('Quotation updated — altering existing Tally voucher in place', {
+      logger.info('Quotation updated — altering existing Tally voucher', {
         entityId, voucherNumber: voucher.voucherNumber
       });
+
       const result = await alterVoucher(voucher);
       logger.info('Quotation processor completed', {
         entityId, voucherNumber: voucher.voucherNumber, success: true, action: 'altered'
