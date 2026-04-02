@@ -225,48 +225,39 @@ async function createVoucher(voucher) {
   const xml = `
     <ENVELOPE>
       <HEADER>
-        <VERSION>1</VERSION>
-        <TALLYREQUEST>Import</TALLYREQUEST>
-        <TYPE>Data</TYPE>
-        <ID>Vouchers</ID>
+        <TALLYREQUEST>Import Data</TALLYREQUEST>
       </HEADER>
       <BODY>
-        <DESC>
-          <STATICVARIABLES>
-            <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
-            <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
-          </STATICVARIABLES>
-        </DESC>
-        <DATA>
-          <TALLYMESSAGE xmlns:UDF="TallyUDF">
-            <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="Accounting Voucher View">
-              <DATE>${voucher.date.replace(/-/g, '')}</DATE>
-              <VOUCHERTYPENAME>${voucher.voucherType}</VOUCHERTYPENAME>
-              <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
-              <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
-              <PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>
-              <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
-              <NARRATION>${escapeXml(voucher.narration)}</NARRATION>
-              <LEDGERENTRIES.LIST>
-                <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
-                <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-                <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
-                <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
-                <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
-                <BILLALLOCATIONS.LIST>
-                  <NAME>BX-${voucher.voucherNumber}</NAME>
-                  <BILLTYPE>New Ref</BILLTYPE>
+        <IMPORTDATA>
+          <REQUESTDESC>
+            <REPORTNAME>Vouchers</REPORTNAME>
+            <STATICVARIABLES>
+              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+            </STATICVARIABLES>
+          </REQUESTDESC>
+          <REQUESTDATA>
+            <TALLYMESSAGE xmlns:UDF="TallyUDF">
+              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create">
+                <DATE>${voucher.date.replace(/-/g, '')}</DATE>
+                <VOUCHERTYPENAME>${voucher.voucherType}</VOUCHERTYPENAME>
+                <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
+                <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
+                <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
+                <NARRATION>${escapeXml(voucher.narration)}</NARRATION>
+                <ALLLEDGERENTRIES.LIST>
+                  <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
+                  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
                   <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
-                </BILLALLOCATIONS.LIST>
-              </LEDGERENTRIES.LIST>
-              <LEDGERENTRIES.LIST>
-                <LEDGERNAME>Sales</LEDGERNAME>
-                <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
-              </LEDGERENTRIES.LIST>
-            </VOUCHER>
-          </TALLYMESSAGE>
-        </DATA>
+                </ALLLEDGERENTRIES.LIST>
+                <ALLLEDGERENTRIES.LIST>
+                  <LEDGERNAME>Sales</LEDGERNAME>
+                  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                  <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
+                </ALLLEDGERENTRIES.LIST>
+              </VOUCHER>
+            </TALLYMESSAGE>
+          </REQUESTDATA>
+        </IMPORTDATA>
       </BODY>
     </ENVELOPE>
   `.trim();
@@ -477,128 +468,186 @@ async function getLedgerByName(ledgerName) {
   }
 }
 
-// Alter (update) an existing voucher in Tally using official TAGNAME/TAGVALUE method
+// Alter (update) an existing Sales Order voucher in Tally by MASTERID + GUID
+
 async function alterVoucher(voucher) {
   logger.info('Altering voucher in Tally', { voucherNumber: voucher.voucherNumber });
 
   const voucherTypeName = voucher.voucherType || 'Sales';
-  const voucherDate = voucher.date ? voucher.date.replace(/-/g, '') : new Date().toISOString().slice(0,10).replace(/-/g,'');
+  const voucherDate = voucher.date
+    ? voucher.date.replace(/-/g, '')
+    : new Date().toISOString().slice(0, 10).replace(/-/g, '');
 
-  // Official TallyPrime alter format: match by TAGNAME="VoucherNumber" + TAGVALUE
-  // This is the documented approach from help.tallysolutions.com/integration-with-tallyprime
-  const xml = `
-    <ENVELOPE>
-      <HEADER>
-        <VERSION>1</VERSION>
-        <TALLYREQUEST>Import</TALLYREQUEST>
-        <TYPE>Data</TYPE>
-        <ID>Vouchers</ID>
-      </HEADER>
-      <BODY>
-        <DESC></DESC>
-        <DATA>
-          <TALLYMESSAGE xmlns:UDF="TallyUDF">
-            <VOUCHER TAGNAME="VoucherNumber" TAGVALUE="BX-${voucher.voucherNumber}" ACTION="Alter" VCHTYPE="${voucherTypeName}">
-              <DATE>${voucherDate}</DATE>
-              <VOUCHERTYPENAME>${voucherTypeName}</VOUCHERTYPENAME>
-              <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
-              <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
-              <PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>
-              <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
-              <NARRATION>${escapeXml(voucher.narration)}</NARRATION>
-              <LEDGERENTRIES.LIST>
-                <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
-                <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-                <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
-                <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
-                <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
-                <BILLALLOCATIONS.LIST>
-                  <NAME>BX-${voucher.voucherNumber}</NAME>
-                  <BILLTYPE>Agst Ref</BILLTYPE>
-                  <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
-                </BILLALLOCATIONS.LIST>
-              </LEDGERENTRIES.LIST>
-              <LEDGERENTRIES.LIST>
-                <LEDGERNAME>Sales</LEDGERNAME>
-                <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
-              </LEDGERENTRIES.LIST>
-            </VOUCHER>
-          </TALLYMESSAGE>
-        </DATA>
-      </BODY>
-    </ENVELOPE>`.trim();
+  // ✅ Step 1: Find MASTERID (REAL FIX)
+  const masterId = await findMasterId(
+    `BX-${voucher.voucherNumber}`,
+    voucherTypeName,
+    tallyConfig,
+    sendToTally,
+    escapeXml
+  );
 
-  const response = await sendToTally(xml);
-  logger.info('Raw Tally alter response', { voucherNumber: voucher.voucherNumber, response: (response || '').substring(0, 400) });
+  if (!masterId) {
+    logger.error('Voucher not found in Tally for update', {
+      voucherNumber: voucher.voucherNumber
+    });
+    throw new Error(`Voucher BX-${voucher.voucherNumber} not found in Tally`);
+  }
+
+  // ✅ Step 2: Build correct XML using MASTERID
+  const alterXml = buildAlterXmlByMasterId(
+    masterId,
+    voucher,
+    voucherTypeName,
+    voucherDate,
+    tallyConfig,
+    escapeXml
+  );
+
+  // ✅ Step 3: Send request
+  const response = await sendToTally(alterXml);
+
+  logger.info('Raw Tally alter response', {
+    voucherNumber: voucher.voucherNumber,
+    response: (response || '').substring(0, 400)
+  });
 
   const altered = parseInt((response || '').match(/<ALTERED>(\d+)<\/ALTERED>/i)?.[1] ?? '0');
   const created = parseInt((response || '').match(/<CREATED>(\d+)<\/CREATED>/i)?.[1] ?? '0');
 
   if (altered === 1) {
-    logger.info('Voucher altered in Tally', { voucherNumber: voucher.voucherNumber });
+    logger.info('✅ Voucher updated successfully', { voucherNumber: voucher.voucherNumber });
     return response;
   }
 
-  // CREATED:1 means Tally could not find the voucher to alter and created a new one instead.
-  // Delete the duplicate and fall back to a clean create.
   if (created === 1) {
-    logger.warn('Alter created a duplicate instead of altering — voucher not found by TAGVALUE. Falling back to create after delete.', { voucherNumber: voucher.voucherNumber });
-    return response; // accept it — the updated voucher is now in Tally as the latest entry
+    logger.warn('⚠️ Unexpected create — check MASTERID logic', {
+      voucherNumber: voucher.voucherNumber
+    });
+    return response;
   }
 
-  // altered=0, created=0 — nothing happened at all, fall back to create
-  if (altered === 0 && created === 0) {
-    logger.warn('Alter found no matching voucher — falling back to create', { voucherNumber: voucher.voucherNumber });
-    return createVoucher(voucher);
-  }
-
-  logger.error('Voucher alter failed', { voucherNumber: voucher.voucherNumber, response: (response || '').substring(0, 400) });
-  throw new Error(`Tally voucher alter failed for BX-${voucher.voucherNumber}`);
+  throw new Error(`❌ Voucher update failed for BX-${voucher.voucherNumber}`);
 }
 
-// Cancel a voucher in Tally by voucher number — works on TallyPrime Silver
-// Per official docs: DATE attribute must be in DD-MMM-YYYY format e.g. "02-Apr-2026"
-async function cancelVoucher(voucherNumber, voucherType = 'Sales') {
-  logger.info('Cancelling voucher in Tally', { voucherNumber, voucherType });
+// ── Helper: find voucher MASTERID via Day Book ────────────────────────────────
+async function findMasterId(voucherNumber, voucherTypeName, tallyConfig, sendToTally, escapeXml) {
+  const logger = require('../utils/logger');
+  const today    = new Date();
+  const fromDate = new Date(today.getFullYear() - 2, today.getMonth(), today.getDate());
+  const fmt = (d) => {
+    const dd   = String(d.getDate()).padStart(2, '0');
+    const mm   = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
+  };
 
-  const d    = new Date();
-  const dd   = String(d.getDate()).padStart(2, '0');
-  const mon  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
-  const yyyy = d.getFullYear();
-  const tallyDate = `${dd}-${mon}-${yyyy}`;
+  const fetchXml = `
+<ENVELOPE>
+  <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
+  <BODY>
+    <EXPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Day Book</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+          <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+          <SVFROMDATE>${fmt(fromDate)}</SVFROMDATE>
+          <SVTODATE>${fmt(today)}</SVTODATE>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+    </EXPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
 
-  logger.info('Cancel date formatted', { tallyDate, voucherNumber });
+  const response = await sendToTally(fetchXml);
+  const targetNum = voucherNumber;
 
-  const xml = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Import</TALLYREQUEST><TYPE>Data</TYPE><ID>Vouchers</ID></HEADER><BODY><DESC></DESC><DATA><TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER DATE="${tallyDate}" TAGNAME="VoucherNumber" TAGVALUE="${escapeXml(voucherNumber)}" ACTION="Cancel" VCHTYPE="${voucherType}"><NARRATION>Cancelled by Bitrix24 sync</NARRATION></VOUCHER></TALLYMESSAGE></DATA></BODY></ENVELOPE>`;
+  const voucherBlockRegex = /<VOUCHER\b[^>]*>([\s\S]*?)<\/VOUCHER>/gi;
+  let vBlock;
+  while ((vBlock = voucherBlockRegex.exec(response)) !== null) {
+    const block  = vBlock[1];
+    const numM      = block.match(/<VOUCHERNUMBER[^>]*>(.*?)<\/VOUCHERNUMBER>/i);
+    const refM      = block.match(/<REFERENCE[^>]*>(.*?)<\/REFERENCE>/i);
+    const billRefM  = block.match(/<BILLALLOCATIONS\.LIST>[\s\S]*?<NAME>(.*?)<\/NAME>/i);
+    const idM       = block.match(/<MASTERID>\s*(\d+)\s*<\/MASTERID>/i);
 
-  logger.info('Cancel XML being sent', { voucherNumber, xml });
+    if (!idM) continue;
 
-  try {
-    const response = await sendToTally(xml);
-    logger.info('Raw Tally cancel response', { voucherNumber, response: (response || '').substring(0, 400) });
+    const vNum     = (numM?.[1] || '').trim();
+    const vRef     = (refM?.[1] || '').trim();
+    const vBillRef = (billRefM?.[1] || '').trim();
 
-    const cancelled = parseInt((response || '').match(/<CANCELLED>(\d+)<\/CANCELLED>/i)?.[1] ?? '0');
-    const altered   = parseInt((response || '').match(/<ALTERED>(\d+)<\/ALTERED>/i)?.[1] ?? '0');
-    const lineError = ((response || '').match(/<LINEERROR>(.*?)<\/LINEERROR>/i) || [])[1] || '';
-
-    if (lineError) {
-      logger.warn('Tally cancel LINEERROR', { voucherNumber, lineError });
+    // 🔥 Match using ALL possible fields
+    if (vNum === targetNum || vRef === targetNum || vBillRef === targetNum) {
+      logger.info('Found MASTERID for alter', {
+        voucherNumber,
+        masterId: idM[1],
+        matchedOn:
+          vNum === targetNum ? 'VOUCHERNUMBER' :
+          vRef === targetNum ? 'REFERENCE' :
+          'BILLALLOCATIONS'
+      });
+      return idM[1];
     }
-
-    if (cancelled === 1 || altered === 1) {
-      logger.info('Voucher cancelled in Tally', { voucherNumber });
-      return response;
-    }
-
-    logger.warn('Cancel returned 0 — voucher may not exist yet, proceeding with create', { voucherNumber });
-    return null;
-  } catch (err) {
-    logger.warn('Cancel voucher failed — proceeding with create anyway', { voucherNumber, message: err.message });
-    return null;
   }
+  return null;
 }
 
+function buildAlterXmlByMasterId(masterId, voucher, voucherTypeName, voucherDate, tallyConfig, escapeXml) {
+  return `
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Import</TALLYREQUEST>
+    <TYPE>Data</TYPE>
+    <ID>Vouchers</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
+    </DESC>
+    <DATA>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER MASTERID="${masterId}" ACTION="Alter" VCHTYPE="${voucherTypeName}">
+          <DATE>${voucherDate}</DATE>
+          <VOUCHERTYPENAME>${voucherTypeName}</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
+          <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
+          <MASTERID>${masterId}</MASTERID>
+          <PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>
+          <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
+          <NARRATION>${escapeXml(voucher.narration)}</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+            <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
+            <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
+            <BILLALLOCATIONS.LIST>
+              <NAME>BX-${voucher.voucherNumber}</NAME>
+              <BILLTYPE>Agst Ref</BILLTYPE>
+              <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
+            </BILLALLOCATIONS.LIST>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+    </DATA>
+  </BODY>
+</ENVELOPE>`.trim();
+}
+
+module.exports = { alterVoucher };
+
+// Delete a voucher in Tally by voucher number (used before recreating on update)
+// Step 1: fetch the MASTERID, Step 2: delete by MASTERID
 async function deleteVoucher(voucherNumber) {
   logger.info('Deleting voucher in Tally', { voucherNumber });
 
@@ -624,6 +673,7 @@ async function deleteVoucher(voucherNumber) {
             <STATICVARIABLES>
               <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
               <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+              <VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME>
               <SVFROMDATE>${fmt(fromDate)}</SVFROMDATE>
               <SVTODATE>${fmt(today)}</SVTODATE>
             </STATICVARIABLES>
@@ -634,7 +684,6 @@ async function deleteVoucher(voucherNumber) {
 
   let masterId = null;
   let voucherDate = null;
-  let detectedVoucherTypeName = null;
   try {
     const fetchResponse = await sendToTally(fetchXml);
 
@@ -654,11 +703,9 @@ async function deleteVoucher(voucherNumber) {
 
       if (idMatch && (vNum === voucherNumber || vRef === voucherNumber)) {
         masterId = idMatch[1];
-        const dateMatch    = block.match(/<DATE>\s*(\d+)\s*<\/DATE>/i);
-        const vtypeMatch   = block.match(/<VOUCHERTYPENAME[^>]*>(.*?)<\/VOUCHERTYPENAME>/i);
-        voucherDate            = dateMatch  ? dateMatch[1].trim()  : null;
-        detectedVoucherTypeName = vtypeMatch ? vtypeMatch[1].trim() : null;
-        logger.info('Found voucher MASTERID for delete', { voucherNumber, masterId, voucherDate, detectedVoucherTypeName, matchedOn: vNum === voucherNumber ? 'VOUCHERNUMBER' : 'REFERENCE' });
+        const dateMatch = block.match(/<DATE>\s*(\d+)\s*<\/DATE>/i);
+        voucherDate = dateMatch ? dateMatch[1].trim() : null;
+        logger.info('Found voucher MASTERID for delete', { voucherNumber, masterId, voucherDate, matchedOn: vNum === voucherNumber ? 'VOUCHERNUMBER' : 'REFERENCE' });
         break;
       }
     }
@@ -691,13 +738,13 @@ async function deleteVoucher(voucherNumber) {
           </REQUESTDESC>
           <REQUESTDATA>
             <TALLYMESSAGE xmlns:UDF="TallyUDF">
-              <VOUCHER VCHTYPE="${detectedVoucherTypeName || 'Sales'}" ACTION="Delete" MASTERID="${masterId}">
+              <VOUCHER VCHTYPE="Sales Order" ACTION="Delete" MASTERID="${masterId}">
                 <DATE>${voucherDate || new Date().toISOString().slice(0,10).replace(/-/g,'')}</DATE>
-                <VOUCHERTYPENAME>${detectedVoucherTypeName || 'Sales'}</VOUCHERTYPENAME>
+                <VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME>
                 <VOUCHERNUMBER>${escapeXml(voucherNumber)}</VOUCHERNUMBER>
                 <REFERENCE>${escapeXml(voucherNumber)}</REFERENCE>
                 <MASTERID>${masterId}</MASTERID>
-                <PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>
+                <PERSISTEDVIEW>Sales Order Voucher View</PERSISTEDVIEW>
               </VOUCHER>
             </TALLYMESSAGE>
           </REQUESTDATA>
@@ -746,8 +793,6 @@ async function getVoucherTypes() {
   try {
     const response = await sendToTally(xml);
     const names = [];
-
-    // Try 1 — VOUCHERTYPE blocks with NAME child tag
     const regex = /<VOUCHERTYPE\b[^>]*>([\s\S]*?)<\/VOUCHERTYPE>/gi;
     let match;
     while ((match = regex.exec(response)) !== null) {
@@ -756,13 +801,6 @@ async function getVoucherTypes() {
       const name = (nameMatch && nameMatch[1].trim()) || (nameAttr && nameAttr[1].trim()) || '';
       if (name) names.push(name);
     }
-
-    // Try 2 — TALLYMESSAGE/NAME tags (some TallyPrime versions return flat list)
-    if (names.length === 0) {
-      const flat = [...response.matchAll(/<NAME>(.*?)<\/NAME>/gi)];
-      flat.forEach(m => { if (m[1].trim()) names.push(m[1].trim()); });
-    }
-
     logger.info('Fetched voucher types from Tally', { count: names.length, names });
     return names;
   } catch (err) {
@@ -812,7 +850,6 @@ module.exports = {
   parseLedgersXml,
   createVoucher,
   alterVoucher,
-  cancelVoucher,
   deleteVoucher,
   getOutstanding,
   parseOutstandingXml,
