@@ -105,8 +105,16 @@ async function pollOnce() {
 
     logger.info(`[Poller] Received ${events.length} pending events | clientId: ${getClientId()}`);
 
+    // Sort ADD before UPDATE for the same entity — prevents UPDATE arriving
+    // before the voucher exists in Tally when both are fetched in the same poll batch
+    const sorted = [...events].sort((a, b) => {
+      const isAddA = a.eventType && a.eventType.endsWith('ADD') ? 0 : 1;
+      const isAddB = b.eventType && b.eventType.endsWith('ADD') ? 0 : 1;
+      return isAddA - isAddB;
+    });
+
     const confirmedIds = [];
-    for (const event of events) {
+    for (const event of sorted) {
       await processEvent(event);
       confirmedIds.push(event.eventId);
     }

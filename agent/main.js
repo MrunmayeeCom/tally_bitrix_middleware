@@ -442,6 +442,7 @@ ipcMain.handle('uninstall-service', async () => {
     path.join(__dirname, '..', 'logs', 'tally-snapshot.json'),
     path.join(__dirname, '..', 'logs', 'sync-history.json'),
     path.join(__dirname, '..', 'logs', 'escalation-cooldown.json'),
+    path.join(__dirname, '..', 'logs', 'voucher-masterid-cache.json'),
   ];
   for (const f of cacheFiles) {
     try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
