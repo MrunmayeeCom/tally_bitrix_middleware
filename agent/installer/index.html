@@ -497,6 +497,11 @@
           <div class="ac-label" id="svc-label">Stop Service</div>
           <div class="ac-sub" id="svc-sub">Pause all syncing</div>
         </div>
+        <div class="action-card" onclick="syncInvoices()">
+          <div class="ac-icon">🧾</div>
+          <div class="ac-label">Sync Invoices</div>
+          <div class="ac-sub">Bitrix24 → Tally vouchers</div>
+        </div>
       </div>
     </div>
 
@@ -686,6 +691,11 @@ const ipcRenderer = (function() {
 
       if (channel === 'trigger-ledger-sync') {
         try { return await api('/trigger/ledgers', 'POST'); }
+        catch { return { triggered: false }; }
+      }
+
+      if (channel === 'trigger-invoice-sync') {
+        try { return await api('/sync/invoices', 'POST'); }
         catch { return { triggered: false }; }
       }
 
@@ -1475,6 +1485,42 @@ async function syncLedgers() {
   } catch(e) {
     showToast('Ledger sync failed: ' + e.message, 'error');
     window._ledgerSyncInProgress = false;
+  }
+}
+
+async function syncInvoices() {
+  if (window._invoiceSyncInProgress) return;
+  window._invoiceSyncInProgress = true;
+  document.querySelectorAll('.action-card').forEach(c => {
+    if (c.querySelector('.ac-label')?.textContent === 'Sync Invoices') {
+      c.style.opacity = '0.5';
+      c.style.pointerEvents = 'none';
+      c.querySelector('.ac-icon').textContent = '⏳';
+    }
+  });
+  showToast('Invoice sync triggered…', 'success');
+  try {
+    const cfg = await ipcRenderer.invoke('get-status');
+    const apiKey = cfg.config?.apiKey || '';
+    await fetch('http://localhost:5050/sync/invoices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey }
+    });
+    setTimeout(() => {
+      refreshLogs();
+      document.querySelectorAll('.action-card').forEach(c => {
+        if (c.querySelector('.ac-label')?.textContent === 'Sync Invoices') {
+          c.style.opacity = '1';
+          c.style.pointerEvents = 'auto';
+          c.querySelector('.ac-icon').textContent = '🧾';
+        }
+      });
+      window._invoiceSyncInProgress = false;
+      showToast('Invoice sync running — check logs', 'success');
+    }, 3000);
+  } catch(e) {
+    showToast('Invoice sync failed: ' + e.message, 'error');
+    window._invoiceSyncInProgress = false;
   }
 }
 

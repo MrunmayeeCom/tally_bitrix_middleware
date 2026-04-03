@@ -4,6 +4,7 @@ const { processDueDates } = require('./processors/dueDateProcessor');
 const { processTallyToContact } = require('./processors/tallyToContactProcessor');
 const { recordSync } = require('./utils/syncHistory');
 const logger = require('./utils/logger');
+const { pollInvoices } = require('./processors/invoicePoller');
 const featureGate = require('./services/featureGate');
 
 function recordSyncFailure(trigger, message) {
@@ -15,6 +16,7 @@ let isDueDateSyncing = false;
 let isLedgerSyncing  = false;
 let schedulerStarted = false;
 let _activeTasks     = []; // track all cron tasks for restart
+let isInvoiceSyncing = false;
 
 async function runSync(label, fn) {
   if (isSyncing) {
@@ -77,6 +79,24 @@ async function runOutstandingSync(label) {
 async function runFullSync(label) {
   await runLedgerSync(`${label} — ledger sync`, processTallyToContact);
   await runSync(`${label} — outstanding sync`, processOutstanding);
+}
+
+// Add this helper function
+async function runInvoiceSync(label) {
+  if (isInvoiceSyncing) {
+    logger.warn(`Invoice sync already running — skipping ${label}`);
+    return;
+  }
+  isInvoiceSyncing = true;
+  try {
+    const result = await pollInvoices();
+    logger.info(`${label} completed`, result || {});
+  } catch (error) {
+    logger.error(`${label} failed`, { message: error.message });
+    recordSyncFailure(label, error.message);
+  } finally {
+    isInvoiceSyncing = false;
+  }
 }
 
 function intervalToCron(minutes) {
@@ -152,6 +172,14 @@ function startScheduler() {
     _activeTasks.push(cron.schedule('0 * * * *', () => {
       runDueDateSync('1hr — due date automation', processDueDates);
     }, { timezone: 'Asia/Kolkata' }));
+  }
+
+  // Invoice polling — runs on same interval if invoice-sync is enabled
+  if (featureGate.isEnabled('invoice-sync')) {
+    _activeTasks.push(cron.schedule(syncCron, () => {
+      runInvoiceSync(`${syncMinutes}min — invoice poll`);
+    }, { timezone: 'Asia/Kolkata' }));
+    logger.info('[Scheduler] Invoice poller registered');
   }
 
   logger.info(`Scheduler started — outstanding: ${featureGate.isEnabled('outstanding-sync')} | ledger: ${featureGate.isEnabled('contact-sync')} | dueDates: ${featureGate.isEnabled('due-date-automation')} | interval: ${syncMinutes}min`);}

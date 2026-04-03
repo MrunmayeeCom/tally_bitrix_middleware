@@ -405,6 +405,12 @@ html,body{
           <span class="trig-label">Full Sync</span>
           <span class="trig-desc">Ledgers + Outstanding</span>
         </div>
+        <div class="trig blue" id="trig-invoices" onclick="trigger('invoices')">
+          <div class="spin-ring"></div>
+          <span class="trig-icon">🧾</span>
+          <span class="trig-label">Sync Invoices</span>
+          <span class="trig-desc">Poll Bitrix24 invoices</span>
+        </div>
       </div>
     </div>
 
@@ -574,6 +580,7 @@ const trigMap = {
   ledgers:     { path: '/sync/tally-to-bitrix', label: 'Ledger sync',      slug: 'contact-sync'      },
   duedates:    { path: '/sync/duedates',        label: 'Due date check',   slug: 'due-date-automation'},
   full:        { path: null,                    label: 'Full sync',        slug: null                 },
+  invoices:    { path: '/sync/invoices',        label: 'Invoice sync',     slug: 'invoice-sync' },
 };
 
 let _planFeatures = {}; // populated from /api/status

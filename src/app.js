@@ -256,6 +256,21 @@ app.post('/api/trigger/ledgers', authMiddleware, async (req, res) => {
   processTallyToContact({ manual: true }).catch(() => {});
 });
 
+app.post('/sync/invoices', authMiddleware, async (req, res) => {
+  const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
+  if (featureGate && !featureGate.isEnabled('invoice-sync')) {
+    return res.status(403).json({ success: false, message: 'invoice-sync not enabled on your plan' });
+  }
+  try {
+    logger.info('Manual invoice poll triggered');
+    const { pollInvoices } = require('./processors/invoicePoller');
+    res.status(200).json({ success: true, message: 'Invoice poll started' });
+    pollInvoices().catch(() => {});
+  } catch(e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
 app.use(express.static(path.join(__dirname, "../agent/installer")));
 app.use(express.static(path.join(__dirname, "../agent")));
 
