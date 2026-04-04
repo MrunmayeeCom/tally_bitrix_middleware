@@ -240,7 +240,7 @@ async function createVoucher(voucher) {
   if (exceptions > 0 || errors > 0) {
     if (voucher.voucherType === 'Sales Order') {
       logger.warn('Sales Order rejected by Tally — retrying as Sales Invoice', { voucherNumber: voucher.voucherNumber });
-      return createVoucher({ ...voucher, voucherType: 'Sales Invoice' });
+      return createVoucher({ ...voucher, voucherType: 'Sales' });
     }
     logger.error('Tally voucher create failed', { voucherNumber: voucher.voucherNumber, created, exceptions, errors });
     throw new Error(`Tally voucher create failed (created=${created}, exceptions=${exceptions}, errors=${errors})`);

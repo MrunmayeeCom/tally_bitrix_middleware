@@ -46,15 +46,15 @@ async function fetchSmartInvoices(start = 0) {
   return { items: data.result?.items || [], next: data.next };
 }
 
-async function fetchLegacyInvoices(start = 0) {
-  const data = await callBitrix('crm.invoice.list', {
-    select: ['ID', 'OPPORTUNITY', 'CURRENCY_ID', 'DATE_CREATE',
-             'CLOSEDATE', 'STATUS_ID', 'ACCOUNT_NUMBER'],
-    order: { ID: 'DESC' },
-    start,
-  });
-  return { items: data.result || [], next: data.next };
-}
+// async function fetchLegacyInvoices(start = 0) {
+//   const data = await callBitrix('crm.invoice.list', {
+//     select: ['ID', 'OPPORTUNITY', 'CURRENCY_ID', 'DATE_CREATE',
+//              'CLOSEDATE', 'STATUS_ID', 'ACCOUNT_NUMBER'],
+//     order: { ID: 'DESC' },
+//     start,
+//   });
+//   return { items: data.result || [], next: data.next };
+// }
 
 async function pollInvoices() {
   try {
@@ -91,23 +91,23 @@ async function pollInvoices() {
     }
 
     // --- Legacy invoices ---
-    start = 0;
-    hasMore = true;
-    while (hasMore) {
-      const { items, next } = await fetchLegacyInvoices(start);
-      for (const item of items) {
-        const key = `legacy_${item.ID}`;
-        const hash = hashInvoice({ ...item, id: item.ID, opportunity: item.OPPORTUNITY });
-        if (!cache[key] || cache[key] !== hash) {
-          toProcess.push({ item, key, hash, type: 'legacy', id: item.ID });
-        }
-      }
-      hasMore = !!next && start < 50;
-      start = next || 0;
-      if (hasMore) await sleep(500);
-    }
+    // start = 0;
+    // hasMore = true;
+    // while (hasMore) {
+    //   const { items, next } = await fetchLegacyInvoices(start);
+    //   for (const item of items) {
+    //     const key = `legacy_${item.ID}`;
+    //     const hash = hashInvoice({ ...item, id: item.ID, opportunity: item.OPPORTUNITY });
+    //     if (!cache[key] || cache[key] !== hash) {
+    //       toProcess.push({ item, key, hash, type: 'legacy', id: item.ID });
+    //     }
+    //   }
+    //   hasMore = !!next && start < 50;
+    //   start = next || 0;
+    //   if (hasMore) await sleep(500);
+    // }
 
-    logger.info(`[InvoicePoller] ${toProcess.length} invoices to process`);
+    // logger.info(`[InvoicePoller] ${toProcess.length} invoices to process`);
 
     for (const { item, key, hash, type } of toProcess) {
       try {

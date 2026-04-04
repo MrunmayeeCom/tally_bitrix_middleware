@@ -94,6 +94,16 @@ async function handleWebhook(req, res) {
         break;
       }
 
+      case 'ONCRMDYNAMICITEMADD':
+      case 'ONCRMDYNAMICITEMUPDATE': {
+        if (!featureGate.isEnabled('invoice-sync')) {
+          logger.info('invoice-sync not enabled — skipping dynamic item', { entityId });
+          break;
+        }
+        await processInvoice(entityId, event === 'ONCRMDYNAMICITEMUPDATE', 'smart');
+        break;
+      }
+
       case 'ONCRMCONTACTDELETE':
       case 'ONCRMCOMPANYDELETE':
         logger.warn(`CRM record deleted in Bitrix24 — Tally ledger NOT removed (manual cleanup required)`, { event, entityId });
@@ -163,6 +173,15 @@ async function handleWebhookPayload(payload) {
       if (!featureGate.isEnabled('quotation-sync')) break;
       await processQuotation({ entityId, isUpdate });
       break;
+    case 'ONCRMDYNAMICITEMADD':
+    case 'ONCRMDYNAMICITEMUPDATE': {
+      if (!featureGate.isEnabled('invoice-sync')) {
+        logger.info('[Poller] invoice-sync not enabled — skipping dynamic item', { entityId });
+        break;
+      }
+      await processInvoice(entityId, event === 'ONCRMDYNAMICITEMUPDATE', 'smart');
+      break;
+    }
     default:
       logger.warn(`[Poller] Unhandled event: ${event}`);
   }

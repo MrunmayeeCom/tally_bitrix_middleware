@@ -84,7 +84,7 @@ async function _processQuotation({ entityId, isUpdate = false }) {
       const preferred = ['Sales Order', 'Sales Orders', 'Sales Invoice', 'Sales'];
       TALLY_SALES_ORDER_TYPE = preferred.find(t =>
         availableTypes.some(a => a.toLowerCase() === t.toLowerCase())
-      ) || 'Sales';
+      ) || 'Sales Order';
       logger.info('Auto-detected Tally voucher type', { selected: TALLY_SALES_ORDER_TYPE, availableTypes });
     }
 
