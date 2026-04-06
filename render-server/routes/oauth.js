@@ -117,7 +117,7 @@ async function handleCallback(req, res) {
         accessToken:  access_token,
         refreshToken: refresh_token,
         expiresAt,
-        memberId:     tokenMemberId || member_id,
+        memberId:     MEMBER_ID,
         updatedAt:    new Date(),
       },
       { upsert: true, new: true }
@@ -136,8 +136,12 @@ async function handleCallback(req, res) {
 
     for (const event of EVENTS_TO_BIND) {
       try {
+        const eventBindUrl = isDirectTokenFlow
+          ? `https://${bitrixDomain}/rest/event.bind.json?auth=${access_token}`
+          : `https://${bitrixDomain}/rest/${user_id}/${access_token}/event.bind.json`;
+
         await axios.post(
-          `https://${bitrixDomain}/rest/${user_id}/${access_token}/event.bind.json`,
+          eventBindUrl,
           { event, handler: webhookBase },
           { timeout: 8000 }
         );
