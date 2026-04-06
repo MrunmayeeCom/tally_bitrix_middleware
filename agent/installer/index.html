@@ -533,8 +533,12 @@
       <div style="font-size:11px;color:var(--muted);margin-top:4px;">License email — changing this requires service restart</div>
     </div>
     <div class="field">
-      <label>Bitrix24 Webhook URL</label>
-      <input id="s-bitrixUrl" type="text"/>
+      <label>Bitrix24 Portal</label>
+      <div id="s-bitrix-domain-display" style="padding:10px 14px;background:var(--surface);
+        border:1px solid var(--border2);border-radius:8px;font-size:13px;color:var(--muted);">
+        Not connected
+      </div>
+      <input id="s-bitrixUrl" type="hidden"/>
     </div>
     <div class="field-row">
       <div class="field"><label>Tally Host</label><input id="s-tallyHost" type="text"/></div>
@@ -1583,7 +1587,14 @@ async function loadSettings() {
   }
 
   document.getElementById('s-customerEmail').value = cfg.customerEmail || '';
-  document.getElementById('s-bitrixUrl').value     = cfg.bitrixUrl     || '';
+  document.getElementById('s-bitrixUrl').value = cfg.bitrixUrl || '';
+  const domainDisplay = document.getElementById('s-bitrix-domain-display');
+  if (domainDisplay) {
+    domainDisplay.textContent = cfg.bitrixDomain
+      ? `✓ Connected to ${cfg.bitrixDomain}`
+      : cfg.bitrixUrl ? `✓ ${cfg.bitrixUrl}` : 'Not connected';
+    domainDisplay.style.color = cfg.bitrixDomain || cfg.bitrixUrl ? 'var(--accent2)' : 'var(--muted)';
+  }
   document.getElementById('s-tallyHost').value     = cfg.tallyHost     || 'localhost';
   document.getElementById('s-tallyPort').value     = cfg.tallyPort     || 9000;
 
