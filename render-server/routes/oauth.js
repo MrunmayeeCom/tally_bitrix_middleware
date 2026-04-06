@@ -217,7 +217,43 @@ async function handleCallback(req, res) {
 // or GET with code (OAuth redirect from marketplace)
 router.head('/callback', (req, res) => res.status(200).end());
 router.post('/callback', handleCallback);
-router.get('/callback',  handleCallback);
+router.get('/callback', (req, res) => {
+  const code   = req.query.code   || req.body?.code;
+  const domain = req.query.domain || req.body?.domain;
+  const AUTH_ID = req.query.AUTH_ID || req.body?.AUTH_ID;
+
+  // Only run handleCallback if actual OAuth params are present
+  if (code || AUTH_ID) {
+    return handleCallback(req, res);
+  }
+
+  // Otherwise show a friendly landing page inside the Bitrix24 iframe
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8"/>
+      <style>
+        body { font-family: Arial, sans-serif; background: #f4f6fa;
+               display: flex; align-items: center; justify-content: center;
+               min-height: 100vh; margin: 0; }
+        .box { background: #fff; border-radius: 12px; padding: 48px;
+               text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,.08);
+               max-width: 460px; }
+        h2 { color: #2d6ae0; }
+        p  { color: #555; line-height: 1.6; }
+      </style>
+    </head>
+    <body>
+      <div class="box">
+        <div style="font-size:56px">🔗</div>
+        <h2>TallyBitrixSync</h2>
+        <p>Click <strong>Install</strong> to connect your Bitrix24 portal and start syncing with Tally.</p>
+      </div>
+    </body>
+    </html>
+  `);
+});
 
 // ── Token refresh helper ──
 async function getValidToken(bitrixDomain) {
