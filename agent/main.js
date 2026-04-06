@@ -33,7 +33,8 @@ function saveConfig(cfg) {
 function isConfigured() {
   const cfg = loadConfig();
   const hasCompany = cfg?.tallyCompanies?.length > 0 || cfg?.tallyCompany;
-  return !!(cfg && cfg.bitrixUrl && cfg.tallyHost && cfg.tallyPort && hasCompany);
+  const hasBitrix = cfg?.bitrixDomain || cfg?.bitrixUrl;
+  return !!(cfg && hasBitrix && cfg.tallyHost && cfg.tallyPort && hasCompany);
 }
 
 function getCompanies(cfg) {
@@ -120,7 +121,9 @@ function spawnServer(cfg) {
   const env = Object.assign({}, process.env, {
     NODE_ENV:            'production',
     PORT:                '5050',
-    BITRIX_WEBHOOK_URL:  cfg.bitrixUrl,
+    BITRIX_WEBHOOK_URL:  cfg.bitrixUrl || '',
+    BITRIX_DOMAIN:       cfg.bitrixDomain || '',
+    BITRIX_CLIENT_ID:    cfg.bitrixClientId || '',
     TALLY_HOST:          cfg.tallyHost,
     TALLY_PORT:          String(cfg.tallyPort),
     TALLY_COMPANY:       getActiveCompany(cfg),

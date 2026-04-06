@@ -134,8 +134,13 @@ router.get('/callback', async (req, res) => {
             <li>✓ Quote sync active</li>
           </ul>
           <p style="margin-top:16px;color:#888;font-size:13px;">
-            You can now close this tab and open your TallyBitrixSync desktop app.
+            Download the desktop app below to start syncing with Tally.
           </p>
+          <a href="https://github.com/MrunmayeeCom/tally_bitrix_middleware/releases/latest/download/TallyBitrixSync.Setup.1.0.0.exe"
+             style="display:inline-block;margin-top:12px;padding:12px 28px;
+             background:#2d6ae0;color:#fff;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600;">
+            ⬇ Download TallyBitrixSync.exe
+          </a>
         </div>
       </body>
       </html>
