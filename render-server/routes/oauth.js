@@ -16,23 +16,32 @@ const EVENTS_TO_BIND = [
   'ONCRMQUOTEADD',      'ONCRMQUOTEUPDATE',
 ];
 
-// ── Step 1: Bitrix24 redirects here after client installs app ──
-// GET /bitrix/oauth/callback?code=xxx&domain=xxx&member_id=xxx
-router.get('/callback', async (req, res) => {
-  const { code, domain, member_id, server_domain } = req.query;
+async function handleCallback(req, res) {
+  const { code, domain, member_id, server_domain } = { ...req.query, ...req.body };
+
+  console.log('[OAuth] Callback hit — method:', req.method);
+  console.log('[OAuth] Query params:', req.query);
+  console.log('[OAuth] Body:', req.body);
 
   if (!code || !domain) {
+    console.error('[OAuth] Missing code or domain', { code: !!code, domain: !!domain });
     return res.status(400).send(`
       <html><body style="font-family:Arial;text-align:center;padding:60px">
         <h2>❌ Missing Parameters</h2>
         <p>code or domain missing from Bitrix24 redirect.</p>
+        <p style="font-size:12px;color:#999;">
+          method: ${req.method} | 
+          query keys: ${Object.keys(req.query).join(', ')} | 
+          body keys: ${Object.keys(req.body).join(', ')}
+        </p>
       </body></html>
     `);
   }
 
   try {
     // ── Step 2: Exchange code for tokens ──
-    const tokenRes = await axios.get(`https://${domain}/oauth/token/`, {
+    // Bitrix24 OAuth token endpoint is always oauth.bitrix.info
+    const tokenRes = await axios.post(`https://oauth.bitrix.info/oauth/token/`, null, {
       params: {
         grant_type:    'authorization_code',
         client_id:     CLIENT_ID,
@@ -42,6 +51,8 @@ router.get('/callback', async (req, res) => {
       },
       timeout: 10000,
     });
+
+    console.log('[OAuth] Token response:', tokenRes.data);
 
     const {
       access_token,
@@ -103,7 +114,7 @@ router.get('/callback', async (req, res) => {
 
     console.log(`[OAuth] Installation complete — domain: ${bitrixDomain} | clientId: ${clientId}`);
 
-    // ── Step 6: Show success page to client ──
+    // ── Step 6: Show success page ──
     res.send(`
       <!DOCTYPE html>
       <html>
@@ -138,7 +149,8 @@ router.get('/callback', async (req, res) => {
           </p>
           <a href="https://github.com/MrunmayeeCom/tally_bitrix_middleware/releases/latest/download/TallyBitrixSync.Setup.exe"
              style="display:inline-block;margin-top:12px;padding:12px 28px;
-             background:#2d6ae0;color:#fff;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600;">
+             background:#2d6ae0;color:#fff;border-radius:8px;text-decoration:none;
+             font-size:14px;font-weight:600;">
             ⬇ Download TallyBitrixSync.exe
           </a>
         </div>
@@ -156,16 +168,19 @@ router.get('/callback', async (req, res) => {
       </body></html>
     `);
   }
-});
+}
 
-// ── Token refresh helper (call before any API request) ──
+// Bitrix24 sends both GET and POST depending on version
+router.post('/callback', handleCallback);
+router.get('/callback',  handleCallback);
+
+// ── Token refresh helper ──
 async function getValidToken(bitrixDomain) {
   const record = await OAuthToken.findOne({ bitrixDomain });
   if (!record) throw new Error(`No token for domain: ${bitrixDomain}`);
 
-  // Refresh if expiring within 5 minutes
   if (record.expiresAt < new Date(Date.now() + 5 * 60 * 1000)) {
-    const res = await axios.get(`https://${bitrixDomain}/oauth/token/`, {
+    const res = await axios.post(`https://oauth.bitrix.info/oauth/token/`, null, {
       params: {
         grant_type:    'refresh_token',
         client_id:     CLIENT_ID,
@@ -191,17 +206,15 @@ async function getValidToken(bitrixDomain) {
   return record.accessToken;
 }
 
-// GET /bitrix/oauth/status?email=xxx — polling endpoint for Electron app
+// GET /bitrix/oauth/status — polling endpoint for Electron app
 router.get('/status', async (req, res) => {
   try {
     const { email } = req.query;
     if (!email) return res.json({ success: false, connected: false });
 
-    // Always return most recently connected portal for this session
     const allTokens = await OAuthToken.find({}).sort({ updatedAt: -1 }).limit(1);
     if (allTokens.length > 0) {
       const t = allTokens[0];
-      // Only return as connected if updated within last 5 minutes (fresh OAuth)
       const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
       if (t.updatedAt > fiveMinutesAgo) {
         return res.json({ success: true, connected: true, domain: t.bitrixDomain, clientId: t.clientId });
@@ -213,7 +226,7 @@ router.get('/status', async (req, res) => {
   }
 });
 
-// GET /bitrix/oauth/tokens — debug: list all connected portals
+// GET /bitrix/oauth/tokens — debug
 router.get('/tokens', async (req, res) => {
   const tokens = await OAuthToken.find({}, { accessToken: 0, refreshToken: 0 }).lean();
   res.json({ success: true, count: tokens.length, tokens });
