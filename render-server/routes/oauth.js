@@ -136,15 +136,22 @@ async function handleCallback(req, res) {
 
     for (const event of EVENTS_TO_BIND) {
       try {
+        const eventUnbindUrl = isDirectTokenFlow
+          ? `https://${bitrixDomain}/rest/event.unbind.json?auth=${access_token}`
+          : `https://${bitrixDomain}/rest/${user_id}/${access_token}/event.unbind.json`;
+
         const eventBindUrl = isDirectTokenFlow
           ? `https://${bitrixDomain}/rest/event.bind.json?auth=${access_token}`
           : `https://${bitrixDomain}/rest/${user_id}/${access_token}/event.bind.json`;
 
-        await axios.post(
-          eventBindUrl,
-          { event, handler: webhookBase },
-          { timeout: 8000 }
-        );
+        // Unbind first (ignore errors — may not exist yet)
+        try {
+          await axios.post(eventUnbindUrl, { event, handler: webhookBase }, { timeout: 8000 });
+          console.log(`[OAuth] ✓ Unbound ${event}`);
+        } catch (_) {}
+
+        // Now bind fresh
+        await axios.post(eventBindUrl, { event, handler: webhookBase }, { timeout: 8000 });
         console.log(`[OAuth] ✓ Registered ${event}`);
       } catch (e) {
         console.warn(`[OAuth] Failed to register ${event}:`, e.response?.data || e.message);
