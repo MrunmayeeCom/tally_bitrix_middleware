@@ -930,3 +930,59 @@ app.on('before-quit', () => {
 
 app.on('window-all-closed', (e) => e.preventDefault()); // keep running in tray
 app.on('activate', openDashboard);
+
+// ── Push agent status to Render every 30s ────────────────────────────────────
+function pushStatusToRender() {
+  try {
+    const cfg      = loadConfig();
+    if (!cfg) return;
+    const clientId = require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0];
+
+    const http  = require('http');
+    const https = require('https');
+
+    // Collect local stats from service
+    const localReq = http.request(
+      { hostname: 'localhost', port: 5050, path: '/api/history', method: 'GET', timeout: 3000 },
+      (res) => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => {
+          try {
+            const history = JSON.parse(d);
+            const today   = new Date().toDateString();
+            const payload = {
+              stats: {
+                total:   history.reduce((s, r) => s + (r.processed || 0), 0),
+                today:   history.filter(r => new Date(r.timestamp).toDateString() === today).reduce((s, r) => s + (r.processed || 0), 0),
+                failed:  history.reduce((s, r) => s + (r.failed    || 0), 0),
+                runs:    history.length,
+              },
+              history:    history.slice(0, 30),
+              lastSync:   history[0] || null,
+              agentLive:  true,
+              clientId,
+              domain:     cfg.bitrixDomain || '',
+            };
+
+            const body    = JSON.stringify(payload);
+            const pushReq = https.request({
+              hostname: 'tally-bitrix-middleware.onrender.com',
+              path:     `/dashboard/push?clientId=${encodeURIComponent(clientId)}`,
+              method:   'POST',
+              headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+              timeout:  5000,
+            }, (r) => { r.resume(); });
+            pushReq.on('error', () => {});
+            pushReq.write(body);
+            pushReq.end();
+          } catch {}
+        });
+      }
+    );
+    localReq.on('error', () => {});
+    localReq.end();
+  } catch {}
+}
+
+setInterval(pushStatusToRender, 30000);

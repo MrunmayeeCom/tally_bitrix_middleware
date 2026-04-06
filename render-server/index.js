@@ -4,9 +4,10 @@ const mongoose  = require('mongoose');
 const cors      = require('cors');
 const path      = require('path');
 
-const webhookRoutes = require('./routes/webhook');
-const eventsRoutes  = require('./routes/events');
-const oauthRoutes   = require('./routes/oauth');
+const webhookRoutes   = require('./routes/webhook');
+const eventsRoutes    = require('./routes/events');
+const oauthRoutes     = require('./routes/oauth');
+const dashboardRoutes = require('./routes/dashboard');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -39,8 +40,11 @@ app.use('/webhook', webhookRoutes);
 // Client polling + registration endpoints
 app.use('/api', eventsRoutes);
 
-// OAuth (placeholder)
+// OAuth
 app.use('/bitrix/oauth', oauthRoutes);
+
+// Dashboard — serve static HTML + push/pull API
+app.use('/dashboard', dashboardRoutes);
 
 // ── Error handler ─────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {

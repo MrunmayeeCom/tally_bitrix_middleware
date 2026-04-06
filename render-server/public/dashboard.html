@@ -322,7 +322,7 @@ html,body{
   </div>
 
   <div class="offline-banner" id="offline-banner">
-    ⚠️ Local service unreachable — make sure TallyBitrixSync is running on this machine (<code>localhost:5050</code>)
+    ⚠️ Agent offline — make sure TallyBitrixSync desktop app is running on the client machine
   </div>
 
   <div class="stats">
@@ -494,10 +494,21 @@ const HEADERS = {
 };
 
 async function get(path) {
-  const sep = path.includes('?') ? '&' : '?';
-  const r = await fetch(`${API}/dashboard/data${sep}clientId=${clientId}`, { headers: HEADERS, signal: AbortSignal.timeout(5000) });
+  const r = await fetch(
+    `${API}/dashboard/data?clientId=${clientId}`,
+    { headers: HEADERS, signal: AbortSignal.timeout(5000) }
+  );
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+  const json = await r.json();
+  if (!json.success) throw new Error(json.message || 'No data');
+
+  if (path === '/api/history')   return json.history   || [];
+  if (path === '/api/lastsync')  return json.lastSync  || null;
+  if (path === '/api/overdue')   return json.overdue   || [];
+  if (path === '/api/status')    return json.status    || {};
+  if (path === '/api/companies') return json.companies || { companies: [], active: '' };
+  if (path === '/health')        return { ok: true };
+  return json;
 }
 
 async function post(path) {
@@ -508,11 +519,20 @@ async function post(path) {
 
 async function loadStatus() {
   try {
-    await get('/health');
-    document.getElementById('status-pill').className = 'pill live';
-    document.getElementById('pill-text').textContent = 'LIVE';
-    document.getElementById('offline-banner').classList.remove('show');
-    return true;
+    const r = await fetch(
+      `${API}/dashboard/data?clientId=${clientId}`,
+      { headers: HEADERS, signal: AbortSignal.timeout(5000) }
+    );
+    const json = await r.json();
+    const live = json.success && json.agentLive;
+    document.getElementById('status-pill').className = live ? 'pill live' : 'pill offline';
+    document.getElementById('pill-text').textContent  = live ? 'LIVE' : 'OFFLINE';
+    if (live) {
+      document.getElementById('offline-banner').classList.remove('show');
+    } else {
+      document.getElementById('offline-banner').classList.add('show');
+    }
+    return live;
   } catch {
     document.getElementById('status-pill').className = 'pill offline';
     document.getElementById('pill-text').textContent = 'OFFLINE';
@@ -765,11 +785,22 @@ async function switchCompany(company) {
 }
 
 async function loadConnStatus() {
-  // Service
+  // Service — check agentLive from pushed data
   try {
-    await get('/health');
-    document.getElementById('cdot-service').className = 'conn-dot live';
-    document.getElementById('csub-service').textContent = 'Running on port 5050';
+    const r = await fetch(
+      `${API}/dashboard/data?clientId=${clientId}`,
+      { headers: HEADERS, signal: AbortSignal.timeout(5000) }
+    );
+    const json = await r.json();
+    if (json.success && json.agentLive) {
+      document.getElementById('cdot-service').className = 'conn-dot live';
+      document.getElementById('csub-service').textContent = `Last push: ${new Date(json.pushedAt).toLocaleTimeString('en-IN')}`;
+    } else {
+      document.getElementById('cdot-service').className = 'conn-dot offline';
+      document.getElementById('csub-service').textContent = json.pushedAt
+        ? `Last seen: ${new Date(json.pushedAt).toLocaleTimeString('en-IN')}`
+        : 'Agent never connected';
+    }
   } catch {
     document.getElementById('cdot-service').className = 'conn-dot offline';
     document.getElementById('csub-service').textContent = 'Unreachable';
