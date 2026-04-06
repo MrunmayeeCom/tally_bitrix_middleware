@@ -17,18 +17,39 @@ const EVENTS_TO_BIND = [
 ];
 
 async function handleCallback(req, res) {
-  const { code, domain, member_id, server_domain } = { ...req.query, ...req.body };
+  // HEAD request — Bitrix24 checks endpoint is alive before POST
+  if (req.method === 'HEAD') {
+    return res.status(200).end();
+  }
 
   console.log('[OAuth] Callback hit — method:', req.method);
   console.log('[OAuth] Query params:', req.query);
   console.log('[OAuth] Body:', req.body);
 
-  if (!code || !domain) {
-    console.error('[OAuth] Missing code or domain', { code: !!code, domain: !!domain });
+  // ── Bitrix24 App Install flow (POST with AUTH_ID directly in body) ──
+  const AUTH_ID      = req.body.AUTH_ID;
+  const REFRESH_ID   = req.body.REFRESH_ID;
+  const AUTH_EXPIRES = req.body.AUTH_EXPIRES;
+  const MEMBER_ID    = req.body.member_id;
+  const SERVER_ENDPOINT = req.body.SERVER_ENDPOINT; // e.g. https://oauth.bitrix.info/rest/
+  const DOMAIN       = req.query.DOMAIN || req.body.DOMAIN;
+
+  // ── Standard OAuth2 code flow (GET redirect from Bitrix24 marketplace) ──
+  const code         = req.query.code || req.body.code;
+  const domain       = req.query.domain || req.body.domain || DOMAIN;
+
+  // Detect which flow we are in
+  const isDirectTokenFlow = !!(AUTH_ID && MEMBER_ID);
+  const isCodeFlow        = !!(code && domain);
+
+  if (!isDirectTokenFlow && !isCodeFlow) {
+    console.error('[OAuth] Missing required params', {
+      AUTH_ID: !!AUTH_ID, MEMBER_ID: !!MEMBER_ID, code: !!code, domain: !!domain
+    });
     return res.status(400).send(`
       <html><body style="font-family:Arial;text-align:center;padding:60px">
         <h2>❌ Missing Parameters</h2>
-        <p>code or domain missing from Bitrix24 redirect.</p>
+        <p>Expected either AUTH_ID+member_id (app install) or code+domain (OAuth redirect).</p>
         <p style="font-size:12px;color:#999;">
           method: ${req.method} | 
           query keys: ${Object.keys(req.query).join(', ')} | 
@@ -39,35 +60,53 @@ async function handleCallback(req, res) {
   }
 
   try {
-    // ── Step 2: Exchange code for tokens ──
-    // Bitrix24 OAuth token endpoint is always oauth.bitrix.info
-    const tokenRes = await axios.post(`https://oauth.bitrix.info/oauth/token/`, null, {
-      params: {
-        grant_type:    'authorization_code',
-        client_id:     CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        code,
-        redirect_uri:  `${APP_URL}/bitrix/oauth/callback`,
-      },
-      timeout: 10000,
-    });
+    let access_token, refresh_token, expires_in, bitrixDomain, clientId, expiresAt, bitrixUrl;
 
-    console.log('[OAuth] Token response:', tokenRes.data);
+    if (isDirectTokenFlow) {
+      // ── App Install flow: Bitrix24 sends tokens directly ──
+      console.log('[OAuth] Direct token flow detected (app install)');
 
-    const {
-      access_token,
-      refresh_token,
-      expires_in,
-      user_id,
-      member_id: tokenMemberId,
-    } = tokenRes.data;
+      access_token  = AUTH_ID;
+      refresh_token = REFRESH_ID;
+      expires_in    = parseInt(AUTH_EXPIRES) || 3600;
+      bitrixDomain  = DOMAIN || `portal-${MEMBER_ID}`;
+      clientId      = `bx-${MEMBER_ID}`;
+      expiresAt     = new Date(Date.now() + expires_in * 1000);
+
+      // SERVER_ENDPOINT is like https://oauth.bitrix.info/rest/
+      // The actual REST base for this portal is in the DOMAIN query param
+      bitrixUrl = DOMAIN
+        ? `https://${DOMAIN}/rest/`
+        : (SERVER_ENDPOINT || '');
+
+    } else {
+      // ── Standard OAuth2 code exchange flow ──
+      console.log('[OAuth] Code exchange flow detected');
+
+      const tokenRes = await axios.post(`https://oauth.bitrix.info/oauth/token/`, null, {
+        params: {
+          grant_type:    'authorization_code',
+          client_id:     CLIENT_ID,
+          client_secret: CLIENT_SECRET,
+          code,
+          redirect_uri:  `${APP_URL}/bitrix/oauth/callback`,
+        },
+        timeout: 10000,
+      });
+
+      console.log('[OAuth] Token response:', tokenRes.data);
+
+      const { access_token: at, refresh_token: rt, expires_in: ei, user_id, member_id: tokenMemberId } = tokenRes.data;
+      access_token  = at;
+      refresh_token = rt;
+      expires_in    = ei;
+      bitrixDomain  = domain;
+      clientId      = `bx-${tokenMemberId || MEMBER_ID || domain.replace(/\./g, '-')}`;
+      expiresAt     = new Date(Date.now() + expires_in * 1000);
+      bitrixUrl     = `https://${bitrixDomain}/rest/${user_id}/${access_token}/`;
+    }
 
     if (!access_token) throw new Error('No access_token in response');
-
-    const bitrixDomain = domain;
-    const bitrixUrl    = `https://${bitrixDomain}/rest/${user_id}/${access_token}/`;
-    const clientId     = `bx-${tokenMemberId || member_id || domain.replace(/\./g, '-')}`;
-    const expiresAt    = new Date(Date.now() + (expires_in * 1000));
 
     // ── Step 3: Save tokens to MongoDB ──
     await OAuthToken.findOneAndUpdate(
@@ -170,7 +209,9 @@ async function handleCallback(req, res) {
   }
 }
 
-// Bitrix24 sends both GET and POST depending on version
+// Bitrix24 sends HEAD to verify endpoint, then POST with tokens (app install)
+// or GET with code (OAuth redirect from marketplace)
+router.head('/callback', (req, res) => res.status(200).end());
 router.post('/callback', handleCallback);
 router.get('/callback',  handleCallback);
 
@@ -212,11 +253,13 @@ router.get('/status', async (req, res) => {
     const { email } = req.query;
     if (!email) return res.json({ success: false, connected: false });
 
+    // Look for a token updated in the last 10 minutes
+    // (bumped from 5min because app-install flow can take longer)
     const allTokens = await OAuthToken.find({}).sort({ updatedAt: -1 }).limit(1);
     if (allTokens.length > 0) {
       const t = allTokens[0];
-      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-      if (t.updatedAt > fiveMinutesAgo) {
+      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+      if (t.updatedAt > tenMinutesAgo) {
         return res.json({ success: true, connected: true, domain: t.bitrixDomain, clientId: t.clientId });
       }
     }
