@@ -186,6 +186,28 @@ async function getValidToken(bitrixDomain) {
   return record.accessToken;
 }
 
+// GET /bitrix/oauth/status?email=xxx — polling endpoint for Electron app
+router.get('/status', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) return res.json({ success: false, connected: false });
+
+    // Always return most recently connected portal for this session
+    const allTokens = await OAuthToken.find({}).sort({ updatedAt: -1 }).limit(1);
+    if (allTokens.length > 0) {
+      const t = allTokens[0];
+      // Only return as connected if updated within last 5 minutes (fresh OAuth)
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+      if (t.updatedAt > fiveMinutesAgo) {
+        return res.json({ success: true, connected: true, domain: t.bitrixDomain, clientId: t.clientId });
+      }
+    }
+    return res.json({ success: false, connected: false });
+  } catch(e) {
+    res.json({ success: false, connected: false });
+  }
+});
+
 // GET /bitrix/oauth/tokens — debug: list all connected portals
 router.get('/tokens', async (req, res) => {
   const tokens = await OAuthToken.find({}, { accessToken: 0, refreshToken: 0 }).lean();

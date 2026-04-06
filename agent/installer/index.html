@@ -287,8 +287,7 @@
     <div class="steps">
       <div class="step active" id="step-ind-1"><div class="step-dot">1</div><div class="step-label">Bitrix24</div></div>
       <div class="step"        id="step-ind-2"><div class="step-dot">2</div><div class="step-label">Tally</div></div>
-      <div class="step"        id="step-ind-3"><div class="step-dot">3</div><div class="step-label">Test</div></div>
-      <div class="step"        id="step-ind-4"><div class="step-dot">✓</div><div class="step-label">Install</div></div>
+      <div class="step"        id="step-ind-3"><div class="step-dot">✓</div><div class="step-label">Install</div></div>
     </div>
 
     <div class="step-panel active" id="panel-1">
@@ -297,12 +296,26 @@
         <input id="customerEmail" type="email" placeholder="email used to purchase your license" autocomplete="off"/>
         <div class="hint">This email is verified against your active TallyBitrixSync license</div>
       </div>
-      <div class="field">
-        <label>Bitrix24 Webhook URL</label>
-        <input id="bitrixUrl" type="text" placeholder="https://yourcompany.bitrix24.com/rest/USER/TOKEN/" autocomplete="off"/>
-        <div class="hint">Find this in Bitrix24 → Developer Resources → Other → Inbound Webhook</div>
+
+      <div style="background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:18px;margin-bottom:14px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:6px;">Connect Bitrix24</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.6;">
+          Click below to connect your Bitrix24 portal. Your browser will open — authorize the app and return here.
+        </div>
+        <button class="btn btn-primary" id="btn-connect-bitrix" onclick="connectBitrix()" style="margin-bottom:8px;">
+          🔗 Connect Bitrix24
+        </button>
+        <div id="bitrix-status" style="font-size:11px;color:var(--muted);text-align:center;min-height:16px;"></div>
       </div>
-      <button class="btn btn-primary" onclick="goStep(2)">Continue →</button>
+
+      <!-- Hidden — stores domain received from OAuth callback -->
+      <input id="bitrixDomain" type="hidden" value=""/>
+      <input id="bitrixClientId" type="hidden" value=""/>
+
+      <button class="btn btn-primary" id="btn-step1-continue" onclick="goStep(2)" disabled
+        style="opacity:0.4;cursor:not-allowed;">
+        Continue →
+      </button>
     </div>
 
     <div class="step-panel" id="panel-2">
@@ -363,34 +376,11 @@
         </div>
         <div class="hint" id="company-limit-hint">Select companies to sync — case sensitive</div>
       </div>
-      <button class="btn btn-primary" onclick="goStep(3)">Continue →</button>
+      <button class="btn btn-primary" onclick="goStep('install')">Install Now →</button>
       <button class="btn btn-outline" onclick="goStep(1)">← Back</button>
     </div>
 
     <div class="step-panel" id="panel-3">
-      <p style="color:var(--muted);font-size:12px;margin-bottom:14px;line-height:1.5;">
-        Let's verify both connections before installing. Make sure Tally is open with your company loaded.
-      </p>
-      <div class="test-results" id="test-results">
-        <div class="test-row">
-          <span class="test-label">🟢 Node.js</span>
-          <span class="test-status" id="t-node">—</span>
-        </div>
-        <div class="test-row">
-          <span class="test-label">🌐 Bitrix24</span>
-          <span class="test-status" id="t-bitrix">—</span>
-        </div>
-        <div class="test-row">
-          <span class="test-label">📊 Tally ERP</span>
-          <span class="test-status" id="t-tally">—</span>
-        </div>
-      </div>
-      <button class="btn btn-primary" id="btn-test" onclick="runTests()">Run Connection Test</button>
-      <button class="btn btn-success" id="btn-install" style="display:none" onclick="goStep(4)">All Good — Install Now ✓</button>
-      <button class="btn btn-outline" onclick="goStep(2)">← Back</button>
-    </div>
-
-    <div class="step-panel" id="panel-4">
       <div class="success-screen" id="installing-screen">
         <div style="font-size:44px;margin-bottom:14px;">⚙️</div>
         <h2>Installing Service…</h2>
@@ -411,10 +401,12 @@
           <div class="feature-item"><span class="fi">✅</span> Starts automatically with Windows</div>
         </div>
         <button class="btn btn-primary" style="margin-top:18px" onclick="showDashboard()">Open Dashboard →</button>
+        </div>
       </div>
     </div>
   </div>
 </div>
+<!-- end panel-3 -->
 
 <!-- ══════════════════ DASHBOARD PAGE ══════════════════ -->
 <div class="page" id="page-dashboard">
@@ -1090,20 +1082,20 @@ function goStep(n) {
   if (n === 2) {
     const email = document.getElementById('customerEmail')?.value.trim();
     if (!email || !email.includes('@')) { showToast('Please enter your registered email', 'error'); return; }
-    const url = document.getElementById('bitrixUrl').value.trim();
-    if (!url || !url.includes('bitrix24')) { showToast('Please enter a valid Bitrix24 webhook URL', 'error'); return; }
+    const domain = document.getElementById('bitrixDomain').value.trim();
+    if (!domain) { showToast('Please connect Bitrix24 first', 'error'); return; }
   }
-  if (n === 3) {
+  if (n === 'install') {
     const host = document.getElementById('tallyHost').value.trim();
     const port = document.getElementById('tallyPort').value.trim();
     if (!host || !port) { showToast('Please fill Tally host and port', 'error'); return; }
     if (_companies.length === 0) { showToast('Add at least one Tally company', 'error'); return; }
+    installService(); return;
   }
-  if (n === 4) { installService(); return; }
 
   document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + n).classList.add('active');
-  for (let i = 1; i <= 4; i++) {
+  for (let i = 1; i <= 3; i++) {
     const ind = document.getElementById('step-ind-' + i);
     ind.classList.remove('active','done');
     if (i < n)  ind.classList.add('done');
@@ -1163,7 +1155,7 @@ async function runTests() {
 
 async function installService() {
   document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
-  document.getElementById('panel-4').classList.add('active');
+  document.getElementById('panel-3').classList.add('active');
   const cfg = getFormConfig();
   try {
     const result = await Promise.race([
@@ -1210,11 +1202,13 @@ function showDashboard() { navigateTo('dashboard'); }
 function getFormConfig() {
   return {
     customerEmail  : document.getElementById('customerEmail')?.value.trim() || '',
-    bitrixUrl      : document.getElementById('bitrixUrl').value.trim(),
+    bitrixDomain   : document.getElementById('bitrixDomain')?.value.trim() || '',
+    bitrixClientId : document.getElementById('bitrixClientId')?.value.trim() || '',
+    bitrixUrl      : '', // no longer needed — OAuth handles this
     tallyHost      : document.getElementById('tallyHost').value.trim() || 'localhost',
     tallyPort      : parseInt(document.getElementById('tallyPort').value) || 9000,
-    tallyCompany   : _companies[0] || '',        // backward compat
-    tallyCompanies : [..._companies],             // new array format
+    tallyCompany   : _companies[0] || '',
+    tallyCompanies : [..._companies],
     activeCompany  : _companies[0] || '',
   };
 }
@@ -1701,6 +1695,80 @@ function showToast(msg, type='success') {
 
 function escapeHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Bitrix24 OAuth connect ────────────────────────────────────────────────────
+const BITRIX_INSTALL_URL = 'https://www.bitrix24.com/register/reg.php?addmodule=rajlaxmi_solutions_p.app31';
+
+function connectBitrix() {
+  const btn = document.getElementById('btn-connect-bitrix');
+  const status = document.getElementById('bitrix-status');
+  btn.innerHTML = '<span class="btn-loader"></span> Opening browser…';
+  btn.disabled = true;
+  status.textContent = 'Waiting for Bitrix24 authorization…';
+  status.style.color = 'var(--accent)';
+
+  // Open Bitrix24 install URL in browser
+  const { shell } = require('electron');
+  shell.openExternal(BITRIX_INSTALL_URL);
+
+  // Start polling for OAuth completion from Render server
+  _startOAuthPolling();
+}
+
+let _oauthPollInterval = null;
+
+function _startOAuthPolling() {
+  if (_oauthPollInterval) clearInterval(_oauthPollInterval);
+  const email = document.getElementById('customerEmail')?.value.trim();
+
+  _oauthPollInterval = setInterval(async () => {
+    try {
+      const res = await fetch(
+        `https://tally-bitrix-middleware.onrender.com/bitrix/oauth/status?email=${encodeURIComponent(email)}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      const data = await res.json();
+      if (data.success && data.connected) {
+        clearInterval(_oauthPollInterval);
+        _oauthConnected(data.domain, data.clientId);
+      }
+    } catch {}
+  }, 3000);
+
+  // Stop polling after 5 minutes
+  setTimeout(() => {
+    if (_oauthPollInterval) {
+      clearInterval(_oauthPollInterval);
+      const btn = document.getElementById('btn-connect-bitrix');
+      const status = document.getElementById('bitrix-status');
+      if (btn) { btn.innerHTML = '🔗 Connect Bitrix24'; btn.disabled = false; }
+      if (status) { status.textContent = 'Timed out — please try again'; status.style.color = 'var(--danger)'; }
+    }
+  }, 5 * 60 * 1000);
+}
+
+function _oauthConnected(domain, clientId) {
+  document.getElementById('bitrixDomain').value  = domain  || '';
+  document.getElementById('bitrixClientId').value = clientId || '';
+
+  const btn    = document.getElementById('btn-connect-bitrix');
+  const status = document.getElementById('bitrix-status');
+  const cont   = document.getElementById('btn-step1-continue');
+
+  btn.innerHTML = '✓ Bitrix24 Connected';
+  btn.style.background = 'var(--accent2)';
+  btn.style.color = '#0d0f14';
+  btn.disabled = true;
+
+  status.textContent = `Connected to ${domain}`;
+  status.style.color = 'var(--accent2)';
+
+  cont.disabled = false;
+  cont.style.opacity = '1';
+  cont.style.cursor = 'pointer';
+
+  showToast(`Bitrix24 connected ✓`, 'success');
 }
 </script>
 </body>
