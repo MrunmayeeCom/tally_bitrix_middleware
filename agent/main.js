@@ -936,7 +936,7 @@ function pushStatusToRender() {
   try {
     const cfg      = loadConfig();
     if (!cfg) return;
-    const clientId = require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0];
+    const clientId = cfg.bitrixClientId || (require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0]);
 
     const http  = require('http');
     const https = require('https');

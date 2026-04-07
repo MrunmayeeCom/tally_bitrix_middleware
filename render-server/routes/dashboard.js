@@ -17,6 +17,7 @@ router.get('/', async (req, res) => {
 
   // If clientId already in query — serve directly
   if (req.query.clientId) {
+    console.log('[Dashboard] Serving with clientId:', req.query.clientId);
     return res.sendFile(htmlPath);
   }
 
@@ -25,9 +26,15 @@ router.get('/', async (req, res) => {
   if (memberId) {
     try {
       const OAuthToken = require('../models/OAuthToken');
-      const token = await OAuthToken.findOne({ memberId });
+      // Try exact memberId match first
+      let token = await OAuthToken.findOne({ memberId });
+      // Fallback: most recently updated token (covers cases where memberId wasn't saved)
+      if (!token) {
+        console.warn('[Dashboard] member_id not matched, falling back to latest token');
+        token = await OAuthToken.findOne({}).sort({ updatedAt: -1 });
+      }
       if (token) {
-        // Redirect to dashboard with clientId injected
+        console.log('[Dashboard] Redirecting member_id', memberId, '→ clientId', token.clientId);
         return res.redirect(`/dashboard?clientId=${token.clientId}`);
       }
     } catch (e) {
@@ -35,7 +42,34 @@ router.get('/', async (req, res) => {
     }
   }
 
-  // Fallback — serve dashboard anyway, it will show "agent offline"
+  // Bitrix24 also passes DOMAIN in some flows — try matching by domain
+  const domain = req.query.DOMAIN || req.query.domain;
+  if (domain) {
+    try {
+      const OAuthToken = require('../models/OAuthToken');
+      const token = await OAuthToken.findOne({ bitrixDomain: domain });
+      if (token) {
+        console.log('[Dashboard] Redirecting by domain', domain, '→ clientId', token.clientId);
+        return res.redirect(`/dashboard?clientId=${token.clientId}`);
+      }
+    } catch (e) {
+      console.error('[Dashboard] domain lookup failed:', e.message);
+    }
+  }
+
+  // Last resort — redirect to most recently connected portal
+  try {
+    const OAuthToken = require('../models/OAuthToken');
+    const latest = await OAuthToken.findOne({}).sort({ updatedAt: -1 });
+    if (latest) {
+      console.log('[Dashboard] No match found — falling back to latest token clientId:', latest.clientId);
+      return res.redirect(`/dashboard?clientId=${latest.clientId}`);
+    }
+  } catch (e) {
+    console.error('[Dashboard] latest token fallback failed:', e.message);
+  }
+
+  // Absolute fallback — serve dashboard anyway, it will show "agent offline"
   res.sendFile(htmlPath);
 });
 
@@ -61,9 +95,9 @@ router.get('/data', (req, res) => {
   const data = store[clientId];
   if (!data) return res.json({ success: false, message: 'No data yet — agent may be offline' });
 
-  // Mark agent as offline if no push in last 2 minutes
+  // Mark agent as offline if no push in last 5 minutes
   const pushedAt  = new Date(data.pushedAt);
-  const agentLive = (Date.now() - pushedAt.getTime()) < 2 * 60 * 1000;
+  const agentLive = (Date.now() - pushedAt.getTime()) < 5 * 60 * 1000;
 
   res.json({ success: true, agentLive, ...data });
 });
