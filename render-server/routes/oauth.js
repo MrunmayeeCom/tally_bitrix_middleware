@@ -233,9 +233,10 @@ router.head('/callback', (req, res) => res.status(200).end());
 router.post('/callback', handleCallback);
 
 // ── App tab handler — Bitrix24 opens this URL every time user clicks the app ──
-router.get('/app', async (req, res) => {
-  const DOMAIN   = req.query.DOMAIN   || req.query.domain;
-  const memberId = req.query.member_id || req.query.MEMBER_ID;
+// Bitrix24 may call this as GET or POST depending on the flow
+async function handleAppOpen(req, res) {
+  const DOMAIN   = req.query.DOMAIN   || req.query.domain   || req.body?.DOMAIN   || req.body?.domain;
+  const memberId = req.query.member_id || req.query.MEMBER_ID || req.body?.member_id || req.body?.MEMBER_ID;
 
   try {
     let token = null;
@@ -252,7 +253,10 @@ router.get('/app', async (req, res) => {
 
   // Not installed yet
   res.redirect(`/bitrix/oauth/callback`);
-});
+}
+
+router.get('/app', handleAppOpen);
+router.post('/app', handleAppOpen);
 
 router.get('/callback', async (req, res) => {
   const code    = req.query.code    || req.body?.code;
