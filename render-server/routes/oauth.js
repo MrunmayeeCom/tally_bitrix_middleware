@@ -231,17 +231,69 @@ async function handleCallback(req, res) {
 // or GET with code (OAuth redirect from marketplace)
 router.head('/callback', (req, res) => res.status(200).end());
 router.post('/callback', handleCallback);
-router.get('/callback', (req, res) => {
-  const code   = req.query.code   || req.body?.code;
-  const domain = req.query.domain || req.body?.domain;
+
+// ── App tab handler — Bitrix24 opens this URL every time user clicks the app ──
+router.get('/app', async (req, res) => {
+  const DOMAIN   = req.query.DOMAIN   || req.query.domain;
+  const memberId = req.query.member_id || req.query.MEMBER_ID;
+
+  try {
+    let token = null;
+    if (memberId) token = await OAuthToken.findOne({ memberId });
+    if (!token && DOMAIN) token = await OAuthToken.findOne({ bitrixDomain: DOMAIN });
+    if (!token) token = await OAuthToken.findOne({}).sort({ updatedAt: -1 });
+
+    if (token) {
+      return res.redirect(`/dashboard?clientId=${token.clientId}`);
+    }
+  } catch (e) {
+    console.error('[OAuth] App tab lookup failed:', e.message);
+  }
+
+  // Not installed yet
+  res.redirect(`/bitrix/oauth/callback`);
+});
+
+router.get('/callback', async (req, res) => {
+  const code    = req.query.code    || req.body?.code;
+  const domain  = req.query.domain  || req.body?.domain;
   const AUTH_ID = req.query.AUTH_ID || req.body?.AUTH_ID;
+  const DOMAIN  = req.query.DOMAIN  || req.body?.DOMAIN;
+  const memberId = req.query.member_id || req.body?.member_id;
 
   // Only run handleCallback if actual OAuth params are present
   if (code || AUTH_ID) {
     return handleCallback(req, res);
   }
 
-  // Otherwise show a friendly landing page inside the Bitrix24 iframe
+  // ── App open flow: Bitrix24 opens the app tab ──
+  // Check if this portal is already connected — if yes, redirect to dashboard
+  const lookupDomain = DOMAIN || domain;
+  const lookupMemberId = memberId;
+
+  try {
+    let token = null;
+
+    // Try by memberId first
+    if (lookupMemberId) {
+      token = await OAuthToken.findOne({ memberId: lookupMemberId });
+    }
+
+    // Try by domain
+    if (!token && lookupDomain) {
+      token = await OAuthToken.findOne({ bitrixDomain: lookupDomain });
+    }
+
+    // If already connected — go straight to dashboard
+    if (token) {
+      console.log('[OAuth] App opened by existing portal — redirecting to dashboard, clientId:', token.clientId);
+      return res.redirect(`/dashboard?clientId=${token.clientId}`);
+    }
+  } catch (e) {
+    console.error('[OAuth] App open lookup failed:', e.message);
+  }
+
+  // Not connected yet — show install landing page
   res.send(`
     <!DOCTYPE html>
     <html>
