@@ -226,6 +226,21 @@ function startScheduler() {
     logger.info('[Scheduler] Invoice poller registered');
   }
 
+  // Item-based invoice sync (Tally line items → Bitrix24 product rows)
+  if (featureGate.isEnabled('invoice-sync')) {
+    let isItemInvoiceSyncing = false;
+    _activeTasks.push(cron.schedule(syncCron, () => {
+      if (isItemInvoiceSyncing) return;
+      isItemInvoiceSyncing = true;
+      const { processItemInvoices } = require('./processors/itemInvoiceBuilder');
+      processItemInvoices()
+        .then(r => logger.info(`${syncMinutes}min — item invoice sync completed`, r))
+        .catch(e => logger.error('Item invoice sync failed', { message: e.message }))
+        .finally(() => { isItemInvoiceSyncing = false; });
+    }, { timezone: 'Asia/Kolkata' }));
+    logger.info('[Scheduler] Item-based invoice sync registered');
+  }
+
   // Tally → Bitrix24 invoice sync (two-way)
   if (featureGate.isEnabled('invoice-sync')) {
     _activeTasks.push(cron.schedule(syncCron, () => {

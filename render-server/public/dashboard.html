@@ -514,31 +514,6 @@ html,body{
     </div>
   </div>
 
-  <!-- Inventory Match Panel -->
-  <div class="panel-full" style="margin-bottom:14px;animation-delay:.26s;">
-    <div class="panel-hdr">
-      <span class="panel-title">📦 Inventory Discrepancies</span>
-      <div style="display:flex;gap:6px;">
-        <button class="panel-action" id="btn-autofix" onclick="autoFixInventory()" style="color:var(--green);">⚡ Auto Fix</button>
-        <button class="panel-action" onclick="loadInventoryMatch()">↻ Refresh</button>
-      </div>
-    </div>
-    <div id="inventory-match-body" style="padding:0;">
-      <div class="empty" style="padding:28px 0;"><div class="empty-ico">⏳</div>Loading…</div>
-    </div>
-  </div>
-
-  <!-- Receipt Match Panel -->
-  <div class="panel-full" style="margin-bottom:14px;animation-delay:.28s;">
-    <div class="panel-hdr">
-      <span class="panel-title">🧾 Receipt → Outstanding Match</span>
-      <button class="panel-action" onclick="loadReceiptMatch()">↻ Refresh</button>
-    </div>
-    <div id="receipt-match-body" style="padding:0;">
-      <div class="empty" style="padding:28px 0;"><div class="empty-ico">⏳</div>Loading…</div>
-    </div>
-  </div>
-
   
 
 </div>
@@ -983,138 +958,6 @@ async function initDashboard() {
   refreshAll(null);
   loadLastSync();
   loadOverdue();
-  loadInventoryMatch();
-  loadReceiptMatch();
-}
-
-async function loadInventoryMatch() {
-  const box = document.getElementById('inventory-match-body');
-  try {
-    const r = await fetch(`${API}/api/inventory/match?clientId=${clientId}`, { headers: HEADERS });
-    const data = await r.json();
-
-    if (!data.success || !data.discrepancies) {
-      box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">📭</div>No match data yet — run Inventory Match trigger</div>`;
-      return;
-    }
-
-    if (data.discrepancies.length === 0 && data.onlyInTally?.length === 0) {
-      box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">✅</div>All stock matches — Tally and Bitrix24 are in sync!</div>`;
-      return;
-    }
-
-    const fmt = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-
-    let html = `<table class="ov-table"><thead><tr>
-      <th>Item</th><th>Tally Qty</th><th>Bitrix Qty</th><th>Tally Rate</th><th>Bitrix Rate</th>
-      <th style="text-align:right;">Status</th>
-    </tr></thead><tbody>`;
-
-    for (const d of (data.discrepancies || [])) {
-      const badge = (d.qtyMismatch && d.rateMismatch) ? 'high'
-                  : d.qtyMismatch ? 'mid' : 'low';
-      const label = (d.qtyMismatch && d.rateMismatch) ? 'QTY+RATE'
-                  : d.qtyMismatch ? 'QTY' : 'RATE';
-      html += `<tr>
-        <td><div class="ov-party">${d.name}</div></td>
-        <td style="font-family:'JetBrains Mono',monospace;">${fmt(d.tallyQty)}</td>
-        <td style="font-family:'JetBrains Mono',monospace;">${fmt(d.bitrixQty)}</td>
-        <td style="font-family:'JetBrains Mono',monospace;">₹${fmt(d.tallyRate)}</td>
-        <td style="font-family:'JetBrains Mono',monospace;">₹${fmt(d.bitrixRate)}</td>
-        <td><span class="ov-badge ${badge}">${label}</span></td>
-      </tr>`;
-    }
-
-    for (const d of (data.onlyInTally || [])) {
-      html += `<tr>
-        <td><div class="ov-party">${d.name}</div><div class="ov-ref">Only in Tally</div></td>
-        <td style="font-family:'JetBrains Mono',monospace;">${fmt(d.tallyQty)}</td>
-        <td style="color:var(--muted);">—</td>
-        <td style="font-family:'JetBrains Mono',monospace;">₹${fmt(d.tallyRate)}</td>
-        <td style="color:var(--muted);">—</td>
-        <td><span class="ov-badge low">MISSING</span></td>
-      </tr>`;
-    }
-
-    html += `</tbody></table>`;
-    box.innerHTML = html;
-  } catch {
-    box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">⚠️</div>Could not load inventory match</div>`;
-  }
-}
-
-async function autoFixInventory() {
-  const btn = document.getElementById('btn-autofix');
-  if (btn) { btn.textContent = '⏳ Fixing…'; btn.style.pointerEvents = 'none'; }
-  try {
-    const r = await fetch(`${API}/sync/inventory-match/fix?clientId=${clientId}`, {
-      method: 'POST', headers: HEADERS,
-    });
-    const data = await r.json();
-    toast(`Auto-fixed ${data.fixed || 0} items ✓`, 'ok');
-    setTimeout(loadInventoryMatch, 1500);
-  } catch(e) {
-    toast('Auto-fix failed: ' + e.message, 'fail');
-  } finally {
-    if (btn) { btn.textContent = '⚡ Auto Fix'; btn.style.pointerEvents = 'auto'; }
-  }
-}
-
-async function loadReceiptMatch() {
-  const box = document.getElementById('receipt-match-body');
-  try {
-    const r = await fetch(`${API}/api/receipts/match?clientId=${clientId}`, { headers: HEADERS });
-    const data = await r.json();
-
-    if (!data.success || !data.matchedList) {
-      box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">📭</div>No receipt data yet — run Receipt Match trigger</div>`;
-      return;
-    }
-
-    if (data.matchedList.length === 0 && data.unmatchedList?.length === 0) {
-      box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">📭</div>No receipts found in last 30 days</div>`;
-      return;
-    }
-
-    const fmt = (n) => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-
-    let html = `<table class="ov-table"><thead><tr>
-      <th>Party / Receipt</th><th>Receipt Amt</th><th>Bill Amount</th>
-      <th>Outstanding</th><th style="text-align:right;">Status</th>
-    </tr></thead><tbody>`;
-
-    for (const m of (data.matchedList || [])) {
-      const badge = m.isFullyPaid ? 'low' : 'mid';
-      html += `<tr>
-        <td>
-          <div class="ov-party">${m.receipt.partyName}</div>
-          <div class="ov-ref"># ${m.receipt.voucherNumber} · ${m.receipt.date}</div>
-        </td>
-        <td style="font-family:'JetBrains Mono',monospace;">${fmt(m.receipt.amount)}</td>
-        <td style="font-family:'JetBrains Mono',monospace;">${fmt(m.deal.dealAmount)}</td>
-        <td style="font-family:'JetBrains Mono',monospace;">${fmt(m.outstanding)}</td>
-        <td><span class="ov-badge ${badge}">${m.status}</span></td>
-      </tr>`;
-    }
-
-    for (const u of (data.unmatchedList || [])) {
-      html += `<tr>
-        <td>
-          <div class="ov-party">${u.partyName}</div>
-          <div class="ov-ref"># ${u.voucherNumber} · ${u.date}</div>
-        </td>
-        <td style="font-family:'JetBrains Mono',monospace;">${fmt(u.amount)}</td>
-        <td style="color:var(--muted);">—</td>
-        <td style="color:var(--muted);">—</td>
-        <td><span class="ov-badge high">NO MATCH</span></td>
-      </tr>`;
-    }
-
-    html += `</tbody></table>`;
-    box.innerHTML = html;
-  } catch {
-    box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">⚠️</div>Could not load receipt match</div>`;
-  }
 }
 
 initDashboard();
@@ -1124,8 +967,6 @@ setInterval(loadLastSync, 60000);
 setInterval(loadOverdue, 120000);
 setInterval(loadConnStatus, 30000);
 setInterval(loadPlanFeatures, 5 * 60 * 1000); // refresh plan features every 5 min
-setInterval(loadInventoryMatch, 30 * 60 * 1000); // refresh inventory match every 30 min
-setInterval(loadReceiptMatch,   15 * 60 * 1000); // refresh receipt match every 15 min
 </script>
 </body>
 </html>

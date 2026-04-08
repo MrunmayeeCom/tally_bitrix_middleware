@@ -494,6 +494,11 @@
           <div class="ac-label">Sync Invoices</div>
           <div class="ac-sub">Bitrix24 → Tally vouchers</div>
         </div>
+        <div class="action-card" onclick="syncItemInvoices()">
+          <div class="ac-icon">📋</div>
+          <div class="ac-label">Item Invoices</div>
+          <div class="ac-sub">Tally line items → Bitrix24</div>
+        </div>
       </div>
     </div>
 
@@ -1483,6 +1488,37 @@ async function syncLedgers() {
   } catch(e) {
     showToast('Ledger sync failed: ' + e.message, 'error');
     window._ledgerSyncInProgress = false;
+  }
+}
+
+async function syncItemInvoices() {
+  if (window._itemInvoiceSyncInProgress) return;
+  window._itemInvoiceSyncInProgress = true;
+  document.querySelectorAll('.action-card').forEach(c => {
+    if (c.querySelector('.ac-label')?.textContent === 'Item Invoices') {
+      c.style.opacity = '0.5';
+      c.style.pointerEvents = 'none';
+      c.querySelector('.ac-icon').textContent = '⏳';
+    }
+  });
+  showToast('Item invoice sync triggered…', 'success');
+  try {
+    await fetch('http://localhost:5050/sync/item-invoices', { method: 'POST' });
+    setTimeout(() => {
+      refreshLogs();
+      document.querySelectorAll('.action-card').forEach(c => {
+        if (c.querySelector('.ac-label')?.textContent === 'Item Invoices') {
+          c.style.opacity = '1';
+          c.style.pointerEvents = 'auto';
+          c.querySelector('.ac-icon').textContent = '📋';
+        }
+      });
+      window._itemInvoiceSyncInProgress = false;
+      showToast('Item invoice sync running — check logs', 'success');
+    }, 3000);
+  } catch(e) {
+    showToast('Item invoice sync failed: ' + e.message, 'error');
+    window._itemInvoiceSyncInProgress = false;
   }
 }
 

@@ -128,6 +128,39 @@ async function matchReceiptsToOutstanding() {
       }
     }
 
+    // Write outstanding balance back to each matched deal in Bitrix24
+    for (const m of matched) {
+      try {
+        await callBitrix('crm.deal.update', {
+          id:     m.deal.id,
+          fields: {
+            UF_OUTSTANDING:     m.outstanding,
+            UF_PAYMENT_STATUS:  m.isFullyPaid ? 'Paid' : 'Partial',
+            UF_PAYMENT_AMOUNT:  m.receipt.amount,
+            UF_PAYMENT_DATE:    m.receipt.date,
+            UF_RECEIPT_NUMBER:  m.receipt.voucherNumber,
+          },
+        });
+        logger.info('[ReceiptMatcher] Outstanding writeback done', {
+          dealId:      m.deal.id,
+          outstanding: m.outstanding,
+          status:      m.isFullyPaid ? 'Paid' : 'Partial',
+        });
+        // If fully paid — move deal to Won
+        if (m.isFullyPaid) {
+          await callBitrix('crm.deal.update', {
+            id:     m.deal.id,
+            fields: { STAGE_ID: 'WON' },
+          });
+          logger.info('[ReceiptMatcher] Deal marked WON — fully paid', { dealId: m.deal.id });
+        }
+      } catch (e) {
+        logger.warn('[ReceiptMatcher] Outstanding writeback failed', {
+          dealId: m.deal.id, message: e.message,
+        });
+      }
+    }
+
     const result = {
       lastRun:   new Date().toISOString(),
       total:     receipts.length,

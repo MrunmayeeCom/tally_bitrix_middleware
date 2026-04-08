@@ -241,6 +241,29 @@ async function processOutstanding() {
     const inFlightVouchers = new Set();
     logger.info('Per-run state reset — cache, circuit breaker, dedup cleared');
 
+    // Load inventory snapshot for closing stock enrichment
+    let _inventoryMap = {};
+    try {
+      const { getLastMatchResult } = require('./inventoryMatcher');
+      const matchResult = getLastMatchResult();
+      if (matchResult && matchResult.lastRun) {
+        // Build map: partyName is not directly linked to stock,
+        // but we store total closing stock value for the active company
+        const allItems = [
+          ...(matchResult.discrepancies || []),
+          ...(matchResult.onlyInTally   || []),
+        ];
+        allItems.forEach(item => {
+          _inventoryMap[item.name.toLowerCase()] = item.tallyQty;
+        });
+        logger.info(`[OutstandingSync] Inventory map loaded — ${Object.keys(_inventoryMap).length} items`);
+      }
+    } catch (e) {
+      logger.warn('[OutstandingSync] Could not load inventory map — closing stock will be blank', {
+        message: e.message,
+      });
+    }
+
     // Step 1: Fetch outstanding bills from Tally
     const outstandingList = await getOutstanding();
 
@@ -270,6 +293,16 @@ async function processOutstanding() {
         outstanding.daysPending   = daysPending(outstanding.dueDate);
         outstanding.pendingAmount = formatAmount(outstanding.pendingAmount);
         outstanding.billAmount    = formatAmount(outstanding.billAmount);
+
+        // Enrich with closing stock summary if inventory was previously synced
+        // Stored as a compact string: "Item A: 10, Item B: 5"
+        if (Object.keys(_inventoryMap).length > 0) {
+          const stockLines = Object.entries(_inventoryMap)
+            .filter(([, qty]) => qty > 0)
+            .slice(0, 5)  // cap at 5 items to keep field readable
+            .map(([name, qty]) => `${name}: ${qty}`);
+          outstanding.closingStock = stockLines.join(' | ') || '';
+        }
 
         const partyMatch = await findBitrixParty(outstanding.partyName);
         Object.assign(outstanding, partyMatch);

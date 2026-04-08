@@ -140,6 +140,7 @@ async function updateDealPaymentStatus(dealId, receipt, isFullyPaid) {
       UF_PAYMENT_DATE:     receipt.date,
       UF_PAYMENT_AMOUNT:   receipt.amount,
       UF_RECEIPT_NUMBER:   receipt.voucherNumber,
+      UF_OUTSTANDING:      Math.max(0, dealAmount - receipt.amount),
     };
 
     // Move to correct stage

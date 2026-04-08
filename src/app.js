@@ -417,6 +417,21 @@ app.post('/sync/inventory', authMiddleware, async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
+// Item-based invoice sync — Tally sales vouchers with product rows → Bitrix24 Smart Invoices
+app.post('/sync/item-invoices', authMiddleware, async (req, res) => {
+  const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
+  if (featureGate && !featureGate.isEnabled('invoice-sync')) {
+    return res.status(403).json({ success: false, message: 'invoice-sync not enabled on your plan' });
+  }
+  try {
+    logger.info('Manual item-based invoice sync triggered');
+    const { processItemInvoices } = require('./processors/itemInvoiceBuilder');
+    res.status(200).json({ success: true, message: 'Item invoice sync started' });
+    processItemInvoices().catch(e => logger.error('Item invoice sync error', { message: e.message }));
+  } catch(e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
 
 app.post('/sync/invoices', authMiddleware, async (req, res) => {
   const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
