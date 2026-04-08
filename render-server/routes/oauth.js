@@ -164,56 +164,8 @@ async function handleCallback(req, res) {
 
     console.log(`[OAuth] Installation complete — domain: ${bitrixDomain} | clientId: ${clientId}`);
 
-    // ── Step 6: Show success page ──
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8"/>
-        <style>
-          body { font-family: Arial, sans-serif; background: #f4f6fa;
-                 display: flex; align-items: center; justify-content: center;
-                 min-height: 100vh; margin: 0; }
-          .box { background: #fff; border-radius: 12px; padding: 48px;
-                 text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,.08);
-                 max-width: 460px; }
-          h2  { color: #0a8a5c; margin-bottom: 8px; }
-          p   { color: #555; line-height: 1.6; }
-          .check { font-size: 56px; margin-bottom: 16px; }
-          ul  { text-align: left; color: #333; line-height: 2; }
-        </style>
-      </head>
-      <body>
-        <div class="box">
-          <div class="check">✅</div>
-          <h2>TallyBitrixSync Connected!</h2>
-          <p>Your Bitrix24 portal <strong>${bitrixDomain}</strong> is now linked.</p>
-          <ul>
-            <li>✓ CRM events registered</li>
-            <li>✓ Contact & Company sync active</li>
-            <li>✓ Invoice sync active</li>
-            <li>✓ Quote sync active</li>
-          </ul>
-          <p style="margin-top:16px;color:#888;font-size:13px;">
-            Download the desktop app below to start syncing with Tally.
-          </p>
-          <a href="/dashboard?clientId=${clientId}"
-             style="display:inline-block;margin-top:12px;padding:12px 28px;
-             background:#0a8a5c;color:#fff;border-radius:8px;text-decoration:none;
-             font-size:14px;font-weight:600;margin-bottom:10px;">
-            📊 Open Dashboard
-          </a>
-          <br/>
-          <a href="https://github.com/MrunmayeeCom/tally-bitrix-releases/raw/main/public/TallyBitrixSync%20Setup%201.0.0.exe"
-             style="display:inline-block;margin-top:8px;padding:12px 28px;
-             background:#2d6ae0;color:#fff;border-radius:8px;text-decoration:none;
-             font-size:14px;font-weight:600;">
-            ⬇ Download TallyBitrixSync.exe
-          </a>
-        </div>
-      </body>
-      </html>
-    `);
+    // ── Step 6: Redirect to dashboard ──
+    return res.redirect(`/dashboard?clientId=${clientId}`);
 
   } catch (err) {
     console.error('[OAuth] Callback error:', err.response?.data || err.message);
