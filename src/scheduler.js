@@ -6,6 +6,8 @@ const { recordSync } = require('./utils/syncHistory');
 const logger = require('./utils/logger');
 const { pollInvoices } = require('./processors/invoicePoller');
 const featureGate = require('./services/featureGate');
+const { processInvoice } = require('./processors/invoiceProcessor');
+const { processQuotation } = require('./processors/quotationProcessor');
 
 function recordSyncFailure(trigger, message) {
   recordSync({ success: false, processed: 0, failed: 1, trigger, error: message });
@@ -99,6 +101,48 @@ async function runInvoiceSync(label) {
   }
 }
 
+let isInventorySyncing = false;
+let isPaymentSyncing      = false;
+let isTallyInvoiceSyncing = false;
+let isInventoryMatchRunning = false;
+let isReceiptMatchRunning   = false;
+
+async function runPaymentSync(label) {
+  if (isPaymentSyncing) {
+    logger.warn(`Payment sync already running — skipping ${label}`);
+    return;
+  }
+  isPaymentSyncing = true;
+  try {
+    const { processPayments } = require('./processors/paymentProcessor');
+    const result = await processPayments();
+    logger.info(`${label} completed`, result || {});
+  } catch (error) {
+    logger.error(`${label} failed`, { message: error.message });
+    recordSyncFailure(label, error.message);
+  } finally {
+    isPaymentSyncing = false;
+  }
+}
+
+async function runInventorySync(label) {
+  if (isInventorySyncing) {
+    logger.warn(`Inventory sync already running — skipping ${label}`);
+    return;
+  }
+  isInventorySyncing = true;
+  try {
+    const { processInventory } = require('./processors/inventoryProcessor');
+    const result = await processInventory();
+    logger.info(`${label} completed`, result || {});
+  } catch (error) {
+    logger.error(`${label} failed`, { message: error.message });
+    recordSyncFailure(label, error.message);
+  } finally {
+    isInventorySyncing = false;
+  }
+}
+
 function intervalToCron(minutes) {
   const m = Math.max(1, Math.floor(Number(minutes) || 60));
   if (m >= 60) return `0 * * * *`;
@@ -174,7 +218,7 @@ function startScheduler() {
     }, { timezone: 'Asia/Kolkata' }));
   }
 
-  // Invoice polling — runs on same interval if invoice-sync is enabled
+  // Invoice polling Bitrix24 → Tally (existing)
   if (featureGate.isEnabled('invoice-sync')) {
     _activeTasks.push(cron.schedule(syncCron, () => {
       runInvoiceSync(`${syncMinutes}min — invoice poll`);
@@ -182,6 +226,71 @@ function startScheduler() {
     logger.info('[Scheduler] Invoice poller registered');
   }
 
-  logger.info(`Scheduler started — outstanding: ${featureGate.isEnabled('outstanding-sync')} | ledger: ${featureGate.isEnabled('contact-sync')} | dueDates: ${featureGate.isEnabled('due-date-automation')} | interval: ${syncMinutes}min`);}
+  // Tally → Bitrix24 invoice sync (two-way)
+  if (featureGate.isEnabled('invoice-sync')) {
+    _activeTasks.push(cron.schedule(syncCron, () => {
+      if (isTallyInvoiceSyncing) return;
+      isTallyInvoiceSyncing = true;
+      const { processTallyInvoices } = require('./processors/tallyInvoiceProcessor');
+      processTallyInvoices()
+        .then(r => logger.info(`${syncMinutes}min — tally invoice sync completed`, r))
+        .catch(e => logger.error('Tally invoice sync failed', { message: e.message }))
+        .finally(() => { isTallyInvoiceSyncing = false; });
+    }, { timezone: 'Asia/Kolkata' }));
+    logger.info('[Scheduler] Tally → Bitrix24 invoice sync registered');
+  }
+
+  // Payment sync — runs on same interval if payment-sync is enabled
+  if (featureGate.isEnabled('payment-sync')) {
+    _activeTasks.push(cron.schedule(syncCron, () => {
+      runPaymentSync(`${syncMinutes}min — payment sync`);
+    }, { timezone: 'Asia/Kolkata' }));
+    logger.info('[Scheduler] Payment sync registered');
+  }
+
+  // Inventory sync — runs on same interval if inventory-sync is enabled
+  if (featureGate.isEnabled('inventory-sync')) {
+    _activeTasks.push(cron.schedule(syncCron, () => {
+      runInventorySync(`${syncMinutes}min — inventory sync`);
+    }, { timezone: 'Asia/Kolkata' }));
+    logger.info('[Scheduler] Inventory sync registered');
+  }
+
+  // Feature 6: Inventory match — runs every 6 hours
+  if (featureGate.isEnabled('inventory-sync')) {
+    _activeTasks.push(cron.schedule('0 */6 * * *', () => {
+      if (isInventoryMatchRunning) return;
+      isInventoryMatchRunning = true;
+      const { runInventoryMatch } = require('./processors/inventoryMatcher');
+      runInventoryMatch()
+        .then(r => logger.info('6hr — inventory match completed', {
+          discrepancies: r.discrepancies?.length || 0,
+          onlyInTally:   r.onlyInTally?.length   || 0,
+        }))
+        .catch(e => logger.error('Inventory match failed', { message: e.message }))
+        .finally(() => { isInventoryMatchRunning = false; });
+    }, { timezone: 'Asia/Kolkata' }));
+    logger.info('[Scheduler] Inventory match registered (every 6hr)');
+  }
+
+  // Feature 8: Receipt → Outstanding match — runs on same interval as payment sync
+  if (featureGate.isEnabled('payment-sync')) {
+    _activeTasks.push(cron.schedule(syncCron, () => {
+      if (isReceiptMatchRunning) return;
+      isReceiptMatchRunning = true;
+      const { matchReceiptsToOutstanding } = require('./processors/outstandingReceiptMatcher');
+      matchReceiptsToOutstanding()
+        .then(r => logger.info(`${syncMinutes}min — receipt match completed`, {
+          matched:   r.matched   || 0,
+          unmatched: r.unmatched || 0,
+        }))
+        .catch(e => logger.error('Receipt match failed', { message: e.message }))
+        .finally(() => { isReceiptMatchRunning = false; });
+    }, { timezone: 'Asia/Kolkata' }));
+    logger.info('[Scheduler] Receipt → Outstanding match registered');
+  }
+
+  logger.info(`Scheduler started — outstanding: ${featureGate.isEnabled('outstanding-sync')} | ledger: ${featureGate.isEnabled('contact-sync')} | dueDates: ${featureGate.isEnabled('due-date-automation')} | interval: ${syncMinutes}min`);
+}
 
 module.exports = { startScheduler, restartScheduler };

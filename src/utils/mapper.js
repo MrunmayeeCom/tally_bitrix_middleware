@@ -87,12 +87,16 @@ function mapOutstandingToDeal(outstanding) {
     CLOSEDATE:   outstanding.dueDate || '',
     // Extended fields — only when deal-field-mapping is enabled
     ...(fullMapping ? {
-      COMMENTS:        `Bill Date: ${outstanding.billDate} | Days Pending: ${outstanding.daysPending}`,
-      UF_BILL_DATE:    outstanding.billDate,
-      UF_DUE_DATE:     outstanding.dueDate,
-      UF_BILL_AMOUNT:  outstanding.billAmount,
-      UF_OUTSTANDING:  outstanding.pendingAmount,
-      UF_DAYS_PENDING: outstanding.daysPending
+      COMMENTS:             `Bill Date: ${outstanding.billDate} | Days Pending: ${outstanding.daysPending}`,
+      UF_BILL_DATE:         outstanding.billDate,
+      UF_DUE_DATE:          outstanding.dueDate,
+      UF_BILL_AMOUNT:       outstanding.billAmount,
+      UF_OUTSTANDING:       outstanding.pendingAmount,
+      UF_DAYS_PENDING:      outstanding.daysPending,
+      UF_INVOICE_NUMBER:    outstanding.voucherNumber,
+      UF_INVOICE_DATE:      outstanding.billDate,
+      UF_PAYMENT_STATUS:    outstanding.paymentStatus    || 'Pending',
+      UF_CLOSING_STOCK:     outstanding.closingStock     || '',
     } : {})
   };
 

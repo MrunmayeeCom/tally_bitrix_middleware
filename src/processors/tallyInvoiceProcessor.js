@@ -1,0 +1,233 @@
+const { sendToTally } = require('../connectors/tallyConnector');
+const { callBitrix } = require('../connectors/bitrixConnector');
+const tallyConfig = require('../config/tallyConfig');
+const logger = require('../utils/logger');
+const fs   = require('fs');
+const path = require('path');
+
+const CACHE_PATH = path.join(__dirname, '../../logs/tally-invoice-cache.json');
+
+function loadCache() {
+  try {
+    if (fs.existsSync(CACHE_PATH)) return JSON.parse(fs.readFileSync(CACHE_PATH, 'utf8'));
+  } catch {}
+  return {};
+}
+
+function saveCache(data) {
+  try {
+    const dir = path.dirname(CACHE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(CACHE_PATH, JSON.stringify(data, null, 2));
+  } catch (e) {
+    logger.warn('[TallyInvoice] Cache save failed: ' + e.message);
+  }
+}
+
+// Fetch sales vouchers from Tally Day Book
+async function getSalesVouchers() {
+  logger.info('Fetching sales vouchers from Tally');
+
+  const today    = new Date();
+  const fromDate = new Date();
+  fromDate.setDate(fromDate.getDate() - 30);
+
+  const fmt = (d) => {
+    const dd   = String(d.getDate()).padStart(2, '0');
+    const mm   = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
+  };
+
+  const xml = `
+    <ENVELOPE>
+      <HEADER>
+        <TALLYREQUEST>Export Data</TALLYREQUEST>
+      </HEADER>
+      <BODY>
+        <EXPORTDATA>
+          <REQUESTDESC>
+            <REPORTNAME>Day Book</REPORTNAME>
+            <STATICVARIABLES>
+              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+              <SVFROMDATE>${fmt(fromDate)}</SVFROMDATE>
+              <SVTODATE>${fmt(today)}</SVTODATE>
+            </STATICVARIABLES>
+          </REQUESTDESC>
+        </EXPORTDATA>
+      </BODY>
+    </ENVELOPE>
+  `.trim();
+
+  const response = await sendToTally(xml);
+  return parseSalesVouchersXml(response);
+}
+
+// Parse sales vouchers from Day Book XML
+function parseSalesVouchersXml(xml) {
+  try {
+    const vouchers = [];
+    const voucherRegex = /<VOUCHER\b([^>]*)>([\s\S]*?)<\/VOUCHER>/gi;
+    let match;
+
+    while ((match = voucherRegex.exec(xml)) !== null) {
+      const block = match[2];
+
+      const get = (tag) => {
+        const m = new RegExp(`<${tag}[^>]*>(.*?)</${tag}>`, 'i').exec(block);
+        return m ? m[1].trim() : '';
+      };
+
+      const voucherType = get('VOUCHERTYPENAME') || '';
+      // Only process Sales vouchers — skip receipts, journals etc.
+      const isSales = ['sales', 'sales invoice', 'tax invoice']
+        .some(t => voucherType.toLowerCase().includes(t));
+      if (!isSales) continue;
+
+      // Skip vouchers created by Bitrix24 (already synced Bitrix→Tally)
+      const voucherNumber = get('VOUCHERNUMBER') || '';
+      if (voucherNumber.startsWith('BX-')) continue;
+
+      const partyName = get('PARTYLEDGERNAME') || '';
+      const dateRaw   = get('DATE') || '';
+      const amount    = Math.abs(parseFloat(get('AMOUNT')) || 0);
+      const narration = get('NARRATION') || '';
+
+      if (!partyName || amount === 0) continue;
+
+      const date = dateRaw.length === 8
+        ? `${dateRaw.slice(0,4)}-${dateRaw.slice(4,6)}-${dateRaw.slice(6,8)}`
+        : dateRaw;
+
+      vouchers.push({ voucherNumber, partyName, date, amount, voucherType, narration });
+    }
+
+    logger.info(`Parsed ${vouchers.length} sales vouchers from Tally`);
+    return vouchers;
+  } catch (err) {
+    logger.error('Failed to parse sales vouchers XML', { message: err.message });
+    return [];
+  }
+}
+
+// Find contact or company in Bitrix24 by name
+async function findBitrixParty(partyName) {
+  try {
+    const companyData = await callBitrix('crm.company.list', {
+      filter: { '%TITLE': partyName },
+      select: ['ID', 'TITLE'],
+    });
+    const companies = companyData.result || [];
+    const company   = companies.find(c =>
+      (c.TITLE || '').toLowerCase() === partyName.toLowerCase()
+    );
+    if (company) return { COMPANY_ID: company.ID };
+
+    const contactData = await callBitrix('crm.contact.list', {
+      filter: { '%NAME': partyName },
+      select: ['ID', 'NAME', 'LAST_NAME'],
+    });
+    const contacts = contactData.result || [];
+    const contact  = contacts.find(c =>
+      `${c.NAME || ''} ${c.LAST_NAME || ''}`.trim().toLowerCase() === partyName.toLowerCase()
+    );
+    if (contact) return { CONTACT_ID: contact.ID };
+  } catch (e) {
+    logger.warn('Party lookup failed', { partyName, message: e.message });
+  }
+  return {};
+}
+
+// Push a Tally sales voucher into Bitrix24 as a Smart Invoice
+async function pushVoucherToBitrix(voucher, partyIds) {
+  const fields = {
+    title:        `${voucher.partyName} - ${voucher.voucherNumber}`,
+    opportunity:  voucher.amount,
+    currencyId:   'INR',
+    createdTime:  voucher.date,
+    closeDate:    voucher.date,
+    ...partyIds,
+    UF_TALLY_VOUCHER_NO: voucher.voucherNumber,
+    UF_TALLY_SYNCED:     'Y',
+  };
+
+  const data = await callBitrix('crm.item.add', {
+    entityTypeId: 31, // Smart Invoice
+    fields,
+  });
+
+  return data.result?.item?.id || data.result;
+}
+
+// Main Tally → Bitrix24 invoice processor
+async function processTallyInvoices() {
+  try {
+    logger.info('Tally → Bitrix24 invoice sync started');
+
+    const vouchers = await getSalesVouchers();
+
+    if (!vouchers || vouchers.length === 0) {
+      logger.info('No sales vouchers found in Tally');
+      return { success: true, created: 0, skipped: 0 };
+    }
+
+    const cache    = loadCache();
+    const newCache = { ...cache };
+    let created = 0;
+    let skipped = 0;
+    let failed  = 0;
+
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    for (const voucher of vouchers) {
+      try {
+        const cacheKey = `${voucher.voucherNumber}_${voucher.amount}`;
+
+        // Skip if already synced
+        if (cache[cacheKey]) {
+          skipped++;
+          continue;
+        }
+
+        // Find party in Bitrix24
+        const partyIds = await findBitrixParty(voucher.partyName);
+
+        // Push to Bitrix24
+        const bitrixId = await pushVoucherToBitrix(voucher, partyIds);
+        newCache[cacheKey] = { bitrixId, syncedAt: new Date().toISOString() };
+
+        logger.info('Tally invoice pushed to Bitrix24', {
+          voucherNumber: voucher.voucherNumber,
+          partyName:     voucher.partyName,
+          amount:        voucher.amount,
+          bitrixId,
+        });
+
+        created++;
+        await sleep(500);
+
+      } catch (voucherErr) {
+        logger.error('Failed to push Tally invoice to Bitrix24', {
+          voucherNumber: voucher.voucherNumber,
+          message:       voucherErr.message,
+        });
+        failed++;
+      }
+    }
+
+    saveCache(newCache);
+    logger.info('Tally → Bitrix24 invoice sync completed', { created, skipped, failed });
+    return { success: true, created, skipped, failed };
+
+  } catch (error) {
+    if (error.message === 'TALLY_OFFLINE') {
+      logger.warn('Tally invoice sync skipped — Tally is not running');
+      return { success: true, created: 0, skipped: 0 };
+    }
+    logger.error('Tally invoice sync failed', { message: error.message });
+    throw error;
+  }
+}
+
+module.exports = { processTallyInvoices, getSalesVouchers };

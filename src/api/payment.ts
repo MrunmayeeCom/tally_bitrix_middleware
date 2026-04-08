@@ -44,7 +44,7 @@ export const downloadInvoice = (transactionId: string) => {
   if (!transactionId) return;
 
   window.open(
-    `https://lisence-system.onrender.com/api/payment/invoice/${transactionId}`,
+    `https://license-system-v6ht.onrender.com/api/payment/invoice/${transactionId}`,
     "_blank"
   );
 };

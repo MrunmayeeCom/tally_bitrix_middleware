@@ -169,9 +169,108 @@ app.get('/api/overdue', async (req, res) => {
   }
 });
 
+// Payment status for a specific party
+app.get('/api/payments/status', authMiddleware, async (req, res) => {
+  try {
+    const { partyName } = req.query;
+    if (!partyName) return res.json({ success: false, message: 'partyName required' });
+    const { callBitrix } = require('./connectors/bitrixConnector');
+    const { getTallyPipelineCategoryId } = require('./services/pipelineService');
+    const categoryId = await getTallyPipelineCategoryId();
+    const data = await callBitrix('crm.deal.list', {
+      filter: { '%TITLE': partyName, ...(categoryId ? { CATEGORY_ID: categoryId } : {}) },
+      select: ['ID', 'TITLE', 'OPPORTUNITY', 'STAGE_ID', 'UF_PAYMENT_STATUS', 'UF_PAYMENT_DATE', 'UF_PAYMENT_AMOUNT'],
+    });
+    res.json({ success: true, deals: data.result || [] });
+  } catch(e) {
+    res.json({ success: false, message: e.message });
+  }
+});
+
 app.get('/api/lastsync', (req, res) => {
   const { getLastSync } = require('./utils/syncHistory');
   res.json(getLastSync() || {});
+});
+
+// ── Feature 6: Inventory matching ─────────────────────────────────────────────
+app.get('/api/inventory/match', authMiddleware, async (req, res) => {
+  try {
+    const { getLastMatchResult } = require('./processors/inventoryMatcher');
+    res.json({ success: true, ...getLastMatchResult() });
+  } catch(e) {
+    res.json({ success: false, message: e.message });
+  }
+});
+
+app.post('/sync/inventory-match', authMiddleware, async (req, res) => {
+  const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
+  if (featureGate && !featureGate.isEnabled('inventory-sync')) {
+    return res.status(403).json({ success: false, message: 'inventory-sync not enabled on your plan' });
+  }
+  try {
+    logger.info('Manual inventory match triggered');
+    const { runInventoryMatch } = require('./processors/inventoryMatcher');
+    const result = await runInventoryMatch();
+    res.status(200).json({ success: true, ...result });
+  } catch(e) {
+    logger.error('Inventory match failed', { message: e.message });
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+app.post('/sync/inventory-match/fix', authMiddleware, async (req, res) => {
+  const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
+  if (featureGate && !featureGate.isEnabled('inventory-sync')) {
+    return res.status(403).json({ success: false, message: 'inventory-sync not enabled on your plan' });
+  }
+  try {
+    const { getLastMatchResult, autoFixDiscrepancies } = require('./processors/inventoryMatcher');
+    const { discrepancies } = getLastMatchResult();
+    if (!discrepancies || discrepancies.length === 0) {
+      return res.json({ success: true, fixed: 0, message: 'No discrepancies to fix' });
+    }
+    const result = await autoFixDiscrepancies(discrepancies);
+    res.json({ success: true, ...result });
+  } catch(e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// ── Feature 7: Item-based invoice — product rows from Tally catalog ───────────
+app.get('/api/inventory/products', authMiddleware, async (req, res) => {
+  try {
+    const { fetchAllBitrixProducts } = require('./processors/inventoryProcessor');
+    const products = await fetchAllBitrixProducts();
+    res.json({ success: true, count: products.length, products });
+  } catch(e) {
+    res.json({ success: false, message: e.message, products: [] });
+  }
+});
+
+// ── Feature 8: Receipt → Outstanding matching ─────────────────────────────────
+app.get('/api/receipts/match', authMiddleware, async (req, res) => {
+  try {
+    const { getLastMatchResult } = require('./processors/outstandingReceiptMatcher');
+    res.json({ success: true, ...getLastMatchResult() });
+  } catch(e) {
+    res.json({ success: false, message: e.message });
+  }
+});
+
+app.post('/sync/receipts-match', authMiddleware, async (req, res) => {
+  const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
+  if (featureGate && !featureGate.isEnabled('payment-sync')) {
+    return res.status(403).json({ success: false, message: 'payment-sync not enabled on your plan' });
+  }
+  try {
+    logger.info('Manual receipt match triggered');
+    const { matchReceiptsToOutstanding } = require('./processors/outstandingReceiptMatcher');
+    const result = await matchReceiptsToOutstanding();
+    res.status(200).json({ success: true, ...result });
+  } catch(e) {
+    logger.error('Receipt match failed', { message: e.message });
+    res.status(500).json({ success: false, message: e.message });
+  }
 });
 
 // Scan Tally for available companies
@@ -254,6 +353,69 @@ app.post('/api/trigger/ledgers', authMiddleware, async (req, res) => {
   const { processTallyToContact } = require('./processors/tallyToContactProcessor');
   res.json({ triggered: true });
   processTallyToContact({ manual: true }).catch(() => {});
+});
+
+// Inventory mismatch check
+app.get('/api/inventory/mismatches', authMiddleware, async (req, res) => {
+  try {
+    const { getStockItems, fetchAllBitrixProducts, validateClosingStock } = require('./processors/inventoryProcessor');
+    const [tallyItems, bitrixProducts] = await Promise.all([getStockItems(), fetchAllBitrixProducts()]);
+    const discrepancies = validateClosingStock(tallyItems, bitrixProducts);
+    res.json({ success: true, count: discrepancies.length, discrepancies });
+  } catch(e) {
+    res.json({ success: false, message: e.message, discrepancies: [] });
+  }
+});
+
+// Tally → Bitrix24 invoice sync trigger
+app.post('/sync/tally-invoices', authMiddleware, async (req, res) => {
+  const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
+  if (featureGate && !featureGate.isEnabled('invoice-sync')) {
+    return res.status(403).json({ success: false, message: 'invoice-sync not enabled on your plan' });
+  }
+  try {
+    logger.info('Manual Tally → Bitrix24 invoice sync triggered');
+    const { processTallyInvoices } = require('./processors/tallyInvoiceProcessor');
+    const result = await processTallyInvoices();
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Tally invoice sync failed', { message: error.message });
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Manual payment sync trigger
+app.post('/sync/payments', authMiddleware, async (req, res) => {
+  const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
+  if (featureGate && !featureGate.isEnabled('payment-sync')) {
+    return res.status(403).json({ success: false, message: 'payment-sync not enabled on your plan' });
+  }
+  try {
+    logger.info('Manual payment sync triggered');
+    const { processPayments } = require('./processors/paymentProcessor');
+    const result = await processPayments();
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Manual payment sync failed', { message: error.message });
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Manual inventory sync trigger
+app.post('/sync/inventory', authMiddleware, async (req, res) => {
+  const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
+  if (featureGate && !featureGate.isEnabled('inventory-sync')) {
+    return res.status(403).json({ success: false, message: 'inventory-sync not enabled on your plan' });
+  }
+  try {
+    logger.info('Manual inventory sync triggered');
+    const { processInventory } = require('./processors/inventoryProcessor');
+    const result = await processInventory();
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Manual inventory sync failed', { message: error.message });
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 
 app.post('/sync/invoices', authMiddleware, async (req, res) => {

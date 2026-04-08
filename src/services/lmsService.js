@@ -14,7 +14,7 @@ const fs    = require('fs');
 const path  = require('path');
 const logger = require('../utils/logger');
 
-const LMS_BASE_URL            = process.env.LMS_BASE_URL || 'https://lisence-system.onrender.com';
+const LMS_BASE_URL            = process.env.LMS_BASE_URL || 'https://license-system-v6ht.onrender.com';
 const LMS_API_KEY             = process.env.LMS_API_KEY  || 'my-secret-key-123';
 const PRODUCT_ID              = '69ba90211cf0356ba779b317';
 const HEARTBEAT_INTERVAL_MS   = 30 * 60 * 1000; // 30 minutes

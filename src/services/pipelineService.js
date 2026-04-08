@@ -1,7 +1,7 @@
 const { callBitrix } = require('../connectors/bitrixConnector');
 const logger = require('../utils/logger');
 
-const PIPELINE_NAME  = 'Outstanding pipeline demo';
+const PIPELINE_NAME  = 'Tally Outstanding test';
 const PIPELINE_STAGES = [
   { NAME: 'New Bill'         },
   { NAME: 'Follow Up'        },
@@ -111,11 +111,18 @@ async function setupPipeline() {
 
 async function setupDealCustomFields() {
   const fields = [
-    { FIELD_NAME: 'UF_BILL_DATE',    USER_TYPE_ID: 'date',   LIST_COLUMN_LABEL: 'Bill Date'     },
-    { FIELD_NAME: 'UF_DUE_DATE',     USER_TYPE_ID: 'date',   LIST_COLUMN_LABEL: 'Due Date'      },
-    { FIELD_NAME: 'UF_BILL_AMOUNT',  USER_TYPE_ID: 'double', LIST_COLUMN_LABEL: 'Bill Amount'   },
-    { FIELD_NAME: 'UF_OUTSTANDING',  USER_TYPE_ID: 'double', LIST_COLUMN_LABEL: 'Outstanding'   },
-    { FIELD_NAME: 'UF_DAYS_PENDING', USER_TYPE_ID: 'integer',LIST_COLUMN_LABEL: 'Days Pending'  },
+    { FIELD_NAME: 'UF_BILL_DATE',       USER_TYPE_ID: 'date',    LIST_COLUMN_LABEL: 'Bill Date'       },
+    { FIELD_NAME: 'UF_DUE_DATE',        USER_TYPE_ID: 'date',    LIST_COLUMN_LABEL: 'Due Date'        },
+    { FIELD_NAME: 'UF_BILL_AMOUNT',     USER_TYPE_ID: 'double',  LIST_COLUMN_LABEL: 'Bill Amount'     },
+    { FIELD_NAME: 'UF_OUTSTANDING',     USER_TYPE_ID: 'double',  LIST_COLUMN_LABEL: 'Outstanding'     },
+    { FIELD_NAME: 'UF_DAYS_PENDING',    USER_TYPE_ID: 'integer', LIST_COLUMN_LABEL: 'Days Pending'    },
+    { FIELD_NAME: 'UF_INVOICE_NUMBER',  USER_TYPE_ID: 'string',  LIST_COLUMN_LABEL: 'Invoice Number'  },
+    { FIELD_NAME: 'UF_INVOICE_DATE',    USER_TYPE_ID: 'date',    LIST_COLUMN_LABEL: 'Invoice Date'    },
+    { FIELD_NAME: 'UF_PAYMENT_STATUS',  USER_TYPE_ID: 'string',  LIST_COLUMN_LABEL: 'Payment Status'  },
+    { FIELD_NAME: 'UF_PAYMENT_DATE',    USER_TYPE_ID: 'date',    LIST_COLUMN_LABEL: 'Payment Date'    },
+    { FIELD_NAME: 'UF_PAYMENT_AMOUNT',  USER_TYPE_ID: 'double',  LIST_COLUMN_LABEL: 'Payment Amount'  },
+    { FIELD_NAME: 'UF_RECEIPT_NUMBER',  USER_TYPE_ID: 'string',  LIST_COLUMN_LABEL: 'Receipt Number'  },
+    { FIELD_NAME: 'UF_CLOSING_STOCK',   USER_TYPE_ID: 'string',  LIST_COLUMN_LABEL: 'Closing Stock'   },
   ];
 
   for (const field of fields) {

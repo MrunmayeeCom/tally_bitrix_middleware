@@ -76,6 +76,23 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
 
     // Step 3: Create voucher in Tally (new invoices only)
     const result = await createVoucher(voucher);
+    
+    // Step 4: Store the created voucher reference for reverse sync
+    try {
+      const { storeMasterId } = require('../utils/voucherCache');
+      const midMatch = (result || '').match(/<LASTVCHID>\s*([1-9]\d*)\s*<\/LASTVCHID>/i);
+      const masterId = midMatch?.[1] || null;
+      if (masterId) {
+        storeMasterId(entityId, masterId, `BX-${voucher.voucherNumber}`, voucher.voucherType, {
+          invoiceType: invoiceType,
+          amount: voucher.amount,
+          partyName: voucher.partyName
+        });
+      }
+    } catch (cacheErr) {
+      logger.warn('Invoice MASTERID cache failed', { message: cacheErr.message });
+    }
+    
     logger.info('Invoice processor completed', {
       entityId,
       voucherNumber: voucher.voucherNumber,
