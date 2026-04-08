@@ -429,6 +429,12 @@ html,body{
           <span class="trig-label">Tally → Bitrix</span>
           <span class="trig-desc">Sales vouchers → invoices</span>
         </div>
+        <div class="trig blue" id="trig-iteminvoices" onclick="trigger('iteminvoices')">
+          <div class="spin-ring"></div>
+          <span class="trig-icon">📋</span>
+          <span class="trig-label">Item Invoices</span>
+          <span class="trig-desc">Tally line items → Bitrix24</span>
+        </div>
         <div class="trig green" id="trig-invmatch" onclick="trigger('invmatch')">
           <div class="spin-ring"></div>
           <span class="trig-icon">🔍</span>
@@ -507,6 +513,31 @@ html,body{
     </div>
   </div>
 
+  <!-- Inventory Match Panel -->
+  <div class="panel-full" style="margin-bottom:14px;animation-delay:.26s;">
+    <div class="panel-hdr">
+      <span class="panel-title">📦 Inventory Discrepancies</span>
+      <div style="display:flex;gap:6px;">
+        <button class="panel-action" id="btn-autofix" onclick="autoFixInventory()" style="color:var(--green);">⚡ Auto Fix</button>
+        <button class="panel-action" onclick="loadInventoryMatch()">↻ Refresh</button>
+      </div>
+    </div>
+    <div id="inventory-match-body" style="padding:0;">
+      <div class="empty" style="padding:28px 0;"><div class="empty-ico">⏳</div>Loading…</div>
+    </div>
+  </div>
+
+  <!-- Receipt Match Panel -->
+  <div class="panel-full" style="margin-bottom:14px;animation-delay:.28s;">
+    <div class="panel-hdr">
+      <span class="panel-title">🧾 Receipt → Outstanding Match</span>
+      <button class="panel-action" onclick="loadReceiptMatch()">↻ Refresh</button>
+    </div>
+    <div id="receipt-match-body" style="padding:0;">
+      <div class="empty" style="padding:28px 0;"><div class="empty-ico">⏳</div>Loading…</div>
+    </div>
+  </div>
+
   
 
 </div>
@@ -516,7 +547,11 @@ html,body{
 // Use same origin if served via ngrok/remote, fallback to localhost for direct access
 const params   = new URLSearchParams(location.search);
 const clientId = params.get('clientId') || '';
-const API      = 'https://tally-bitrix-middleware.onrender.com';
+
+// If opened via localhost — talk directly to local service
+// If opened via Bitrix24 or Render — talk to Render server
+const isLocal  = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const API      = isLocal ? '' : 'https://tally-bitrix-middleware.onrender.com';
 
 const HEADERS = {
   'ngrok-skip-browser-warning': '1',
@@ -524,14 +559,53 @@ const HEADERS = {
 };
 
 async function get(path) {
-  const sep = path.includes('?') ? '&' : '?';
-  const r = await fetch(`${API}/dashboard/data${sep}clientId=${clientId}`, { headers: HEADERS, signal: AbortSignal.timeout(5000) });
+  // Local mode — call localhost:5050 API directly
+  if (isLocal) {
+    const r = await fetch(`${API}${path}`, {
+      headers: HEADERS,
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  // Remote mode — fetch via Render push data
+  const r = await fetch(
+    `${API}/dashboard/data?clientId=${clientId}`,
+    { headers: HEADERS, signal: AbortSignal.timeout(5000) }
+  );
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+  const json = await r.json();
+  if (!json.success) throw new Error(json.message || 'No data');
+
+  if (path === '/api/history')   return json.history   || [];
+  if (path === '/api/lastsync')  return json.lastSync  || null;
+  if (path === '/api/overdue')   return json.overdue   || [];
+  if (path === '/api/status')    return json.status    || {};
+  if (path === '/api/companies') return json.companies || { companies: [], active: '' };
+  if (path === '/health')        return { ok: true };
+  return json;
 }
 
 async function post(path) {
-  const r = await fetch(`${API}/dashboard/push?clientId=${clientId}`, { method: 'POST', headers: HEADERS, body: JSON.stringify({ trigger: path }), signal: AbortSignal.timeout(8000) });
+  // Local mode — call localhost:5050 directly
+  if (isLocal) {
+    const r = await fetch(`${API}${path}`, {
+      method: 'POST',
+      headers: HEADERS,
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  // Remote mode — push trigger via Render server
+  const r = await fetch(`${API}/dashboard/push?clientId=${clientId}`, {
+    method: 'POST',
+    headers: HEADERS,
+    body: JSON.stringify({ trigger: path }),
+    signal: AbortSignal.timeout(8000)
+  });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
@@ -615,6 +689,7 @@ const trigMap = {
   inventory:   { path: '/sync/inventory',       label: 'Inventory sync',   slug: 'inventory-sync' },
   payments:      { path: '/sync/payments',        label: 'Payment sync',        slug: 'payment-sync'  },
   tallyinvoices: { path: '/sync/tally-invoices',   label: 'Tally invoice sync',  slug: 'invoice-sync'  },
+  iteminvoices:  { path: '/sync/item-invoices',    label: 'Item invoice sync',   slug: 'invoice-sync'  },
   invmatch:      { path: '/sync/inventory-match',   label: 'Inventory match',     slug: 'inventory-sync'},
   receiptmatch:  { path: '/sync/receipts-match',    label: 'Receipt match',       slug: 'payment-sync'  },
 };
@@ -920,6 +995,147 @@ async function initDashboard() {
   refreshAll(null);
   loadLastSync();
   loadOverdue();
+  loadInventoryMatch();
+  loadReceiptMatch();
+}
+
+async function loadInventoryMatch() {
+  const box = document.getElementById('inventory-match-body');
+  try {
+    const url = isLocal
+      ? `${API}/api/inventory/match`
+      : `${API}/api/inventory/match?clientId=${clientId}`;
+    const r = await fetch(url, { headers: HEADERS });
+    const data = await r.json();
+
+    if (!data.success || !data.discrepancies) {
+      box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">📭</div>No match data yet — run Inventory Match trigger</div>`;
+      return;
+    }
+
+    if (data.discrepancies.length === 0 && data.onlyInTally?.length === 0) {
+      box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">✅</div>All stock matches — Tally and Bitrix24 are in sync!</div>`;
+      return;
+    }
+
+    const fmt = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+    let html = `<table class="ov-table"><thead><tr>
+      <th>Item</th><th>Tally Qty</th><th>Bitrix Qty</th><th>Tally Rate</th><th>Bitrix Rate</th>
+      <th style="text-align:right;">Status</th>
+    </tr></thead><tbody>`;
+
+    for (const d of (data.discrepancies || [])) {
+      const badge = (d.qtyMismatch && d.rateMismatch) ? 'high'
+                  : d.qtyMismatch ? 'mid' : 'low';
+      const label = (d.qtyMismatch && d.rateMismatch) ? 'QTY+RATE'
+                  : d.qtyMismatch ? 'QTY' : 'RATE';
+      html += `<tr>
+        <td><div class="ov-party">${d.name}</div></td>
+        <td style="font-family:'JetBrains Mono',monospace;">${fmt(d.tallyQty)}</td>
+        <td style="font-family:'JetBrains Mono',monospace;">${fmt(d.bitrixQty)}</td>
+        <td style="font-family:'JetBrains Mono',monospace;">₹${fmt(d.tallyRate)}</td>
+        <td style="font-family:'JetBrains Mono',monospace;">₹${fmt(d.bitrixRate)}</td>
+        <td><span class="ov-badge ${badge}">${label}</span></td>
+      </tr>`;
+    }
+
+    for (const d of (data.onlyInTally || [])) {
+      html += `<tr>
+        <td><div class="ov-party">${d.name}</div><div class="ov-ref">Only in Tally</div></td>
+        <td style="font-family:'JetBrains Mono',monospace;">${fmt(d.tallyQty)}</td>
+        <td style="color:var(--muted);">—</td>
+        <td style="font-family:'JetBrains Mono',monospace;">₹${fmt(d.tallyRate)}</td>
+        <td style="color:var(--muted);">—</td>
+        <td><span class="ov-badge low">MISSING</span></td>
+      </tr>`;
+    }
+
+    html += `</tbody></table>`;
+    box.innerHTML = html;
+  } catch {
+    box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">⚠️</div>Could not load inventory match</div>`;
+  }
+}
+
+async function autoFixInventory() {
+  const btn = document.getElementById('btn-autofix');
+  if (btn) { btn.textContent = '⏳ Fixing…'; btn.style.pointerEvents = 'none'; }
+  try {
+    const url = isLocal
+      ? `${API}/sync/inventory-match/fix`
+      : `${API}/sync/inventory-match/fix?clientId=${clientId}`;
+    const r = await fetch(url, {
+      method: 'POST', headers: HEADERS,
+    });
+    const data = await r.json();
+    toast(`Auto-fixed ${data.fixed || 0} items ✓`, 'ok');
+    setTimeout(loadInventoryMatch, 1500);
+  } catch(e) {
+    toast('Auto-fix failed: ' + e.message, 'fail');
+  } finally {
+    if (btn) { btn.textContent = '⚡ Auto Fix'; btn.style.pointerEvents = 'auto'; }
+  }
+}
+
+async function loadReceiptMatch() {
+  const box = document.getElementById('receipt-match-body');
+  try {
+    const url = isLocal
+      ? `${API}/api/receipts/match`
+      : `${API}/api/receipts/match?clientId=${clientId}`;
+    const r = await fetch(url, { headers: HEADERS });
+    const data = await r.json();
+
+    if (!data.success || !data.matchedList) {
+      box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">📭</div>No receipt data yet — run Receipt Match trigger</div>`;
+      return;
+    }
+
+    if (data.matchedList.length === 0 && data.unmatchedList?.length === 0) {
+      box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">📭</div>No receipts found in last 30 days</div>`;
+      return;
+    }
+
+    const fmt = (n) => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+    let html = `<table class="ov-table"><thead><tr>
+      <th>Party / Receipt</th><th>Receipt Amt</th><th>Bill Amount</th>
+      <th>Outstanding</th><th style="text-align:right;">Status</th>
+    </tr></thead><tbody>`;
+
+    for (const m of (data.matchedList || [])) {
+      const badge = m.isFullyPaid ? 'low' : 'mid';
+      html += `<tr>
+        <td>
+          <div class="ov-party">${m.receipt.partyName}</div>
+          <div class="ov-ref"># ${m.receipt.voucherNumber} · ${m.receipt.date}</div>
+        </td>
+        <td style="font-family:'JetBrains Mono',monospace;">${fmt(m.receipt.amount)}</td>
+        <td style="font-family:'JetBrains Mono',monospace;">${fmt(m.deal.dealAmount)}</td>
+        <td style="font-family:'JetBrains Mono',monospace;">${fmt(m.outstanding)}</td>
+        <td><span class="ov-badge ${badge}">${m.status}</span></td>
+      </tr>`;
+    }
+
+    for (const u of (data.unmatchedList || [])) {
+      html += `<tr>
+        <td>
+          <div class="ov-party">${u.partyName}</div>
+          <div class="ov-ref"># ${u.voucherNumber} · ${u.date}</div>
+        </td>
+        <td style="font-family:'JetBrains Mono',monospace;">${fmt(u.amount)}</td>
+        <td style="color:var(--muted);">—</td>
+        <td style="color:var(--muted);">—</td>
+        <td><span class="ov-badge high">NO MATCH</span></td>
+      </tr>`;
+    }
+
+    html += `</tbody></table>`;
+    box.innerHTML = html;
+  } catch {
+    box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">⚠️</div>Could not load receipt match</div>`;
+  }
 }
 
 initDashboard();
@@ -929,6 +1145,8 @@ setInterval(loadLastSync, 60000);
 setInterval(loadOverdue, 120000);
 setInterval(loadConnStatus, 30000);
 setInterval(loadPlanFeatures, 5 * 60 * 1000); // refresh plan features every 5 min
+setInterval(loadInventoryMatch, 30 * 60 * 1000); // refresh inventory match every 30 min
+setInterval(loadReceiptMatch,   15 * 60 * 1000); // refresh receipt match every 15 min
 </script>
 </body>
 </html>
