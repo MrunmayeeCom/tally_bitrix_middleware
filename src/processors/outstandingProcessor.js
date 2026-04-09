@@ -333,12 +333,104 @@ async function processOutstanding() {
         let action;
 
         try {
-          if (existingDealId) {
+          // Helper — attach Smart Invoice to deal after create/update
+        const attachInvoiceToDeal = async (dealId, outstanding) => {
+          try {
+            // Check if invoice already exists for this voucher
+            const existing = await callBitrix('crm.item.list', {
+              entityTypeId: 31,
+              filter: { UF_TALLY_VOUCHER_NO: outstanding.voucherNumber },
+              select: ['id'],
+            });
+            if (existing.result?.items?.length > 0) return; // already attached
+
+            // Create Smart Invoice linked to this deal
+            await callBitrix('crm.item.add', {
+              entityTypeId: 31,
+              fields: {
+                title:           `${outstanding.partyName} - ${outstanding.voucherNumber}`,
+                opportunity:     outstanding.pendingAmount || 0,
+                currencyId:      'INR',
+                closeDate:       outstanding.dueDate || new Date().toISOString().split('T')[0],
+                ...(outstanding.COMPANY_ID  ? { companyId:  outstanding.COMPANY_ID  } : {}),
+                ...(outstanding.CONTACT_ID  ? { contactId:  outstanding.CONTACT_ID  } : {}),
+                parentId2:       dealId, // links invoice to deal
+                UF_TALLY_VOUCHER_NO: outstanding.voucherNumber,
+                UF_INVOICE_NUMBER:   outstanding.voucherNumber,
+                UF_INVOICE_DATE:     outstanding.billDate || '',
+                UF_PAYMENT_STATUS:   'Pending',
+              },
+            });
+            logger.info('Smart Invoice attached to deal', {
+              dealId,
+              voucherNumber: outstanding.voucherNumber,
+            });
+          } catch (e) {
+            logger.warn('Could not attach invoice to deal — non-fatal', {
+              dealId, message: e.message,
+            });
+          }
+        };
+
+        // Helper — post timeline comment with bill details
+        const postTimelineComment = async (dealId, outstanding, action) => {
+          try {
+            const comment =
+              `Tally Bill Synced (${action})\n` +
+              `Invoice No: ${outstanding.voucherNumber}\n` +
+              `Bill Date: ${outstanding.billDate || '—'}\n` +
+              `Bill Amount: ₹${outstanding.billAmount || 0}\n` +
+              `Outstanding: ₹${outstanding.pendingAmount || 0}\n` +
+              `Days Pending: ${outstanding.daysPending || 0}\n` +
+              `Due Date: ${outstanding.dueDate || '—'}`;
+
+            await callBitrix('crm.timeline.comment.add', {
+              fields: {
+                ENTITY_TYPE: 'deal',
+                ENTITY_ID:   dealId,
+                COMMENT:     comment,
+              },
+            });
+          } catch (e) {
+            // Timeline comment failure is non-fatal
+          }
+        };
+
+        
+            if (existingDealId) {
+            try {
+              const currentDeal = await callBitrix('crm.deal.get', { id: existingDealId });
+              const current = currentDeal.result || {};
+              const currentStage   = (current.STAGE_ID        || '').toLowerCase();
+              const currentPayment = (current.UF_PAYMENT_STATUS || '').toLowerCase();
+
+              const isPaid = currentPayment === 'paid'
+                || currentStage.includes('won')
+                || currentStage.includes('payment received');
+
+              if (isPaid) {
+                delete dealFields.STAGE_ID;
+                delete dealFields.UF_PAYMENT_STATUS;
+                logger.info('Deal already paid — updating amounts only, stage preserved', {
+                  dealId: existingDealId, stage: current.STAGE_ID,
+                });
+              }
+            } catch (stageErr) {
+              logger.warn('Could not fetch current deal stage — proceeding with full update', {
+                dealId: existingDealId, message: stageErr.message,
+              });
+            }
             await updateDeal(existingDealId, dealFields);
+            await attachInvoiceToDeal(existingDealId, outstanding);
             action = 'updated';
           } else {
             createdThisRun.add(dealKey);
-            await createDeal(dealFields);
+            const newDeal = await createDeal(dealFields);
+            const newDealId = newDeal?.result || newDeal;
+            if (newDealId) {
+              await attachInvoiceToDeal(newDealId, outstanding);
+              await postTimelineComment(newDealId, outstanding, 'created');
+            }
             action = 'created';
           }
         } finally {

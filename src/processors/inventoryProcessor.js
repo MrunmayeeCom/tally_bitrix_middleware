@@ -23,13 +23,26 @@ function parseStockItemsXml(xml) {
       
       if (!name) continue;
 
+      // Tally returns quantities as "39 Mth" or "-12 Mth" — extract number only
+      const parseQty = (raw) => {
+        if (!raw) return 0;
+        const num = raw.replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+        return num ? Math.abs(parseFloat(num[0])) : 0;
+      };
+
+      // Tally returns rates with commas like "1,46,114.50" — strip commas first
+      const parseRate = (raw) => {
+        if (!raw) return 0;
+        return parseFloat(raw.replace(/,/g, '')) || 0;
+      };
+
       items.push({
         name,
-        baseUnit: get('BASEUNITS') || '',
-        closingBalance: parseFloat(get('CLOSINGBALANCE')) || 0,
-        closingRate: parseFloat(get('CLOSINGRATE')) || 0,
-        closingValue: parseFloat(get('CLOSINGVALUE')) || 0,
-        parent: get('PARENT') || '',
+        baseUnit:       get('BASEUNITS')      || '',
+        closingBalance: parseQty(get('CLOSINGBALANCE')),
+        closingRate:    parseRate(get('CLOSINGRATE')),
+        closingValue:   parseRate(get('CLOSINGVALUE')),
+        parent:         get('PARENT')         || '',
       });
     }
 
@@ -43,6 +56,18 @@ function parseStockItemsXml(xml) {
 // Fetch stock items from Tally
 async function getStockItems() {
   logger.info('Fetching stock items from Tally');
+  // DEBUG — log raw XML to see exact tag format (remove after testing)
+  const debugXml = await (async () => {
+    try {
+      const { sendToTally } = require('../connectors/tallyConnector');
+      const testXml = `<ENVELOPE><HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER><BODY><EXPORTDATA><REQUESTDESC><REPORTNAME>List of Accounts</REPORTNAME><STATICVARIABLES><SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><AccountType>Stock Items</AccountType></STATICVARIABLES></REQUESTDESC></EXPORTDATA></BODY></ENVELOPE>`;
+      const raw = await sendToTally(testXml);
+      // Log first stock item block only
+      const firstItem = raw.match(/<STOCKITEM\b[^>]*>[\s\S]*?<\/STOCKITEM>/i);
+      if (firstItem) logger.info('[InventoryDebug] First STOCKITEM block:', firstItem[0].substring(0, 800));
+      else logger.warn('[InventoryDebug] No STOCKITEM tag found in response');
+    } catch(e) { logger.warn('[InventoryDebug] Debug failed:', e.message); }
+  })();
 
   const xml = `
     <ENVELOPE>
@@ -164,7 +189,11 @@ async function processInventory() {
         const existingProduct = await findBitrixProduct(item.name);
 
         if (existingProduct) {
-          // Update existing product
+          const existingQty  = parseFloat(existingProduct.QUANTITY) || 0;
+          const existingRate = parseFloat(existingProduct.PRICE)    || 0;
+          const noChange = Math.abs(existingQty - (item.closingBalance || 0)) < 0.01
+                        && Math.abs(existingRate - (item.closingRate   || 0)) < 0.01;
+          if (noChange) { skipped++; continue; }
           await updateBitrixProduct(existingProduct.ID, item);
           logger.info('Product updated in Bitrix24', {
             name: item.name,
@@ -174,7 +203,11 @@ async function processInventory() {
           });
           updated++;
         } else {
-          // Create new product
+          // Skip creating zero-value items — nothing to sync
+          if ((item.closingBalance || 0) === 0 && (item.closingRate || 0) === 0) {
+            skipped++;
+            continue;
+          }
           const newId = await createBitrixProduct(item);
           logger.info('Product created in Bitrix24', {
             name: item.name,

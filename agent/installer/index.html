@@ -914,7 +914,9 @@ async function scanSettingsCompanies() {
     if (!data.success || !data.companies?.length) 
       throw new Error(data.error || 'No companies found');
 
-    _settingsScannedList = data.companies;
+    _settingsScannedList = data.companies.map(c =>
+      typeof c === 'object' ? (c.name || c.NAME || c.title || c.TITLE || JSON.stringify(c)) : String(c)
+    );
     populateDropdown('s-company-dropdown', _settingsScannedList, _settingsCompanies);
     icon.textContent = '✓'; label.textContent = `${data.companies.length} found`;
     btn.style.background = 'rgba(56,217,169,.1)';
@@ -1003,7 +1005,9 @@ async function scanTallyCompanies() {
       data = await ipcRenderer.invoke('scan-tally-companies', { tallyHost, tallyPort });
     }
     if (!data.success || !data.companies?.length) throw new Error(data.error || 'No companies found');
-    _setupScannedList = data.companies;
+    _setupScannedList = data.companies.map(c =>
+      typeof c === 'object' ? (c.name || c.NAME || c.title || c.TITLE || JSON.stringify(c)) : String(c)
+    );
     populateDropdown('setup-company-dropdown', _setupScannedList, _companies);
     icon.textContent = '✓'; label.textContent = `${data.companies.length} found`;
     btn.style.background = 'rgba(56,217,169,.1)';
@@ -1209,6 +1213,9 @@ async function installService() {
 function showDashboard() { navigateTo('dashboard'); }
 
 function getFormConfig() {
+  // Guard: filter out any UUID-like values that may have crept in from a bad scan
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const safeCompanies = _companies.filter(c => !uuidRegex.test(c));
   return {
     customerEmail  : document.getElementById('customerEmail')?.value.trim() || '',
     bitrixDomain   : document.getElementById('bitrixDomain')?.value.trim() || '',
@@ -1216,9 +1223,9 @@ function getFormConfig() {
     bitrixUrl      : '', // no longer needed — OAuth handles this
     tallyHost      : document.getElementById('tallyHost').value.trim() || 'localhost',
     tallyPort      : parseInt(document.getElementById('tallyPort').value) || 9000,
-    tallyCompany   : _companies[0] || '',
-    tallyCompanies : [..._companies],
-    activeCompany  : _companies[0] || '',
+    tallyCompany   : safeCompanies[0] || '',
+    tallyCompanies : [...safeCompanies],
+    activeCompany  : safeCompanies[0] || '',
   };
 }
 
@@ -1710,14 +1717,20 @@ async function saveSettings() {
     showToast('Add at least one Tally company', 'error');
     return;
   }
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const safeSettingsCompanies = _settingsCompanies.filter(c => !uuidRegex.test(c));
+  if (safeSettingsCompanies.length === 0) {
+    showToast('Company name looks invalid — please add manually', 'error');
+    return;
+  }
   const cfg = {
     customerEmail  : document.getElementById('s-customerEmail').value.trim(),
     bitrixUrl      : document.getElementById('s-bitrixUrl').value.trim(),
     tallyHost      : document.getElementById('s-tallyHost').value.trim(),
     tallyPort      : parseInt(document.getElementById('s-tallyPort').value),
-    tallyCompany   : _settingsCompanies[0] || '',
-    tallyCompanies : [..._settingsCompanies],
-    activeCompany  : _settingsCompanies[0] || '',
+    tallyCompany   : safeSettingsCompanies[0] || '',
+    tallyCompanies : [...safeSettingsCompanies],
+    activeCompany  : safeSettingsCompanies[0] || '',
   };
   await ipcRenderer.invoke('save-and-restart', cfg);
   // Update baseline after save so next session starts fresh

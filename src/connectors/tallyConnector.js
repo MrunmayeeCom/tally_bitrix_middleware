@@ -203,6 +203,14 @@ async function getCompanyList() {
           logger.info('[Tally] Companies found via COMPANY/NAME block:', companies);
       }
 
+      // Try 3b — NAME attribute on COMPANY tag (TallyPrime Silver)
+      if (companies.length === 0) {
+        const match3b = [...raw.matchAll(/<COMPANY\s+NAME="([^"]+)"/gi)];
+        companies = match3b.map(m => m[1].trim()).filter(Boolean);
+        if (companies.length > 0)
+          logger.info('[Tally] Companies found via COMPANY NAME attribute:', companies);
+      }
+
       // Try 4 — COMPANY tag with NAME child (TDL collection response)
       if (companies.length === 0) {
         const match4 = [...raw.matchAll(/<COMPANY[^>]*>\s*<NAME>(.*?)<\/NAME>/gi)];
