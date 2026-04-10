@@ -90,7 +90,7 @@ function parseSalesVouchersWithItems(xml) {
 
     // Only process Sales type vouchers
     const voucherType = get('VOUCHERTYPENAME') || '';
-    const isSales = ['sales', 'sales invoice', 'tax invoice']
+    const isSales = ['sales', 'tax invoice', 'tax inv']
       .some(t => voucherType.toLowerCase().includes(t));
     if (!isSales) continue;
 

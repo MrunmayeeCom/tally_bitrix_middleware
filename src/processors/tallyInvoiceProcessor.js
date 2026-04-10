@@ -61,6 +61,8 @@ async function getSalesVouchers() {
   `.trim();
 
   const response = await sendToTally(xml);
+  // Debug — log first 1500 chars to see what voucher types exist
+  logger.warn('[TallyInvoice] Raw Day Book response (first 1500):', response.substring(0, 1500));
   return parseSalesVouchersXml(response);
 }
 
@@ -81,7 +83,7 @@ function parseSalesVouchersXml(xml) {
 
       const voucherType = get('VOUCHERTYPENAME') || '';
       // Only process Sales vouchers — skip receipts, journals etc.
-      const isSales = ['sales', 'sales invoice', 'tax invoice']
+      const isSales = ['sales', 'tax invoice', 'tax inv']
         .some(t => voucherType.toLowerCase().includes(t));
       if (!isSales) continue;
 

@@ -65,7 +65,10 @@ async function getStockItems() {
       // Log first stock item block only
       const firstItem = raw.match(/<STOCKITEM\b[^>]*>[\s\S]*?<\/STOCKITEM>/i);
       if (firstItem) logger.info('[InventoryDebug] First STOCKITEM block:', firstItem[0].substring(0, 800));
-      else logger.warn('[InventoryDebug] No STOCKITEM tag found in response');
+      else {
+        logger.warn('[InventoryDebug] No STOCKITEM tag found in response');
+        logger.warn('[InventoryDebug] Raw response first 1000 chars:', raw.substring(0, 1000));
+      }
     } catch(e) { logger.warn('[InventoryDebug] Debug failed:', e.message); }
   })();
 
@@ -191,8 +194,11 @@ async function processInventory() {
         if (existingProduct) {
           const existingQty  = parseFloat(existingProduct.QUANTITY) || 0;
           const existingRate = parseFloat(existingProduct.PRICE)    || 0;
-          const noChange = Math.abs(existingQty - (item.closingBalance || 0)) < 0.01
-                        && Math.abs(existingRate - (item.closingRate   || 0)) < 0.01;
+          const tallyQty     = item.closingBalance || 0;
+          const tallyRate    = item.closingRate    || 0;
+          const noChange = Math.abs(existingQty - tallyQty) < 0.01
+                        && Math.abs(existingRate - tallyRate) < 0.01
+                        && !(tallyQty === 0 && tallyRate === 0 && existingQty === 0 && existingRate === 0 && !existingProduct.NAME);
           if (noChange) { skipped++; continue; }
           await updateBitrixProduct(existingProduct.ID, item);
           logger.info('Product updated in Bitrix24', {
@@ -203,8 +209,8 @@ async function processInventory() {
           });
           updated++;
         } else {
-          // Skip creating zero-value items — nothing to sync
-          if ((item.closingBalance || 0) === 0 && (item.closingRate || 0) === 0) {
+          // Skip creating items with no name only
+          if (!item.name) {
             skipped++;
             continue;
           }

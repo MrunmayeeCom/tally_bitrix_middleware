@@ -369,7 +369,14 @@ function formatTallyDateToISO(tallyDate) {
 // Escape special XML characters in ledger/party names
 function escapeXml(str) {
   if (!str) return '';
-  return str
+  // Decode any existing HTML entities first to avoid double-encoding
+  const decoded = str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g,  '<')
+    .replace(/&gt;/g,  '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+  return decoded
     .replace(/&/g,  '&amp;')
     .replace(/</g,  '&lt;')
     .replace(/>/g,  '&gt;')
