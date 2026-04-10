@@ -37,9 +37,14 @@ async function processDueDates() {
 
     logger.info('Pipeline stages loaded', { stageMap });
 
-    const overdueStageId  = stageMap['overdue'];
-    const followUpStageId = stageMap['follow up'];
-    const newBillStageId  = stageMap['new bill'];
+    // Case-insensitive stage lookup — handles minor name variations
+    const findStage = (name) => {
+      const key = Object.keys(stageMap).find(k => k.toLowerCase().includes(name.toLowerCase()));
+      return key ? stageMap[key] : null;
+    };
+    const overdueStageId  = findStage('overdue');
+    const followUpStageId = findStage('follow up') || findStage('followup');
+    const newBillStageId  = findStage('new bill') || findStage('newbill');
 
     if (!overdueStageId) {
       logger.warn('Overdue stage not found in pipeline — check stage names');

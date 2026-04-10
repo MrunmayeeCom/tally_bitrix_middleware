@@ -269,7 +269,8 @@ async function processOutstanding() {
 
     if (!outstandingList || outstandingList.length === 0) {
       logger.info('No outstanding bills found');
-      await closePaidDeals([]);
+      // Do NOT call closePaidDeals with empty list — if Tally returned nothing
+      // it may be offline or have no data, and we must not mark all deals as paid.
       return { success: true, processed: 0 };
     }
 

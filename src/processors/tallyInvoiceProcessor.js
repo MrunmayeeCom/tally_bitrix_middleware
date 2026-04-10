@@ -29,14 +29,16 @@ async function getSalesVouchers() {
   logger.info('Fetching sales vouchers from Tally (monthly chunks)');
 
   const fmt = (d) => {
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    return `${d.getDate()}-${months[d.getMonth()]}-${d.getFullYear()}`;
+    const dd   = String(d.getDate()).padStart(2, '0');
+    const mm   = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
   };
 
   // Fetch only current month + previous month to avoid hanging TallyPrime.
   // Increase MONTHS_BACK cautiously — each extra month adds load.
-  const startDate = new Date('2025-04-01'); // FY 2025
-  const endDate   = new Date('2025-12-01'); 
+  const startDate = new Date('2025-04-01'); // FY 2025-26
+  const endDate   = new Date();             // up to today 
   const chunks    = [];
   let cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
   while (cursor <= endDate) {
@@ -57,48 +59,20 @@ async function getSalesVouchers() {
       const xml = `
         <ENVELOPE>
           <HEADER>
-            <VERSION>1</VERSION>
-            <TALLYREQUEST>Export</TALLYREQUEST>
-            <TYPE>Collection</TYPE>
-            <ID>BX Voucher Collection</ID>
+            <TALLYREQUEST>Export Data</TALLYREQUEST>
           </HEADER>
           <BODY>
-            <DESC>
-              <STATICVARIABLES>
-                <SVCurrentCompany>${tallyConfig.company}</SVCurrentCompany>
-                <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-                <SVFROMDATE>${chunk.from}</SVFROMDATE>
-                <SVTODATE>${chunk.to}</SVTODATE>
-              </STATICVARIABLES>
-              <TDL>
-                <TDLMESSAGE>
-                  <COLLECTION NAME="BX Voucher Collection" ISMODIFY="No">
-                    <TYPE>Voucher</TYPE>
-                    <FILTERS>BXDateFilter,BXNotCancelled,BXVoucherTypeFilter</FILTERS>
-                    <NATIVEMETHOD>Date</NATIVEMETHOD>
-                    <NATIVEMETHOD>VoucherNumber</NATIVEMETHOD>
-                    <NATIVEMETHOD>PartyLedgerName</NATIVEMETHOD>
-                    <NATIVEMETHOD>Amount</NATIVEMETHOD>
-                    <NATIVEMETHOD>VoucherTypeName</NATIVEMETHOD>
-                    <NATIVEMETHOD>Narration</NATIVEMETHOD>
-                  </COLLECTION>
-                  <SYSTEM TYPE="Formulae" NAME="BXDateFilter">
-                    $$IsInPeriod:$Date:${chunk.from}:${chunk.to}
-                  </SYSTEM>
-                  <SYSTEM TYPE="Formulae" NAME="BXNotCancelled">
-                    NOT $$IsCancelled
-                  </SYSTEM>
-                  <SYSTEM TYPE="Formulae" NAME="BXVoucherTypeFilter">
-                    ($VoucherTypeName = "Tax Invoice Thane") OR
-                    ($VoucherTypeName = "Tax Invoice TSS") OR
-                    ($VoucherTypeName = "Tally Service Invoice") OR
-                    ($VoucherTypeName = "Tax Invoice Mumbai") OR
-                    ($VoucherTypeName = "Tax Invoice Cloud") OR
-                    ($VoucherTypeName = "Tax Invoice License")
-                  </SYSTEM>
-                </TDLMESSAGE>
-              </TDL>
-            </DESC>
+            <EXPORTDATA>
+              <REQUESTDESC>
+                <REPORTNAME>Sales Register</REPORTNAME>
+                <STATICVARIABLES>
+                  <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+                  <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+                  <SVFROMDATE>${chunk.from}</SVFROMDATE>
+                  <SVTODATE>${chunk.to}</SVTODATE>
+                </STATICVARIABLES>
+              </REQUESTDESC>
+            </EXPORTDATA>
           </BODY>
         </ENVELOPE>`.trim();
 
@@ -163,9 +137,16 @@ function parseSalesVouchersXml(xml) {
       // Skip vouchers with no type info at all
       if (!voucherType.trim()) continue;
 
-      const SALES_EXCLUDE = ['receipt', 'payment', 'journal', 'contra', 'purchase', 'debit note', 'credit note', 'stock journal'];
+      const VOUCHER_TYPE_ALLOWLIST = [
+        'tax invoice thane',
+        'tax invoice tss',
+        'tally service invoice',
+        'tax invoice mumbai',
+        'tax invoice cloud',
+        'tax invoice license',
+      ];
       const voucherTypeLower = voucherType.toLowerCase();
-      const isSales = !SALES_EXCLUDE.some(t => voucherTypeLower.includes(t));
+      const isSales = VOUCHER_TYPE_ALLOWLIST.some(t => voucherTypeLower === t);
       if (!isSales) {
         logger.info(`[TallyInvoice] Skipped voucher type: "${voucherType}"`);
         continue;
