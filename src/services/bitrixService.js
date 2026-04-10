@@ -97,11 +97,25 @@ async function getStages(categoryId) {
   return data.result || [];
 }
 
+// Track recently posted timeline comments to prevent duplicates
+// within the same process run (e.g. dual scheduler ticks)
+const _recentTimelineComments = new Map();
+
 async function sendNotification(userId, message, dealId = null) {
   logger.info('Sending notification', { userId, dealId, message });
 
   // Timeline comment on the deal — visible to all, requires only CRM scope
   if (dealId) {
+    // Dedup: skip if the same comment was posted for this deal in the last 60s
+    const dedupeKey = `${dealId}:${message}`;
+    const lastPosted = _recentTimelineComments.get(dedupeKey) || 0;
+    if (Date.now() - lastPosted < 60000) {
+      logger.warn('Timeline comment skipped — duplicate within 60s', { dealId });
+      return;
+    }
+    _recentTimelineComments.set(dedupeKey, Date.now());
+    setTimeout(() => _recentTimelineComments.delete(dedupeKey), 60000);
+
     try {
       const timelineText = message
         .replace(/\[b\](.*?)\[\/b\]/g, '$1')

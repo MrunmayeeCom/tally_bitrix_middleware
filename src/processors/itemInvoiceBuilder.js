@@ -38,11 +38,7 @@ function saveCache(data) {
 // ── Tally fetch ───────────────────────────────────────────────────────────────
 
 async function getSalesVouchersWithItems() {
-  logger.info('[ItemInvoice] Fetching sales vouchers with line items from Tally');
-
-  const today    = new Date();
-  const fromDate = new Date();
-  fromDate.setDate(fromDate.getDate() - 30);
+  logger.info('[ItemInvoice] Fetching sales vouchers with line items from Tally (monthly chunks)');
 
   const fmt = (d) => {
     const dd   = String(d.getDate()).padStart(2, '0');
@@ -51,26 +47,55 @@ async function getSalesVouchersWithItems() {
     return `${dd}-${mm}-${yyyy}`;
   };
 
-  const xml = `
-    <ENVELOPE>
-      <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
-      <BODY>
-        <EXPORTDATA>
-          <REQUESTDESC>
-            <REPORTNAME>Day Book</REPORTNAME>
-            <STATICVARIABLES>
-              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
-              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-              <SVFROMDATE>${fmt(fromDate)}</SVFROMDATE>
-              <SVTODATE>${fmt(today)}</SVTODATE>
-            </STATICVARIABLES>
-          </REQUESTDESC>
-        </EXPORTDATA>
-      </BODY>
-    </ENVELOPE>`.trim();
+  const today     = new Date();
+  const startDate = new Date('2025-10-01');
+  const chunks    = [];
+  let cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+  while (cursor <= today) {
+    const chunkStart = new Date(cursor);
+    const chunkEnd   = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+    chunks.push({
+      from: fmt(chunkStart),
+      to:   fmt(chunkEnd > today ? today : chunkEnd),
+    });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
 
-  const response = await sendToTally(xml);
-  return parseSalesVouchersWithItems(response);
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  let allVouchers = [];
+
+  for (const chunk of chunks) {
+    try {
+      const xml = `
+        <ENVELOPE>
+          <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
+          <BODY>
+            <EXPORTDATA>
+              <REQUESTDESC>
+                <REPORTNAME>Day Book</REPORTNAME>
+                <STATICVARIABLES>
+                  <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+                  <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+                  <SVFROMDATE>${chunk.from}</SVFROMDATE>
+                  <SVTODATE>${chunk.to}</SVTODATE>
+                </STATICVARIABLES>
+              </REQUESTDESC>
+            </EXPORTDATA>
+          </BODY>
+        </ENVELOPE>`.trim();
+
+      logger.info(`[ItemInvoice] Fetching ${chunk.from} → ${chunk.to}`);
+      const response = await sendToTally(xml);
+      const vouchers = parseSalesVouchersWithItems(response);
+      allVouchers = allVouchers.concat(vouchers);
+      await sleep(1500);
+    } catch (e) {
+      logger.warn(`[ItemInvoice] Chunk ${chunk.from}→${chunk.to} failed — skipping`, { message: e.message });
+    }
+  }
+
+  logger.info(`[ItemInvoice] Total vouchers fetched across all chunks: ${allVouchers.length}`);
+  return allVouchers;
 }
 
 // ── XML parser — captures ALLINVENTORYENTRIES line items ──────────────────────
@@ -88,20 +113,40 @@ function parseSalesVouchersWithItems(xml) {
       return m ? m[1].trim() : '';
     };
 
-    // Only process Sales type vouchers
-    const voucherType = get('VOUCHERTYPENAME') || '';
-    const isSales = ['sales', 'tax invoice', 'tax inv']
-      .some(t => voucherType.toLowerCase().includes(t));
+    // VCHTYPE is on the <VOUCHER> tag attribute, not a child tag
+    const vchtypeAttr = (match[1].match(/VCHTYPE="([^"]+)"/i) || [])[1] || '';
+    const voucherType = get('VOUCHERTYPENAME') || vchtypeAttr;
+
+    // Skip cancelled vouchers
+    const isCancelled = /ACTION="Cancel"/i.test(match[1]);
+    if (isCancelled) continue;
+
+    const SALES_EXCLUDE = ['receipt', 'payment', 'journal', 'contra', 'purchase', 'debit note', 'credit note', 'stock'];
+    const voucherTypeLower = voucherType.toLowerCase();
+    const ITEM_SALES_EXCLUDE = ['receipt', 'payment', 'journal', 'contra', 'purchase', 'debit note', 'credit note', 'stock journal'];
+    const isSales = !ITEM_SALES_EXCLUDE.some(t => voucherTypeLower.includes(t));
     if (!isSales) continue;
 
     // Skip vouchers already created by Bitrix24 sync (BX- prefix)
     const voucherNumber = get('VOUCHERNUMBER') || '';
     if (voucherNumber.startsWith('BX-')) continue;
 
-    const partyName = get('PARTYLEDGERNAME') || '';
+    const partyName = get('PARTYLEDGERNAME')
+      || get('BASICBUYERNAME')
+      || get('BASICBILLLEDGERNAME')
+      || (() => {
+        const entryMatch = block.match(/<ALLLEDGERENTRIES\.LIST>([\s\S]*?)<\/ALLLEDGERENTRIES\.LIST>/i);
+        if (entryMatch) {
+          const ledgerName = entryMatch[1].match(/<LEDGERNAME>(.*?)<\/LEDGERNAME>/i);
+          return ledgerName ? ledgerName[1].trim() : '';
+        }
+        return '';
+      })();
+
     const dateRaw   = get('DATE') || '';
     const narration = get('NARRATION') || '';
-    const amount    = Math.abs(parseFloat(get('AMOUNT')) || 0);
+    const rawAmount = get('AMOUNT') || get('BASICAMOUNT') || get('GRANDTOTAL') || '0';
+    const amount    = Math.abs(parseFloat(rawAmount.replace(/,/g, '')) || 0);
 
     if (!partyName || amount === 0) continue;
 

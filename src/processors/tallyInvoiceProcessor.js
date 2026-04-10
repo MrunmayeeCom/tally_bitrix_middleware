@@ -26,44 +26,115 @@ function saveCache(data) {
 
 // Fetch sales vouchers from Tally Day Book
 async function getSalesVouchers() {
-  logger.info('Fetching sales vouchers from Tally');
-
-  const today    = new Date();
-  const fromDate = new Date();
-  fromDate.setDate(fromDate.getDate() - 30);
+  logger.info('Fetching sales vouchers from Tally (monthly chunks)');
 
   const fmt = (d) => {
-    const dd   = String(d.getDate()).padStart(2, '0');
-    const mm   = String(d.getMonth() + 1).padStart(2, '0');
-    const yyyy = d.getFullYear();
-    return `${dd}-${mm}-${yyyy}`;
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${d.getDate()}-${months[d.getMonth()]}-${d.getFullYear()}`;
   };
 
-  const xml = `
-    <ENVELOPE>
-      <HEADER>
-        <TALLYREQUEST>Export Data</TALLYREQUEST>
-      </HEADER>
-      <BODY>
-        <EXPORTDATA>
-          <REQUESTDESC>
-            <REPORTNAME>Day Book</REPORTNAME>
-            <STATICVARIABLES>
-              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
-              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-              <SVFROMDATE>${fmt(fromDate)}</SVFROMDATE>
-              <SVTODATE>${fmt(today)}</SVTODATE>
-            </STATICVARIABLES>
-          </REQUESTDESC>
-        </EXPORTDATA>
-      </BODY>
-    </ENVELOPE>
-  `.trim();
+  // Fetch only current month + previous month to avoid hanging TallyPrime.
+  // Increase MONTHS_BACK cautiously — each extra month adds load.
+  const startDate = new Date('2025-04-01'); // FY 2025
+  const endDate   = new Date('2025-12-01'); 
+  const chunks    = [];
+  let cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+  while (cursor <= endDate) {
+    const chunkStart = new Date(cursor);
+    const chunkEnd   = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+    chunks.push({
+      from: fmt(chunkStart),
+      to:   fmt(chunkEnd > endDate ? endDate : chunkEnd),
+    });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
 
-  const response = await sendToTally(xml);
-  // Debug — log first 1500 chars to see what voucher types exist
-  logger.warn('[TallyInvoice] Raw Day Book response (first 1500):', response.substring(0, 1500));
-  return parseSalesVouchersXml(response);
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  let allVouchers = [];
+
+  for (const chunk of chunks) {
+    try {
+      const xml = `
+        <ENVELOPE>
+          <HEADER>
+            <VERSION>1</VERSION>
+            <TALLYREQUEST>Export</TALLYREQUEST>
+            <TYPE>Collection</TYPE>
+            <ID>BX Voucher Collection</ID>
+          </HEADER>
+          <BODY>
+            <DESC>
+              <STATICVARIABLES>
+                <SVCurrentCompany>${tallyConfig.company}</SVCurrentCompany>
+                <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+                <SVFROMDATE>${chunk.from}</SVFROMDATE>
+                <SVTODATE>${chunk.to}</SVTODATE>
+              </STATICVARIABLES>
+              <TDL>
+                <TDLMESSAGE>
+                  <COLLECTION NAME="BX Voucher Collection" ISMODIFY="No">
+                    <TYPE>Voucher</TYPE>
+                    <FILTERS>BXDateFilter,BXNotCancelled,BXVoucherTypeFilter</FILTERS>
+                    <NATIVEMETHOD>Date</NATIVEMETHOD>
+                    <NATIVEMETHOD>VoucherNumber</NATIVEMETHOD>
+                    <NATIVEMETHOD>PartyLedgerName</NATIVEMETHOD>
+                    <NATIVEMETHOD>Amount</NATIVEMETHOD>
+                    <NATIVEMETHOD>VoucherTypeName</NATIVEMETHOD>
+                    <NATIVEMETHOD>Narration</NATIVEMETHOD>
+                  </COLLECTION>
+                  <SYSTEM TYPE="Formulae" NAME="BXDateFilter">
+                    $$IsInPeriod:$Date:${chunk.from}:${chunk.to}
+                  </SYSTEM>
+                  <SYSTEM TYPE="Formulae" NAME="BXNotCancelled">
+                    NOT $$IsCancelled
+                  </SYSTEM>
+                  <SYSTEM TYPE="Formulae" NAME="BXVoucherTypeFilter">
+                    ($VoucherTypeName = "Tax Invoice Thane") OR
+                    ($VoucherTypeName = "Tax Invoice TSS") OR
+                    ($VoucherTypeName = "Tally Service Invoice") OR
+                    ($VoucherTypeName = "Tax Invoice Mumbai") OR
+                    ($VoucherTypeName = "Tax Invoice Cloud") OR
+                    ($VoucherTypeName = "Tax Invoice License")
+                  </SYSTEM>
+                </TDLMESSAGE>
+              </TDL>
+            </DESC>
+          </BODY>
+        </ENVELOPE>`.trim();
+
+      logger.info(`[TallyInvoice] Fetching ${chunk.from} → ${chunk.to}`);
+      const response = await sendToTally(xml);
+
+      // Diagnostic — log what voucher types exist in this chunk's response
+      const totalVoucherTags = (response.match(/<VOUCHER\b/gi) || []).length;
+      if (totalVoucherTags > 0) {
+        const typeMatches = [...response.matchAll(/VCHTYPE="([^"]+)"/gi)];
+        const nameMatches = [...response.matchAll(/<VOUCHERTYPENAME[^>]*>(.*?)<\/VOUCHERTYPENAME>/gi)];
+        const uniqueTypes = [...new Set([
+          ...typeMatches.map(m => `attr:${m[1].trim()}`),
+          ...nameMatches.map(m => `tag:${m[1].trim()}`),
+        ])];
+        logger.warn(`[TallyInvoice] Chunk ${chunk.from}→${chunk.to} — ${totalVoucherTags} VOUCHER tags found`, { uniqueTypes });
+
+        // Dump first VOUCHER block raw XML so we can see exact tag structure
+        const firstVoucherMatch = response.match(/<VOUCHER\b[^>]*>[\s\S]*?<\/VOUCHER>/i);
+        if (firstVoucherMatch) {
+          logger.warn('[TallyInvoice] First VOUCHER block (first 1200 chars):', firstVoucherMatch[0].substring(0, 1200));
+        }
+      } else {
+        logger.warn(`[TallyInvoice] Chunk ${chunk.from}→${chunk.to} — 0 VOUCHER tags in response (response length: ${response.length})`);
+      }
+
+      const vouchers = parseSalesVouchersXml(response);
+      allVouchers = allVouchers.concat(vouchers);
+      await sleep(1500); // pause between chunks so Tally can breathe
+    } catch (e) {
+      logger.warn(`[TallyInvoice] Chunk ${chunk.from}→${chunk.to} failed — skipping`, { message: e.message });
+    }
+  }
+
+  logger.info(`[TallyInvoice] Total vouchers fetched across all chunks: ${allVouchers.length}`);
+  return allVouchers;
 }
 
 // Parse sales vouchers from Day Book XML
@@ -81,22 +152,70 @@ function parseSalesVouchersXml(xml) {
         return m ? m[1].trim() : '';
       };
 
-      const voucherType = get('VOUCHERTYPENAME') || '';
-      // Only process Sales vouchers — skip receipts, journals etc.
-      const isSales = ['sales', 'tax invoice', 'tax inv']
-        .some(t => voucherType.toLowerCase().includes(t));
-      if (!isSales) continue;
+      // VCHTYPE is on the <VOUCHER> tag attribute, not a child tag
+      const vchtypeAttr = (match[1].match(/VCHTYPE="([^"]+)"/i) || [])[1] || '';
+      const voucherType = get('VOUCHERTYPENAME') || vchtypeAttr;
+
+      // Skip cancelled vouchers
+      const isCancelled = /ACTION="Cancel"/i.test(match[1]);
+      if (isCancelled) continue;
+
+      // Skip vouchers with no type info at all
+      if (!voucherType.trim()) continue;
+
+      const SALES_EXCLUDE = ['receipt', 'payment', 'journal', 'contra', 'purchase', 'debit note', 'credit note', 'stock journal'];
+      const voucherTypeLower = voucherType.toLowerCase();
+      const isSales = !SALES_EXCLUDE.some(t => voucherTypeLower.includes(t));
+      if (!isSales) {
+        logger.info(`[TallyInvoice] Skipped voucher type: "${voucherType}"`);
+        continue;
+      }
+      logger.info(`[TallyInvoice] Accepted voucher type: "${voucherType}" | party: "${get('PARTYLEDGERNAME')}" | amount: ${get('AMOUNT')}`);
 
       // Skip vouchers created by Bitrix24 (already synced Bitrix→Tally)
       const voucherNumber = get('VOUCHERNUMBER') || '';
       if (voucherNumber.startsWith('BX-')) continue;
 
-      const partyName = get('PARTYLEDGERNAME') || '';
+      // Tally uses different tags depending on voucher type — try all known locations
+      const partyName = get('PARTYLEDGERNAME')
+        || get('BASICBUYERNAME')
+        || get('BASICBILLLEDGERNAME')
+        || (() => {
+          // fallback: first non-Sales ledger entry name
+          const entryMatch = block.match(/<ALLLEDGERENTRIES\.LIST>([\s\S]*?)<\/ALLLEDGERENTRIES\.LIST>/i);
+          if (entryMatch) {
+            const ledgerName = entryMatch[1].match(/<LEDGERNAME>(.*?)<\/LEDGERNAME>/i);
+            return ledgerName ? ledgerName[1].trim() : '';
+          }
+          return '';
+        })();
+
       const dateRaw   = get('DATE') || '';
-      const amount    = Math.abs(parseFloat(get('AMOUNT')) || 0);
       const narration = get('NARRATION') || '';
 
-      if (!partyName || amount === 0) continue;
+      // AMOUNT on the voucher tag may be negative (credit side) — try absolute value
+      // Also check BASICAMOUNT and ledger entry amounts as fallback
+      const rawAmount = get('AMOUNT') || get('BASICAMOUNT') || get('GRANDTOTAL') || '0';
+      const amount    = Math.abs(parseFloat(rawAmount.replace(/,/g, '')) || 0);
+
+      // Debug log so we can see exactly what's being extracted
+      logger.info(`[TallyInvoice] Voucher parsed`, {
+        voucherType,
+        voucherNumber: get('VOUCHERNUMBER') || '',
+        partyName,
+        amount,
+        dateRaw,
+      });
+
+      if (!partyName || amount === 0) {
+        logger.warn(`[TallyInvoice] Voucher dropped — missing party or amount`, {
+          voucherType,
+          voucherNumber: get('VOUCHERNUMBER') || '',
+          partyName: partyName || '(empty)',
+          amount,
+        });
+        continue;
+      }
 
       const date = dateRaw.length === 8
         ? `${dateRaw.slice(0,4)}-${dateRaw.slice(4,6)}-${dateRaw.slice(6,8)}`
@@ -139,6 +258,27 @@ async function findBitrixParty(partyName) {
     logger.warn('Party lookup failed', { partyName, message: e.message });
   }
   return {};
+}
+
+// Check if a Smart Invoice with this Tally voucher number already exists in Bitrix24.
+// This is the secondary dedup guard — the local file cache is the primary guard,
+// but if the cache is wiped we need this to avoid creating duplicates.
+async function invoiceExistsInBitrix(voucherNumber) {
+  try {
+    const data = await callBitrix('crm.item.list', {
+      entityTypeId: 31,
+      filter: { UF_TALLY_VOUCHER_NO: voucherNumber },
+      select: ['id'],
+    });
+    return (data.result?.items?.length ?? 0) > 0;
+  } catch (e) {
+    // Non-fatal — if the check fails we proceed and let the cache guard handle it
+    logger.warn('[TallyInvoice] Pre-push dedup check failed — proceeding', {
+      voucherNumber,
+      message: e.message,
+    });
+    return false;
+  }
 }
 
 // Push a Tally sales voucher into Bitrix24 as a Smart Invoice
@@ -186,11 +326,26 @@ async function processTallyInvoices() {
       try {
         const cacheKey = `${voucher.voucherNumber}_${voucher.amount}`;
 
-        // Skip if already synced
+        // Primary guard — skip if already in local cache
         if (cache[cacheKey]) {
           skipped++;
           continue;
         }
+
+        // Secondary guard — check Bitrix24 directly in case cache was wiped.
+        // Runs only when the local cache has no record (avoids an extra API
+        // call for the common case where everything is already cached).
+        const alreadyExists = await invoiceExistsInBitrix(voucher.voucherNumber);
+        if (alreadyExists) {
+          logger.info('[TallyInvoice] Invoice already in Bitrix24 — updating cache entry', {
+            voucherNumber: voucher.voucherNumber,
+          });
+          newCache[cacheKey] = { bitrixId: null, syncedAt: new Date().toISOString(), source: 'dedup-check' };
+          skipped++;
+          continue;
+        }
+
+        await sleep(300); // space out Bitrix API calls
 
         // Find party in Bitrix24
         const partyIds = await findBitrixParty(voucher.partyName);

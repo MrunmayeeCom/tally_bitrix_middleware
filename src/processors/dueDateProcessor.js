@@ -11,7 +11,14 @@ const ESCALATION_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 // and moves/notifies based on due date
 // ─────────────────────────────────────────
 
+let _isDueDateRunning = false;
+
 async function processDueDates() {
+  if (_isDueDateRunning) {
+    logger.warn('processDueDates already running — skipping duplicate invocation');
+    return;
+  }
+  _isDueDateRunning = true;
   try {
     logger.info('Due date automation started');
 
@@ -109,12 +116,14 @@ async function processDueDates() {
           const lastEscalated = getEscalationLastSent(deal.ID);
           const now = Date.now();
           if (now - lastEscalated >= ESCALATION_COOLDOWN_MS) {
+            // Set cooldown BEFORE the async call to prevent duplicate sends
+            // from concurrent scheduler runs or poller re-entry
+            setEscalationLastSent(deal.ID, now);
             await sendNotification(
               deal.ASSIGNED_BY_ID,
               `🚨 OVERDUE 30+ DAYS: [b]${deal.TITLE}[/b] | Amount: ₹${deal.OPPORTUNITY} | Was due: ${deal.CLOSEDATE}`,
               deal.ID
             );
-            setEscalationLastSent(deal.ID, now);
             logger.info('30-day escalation sent', { dealId: deal.ID, title: deal.TITLE });
             escalated++;
           } else {
@@ -141,6 +150,8 @@ async function processDueDates() {
   } catch (error) {
     logger.error('Due date processor failed', { message: error.message });
     throw error;
+  } finally {
+    _isDueDateRunning = false;
   }
 }
 

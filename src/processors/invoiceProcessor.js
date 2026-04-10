@@ -74,10 +74,10 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
       return { success: true, voucher, skipped: true };
     }
 
-    // Step 3: Create voucher in Tally (new invoices only)
+    // Step 4: Create voucher in Tally (new invoices only)
     const result = await createVoucher(voucher);
-    
-    // Step 4: Store the created voucher reference for reverse sync
+
+    // Step 5: Store the created voucher reference for reverse sync
     try {
       const { storeMasterId } = require('../utils/voucherCache');
       const midMatch = (result || '').match(/<LASTVCHID>\s*([1-9]\d*)\s*<\/LASTVCHID>/i);
@@ -92,7 +92,23 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     } catch (cacheErr) {
       logger.warn('Invoice MASTERID cache failed', { message: cacheErr.message });
     }
-    
+
+    // Step 6: Attach product rows from inventory catalog back to the Bitrix24 invoice.
+    //
+    // This is the Feature 7 addition. When a new Smart Invoice is created in Bitrix24
+    // and it doesn't yet have product rows (common when sales staff create invoices
+    // manually without selecting items), we populate the rows from the Tally inventory
+    // catalog that was already synced by the inventory processor.
+    //
+    // We only do this for Smart Invoices (entityTypeId 31) because legacy invoices
+    // use a different product row API that is deprecated.
+    //
+    // We skip this if the invoice already has rows — no need to overwrite something
+    // the user explicitly set.
+    if (invoiceType === 'smart') {
+      await _attachProductRowsIfMissing(entityId, invoice, voucher.amount);
+    }
+
     logger.info('Invoice processor completed', {
       entityId,
       voucherNumber: voucher.voucherNumber,
@@ -107,6 +123,85 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
       message: error.message
     });
     throw error;
+  }
+}
+
+// Attach product rows to a Bitrix24 Smart Invoice if it has none yet.
+// Uses the Tally inventory catalog (already synced as Bitrix24 products by Feature 1).
+// Falls back gracefully — a failure here never blocks the Tally voucher creation.
+async function _attachProductRowsIfMissing(entityId, invoice, totalAmount) {
+  try {
+    const featureGate = (() => { try { return require('../services/featureGate'); } catch { return null; } })();
+    if (featureGate && !featureGate.isEnabled('inventory-sync')) {
+      // Inventory not synced on this plan — no product catalog to pull from
+      return;
+    }
+
+    const { callBitrix } = require('../connectors/bitrixConnector');
+
+    // Check whether this invoice already has product rows
+    const existing = await callBitrix('crm.item.productrow.list', {
+      ownerType: 'SI',
+      ownerId:   entityId,
+    });
+    const existingRows = existing.result?.productRows || existing.result || [];
+    if (existingRows.length > 0) {
+      logger.info('[InvoiceProcessor] Invoice already has product rows — skipping catalog attach', {
+        entityId,
+        rowCount: existingRows.length,
+      });
+      return;
+    }
+
+    // Fetch the Bitrix24 product catalog (populated by inventory sync)
+    const { fetchAllBitrixProducts } = require('../processors/inventoryProcessor');
+    const products = await fetchAllBitrixProducts();
+
+    if (!products || products.length === 0) {
+      logger.info('[InvoiceProcessor] No products in Bitrix24 catalog — skipping product row attach', { entityId });
+      return;
+    }
+
+    // Build a single row representing the full invoice amount.
+    // We use the first product as a placeholder if no specific product can be matched.
+    // When inventory-sync has run, the catalog contains Tally stock items — the most
+    // relevant product to the invoice party can't be determined without line-item data,
+    // so we create one row for the total. The user can refine it manually.
+    //
+    // If the invoice title contains a product name substring, prefer that product.
+    const invoiceTitle = (invoice.title || invoice.TITLE || '').toLowerCase();
+    const matchedProduct = products.find(p =>
+      invoiceTitle.includes((p.NAME || '').toLowerCase()) && p.NAME.length > 2
+    ) || products[0];
+
+    const productRow = {
+      PRODUCT_ID:   matchedProduct.ID,
+      PRODUCT_NAME: matchedProduct.NAME,
+      PRICE:        totalAmount,        // use the full invoice amount as the line price
+      QUANTITY:     1,
+      DISCOUNT:     0,
+      CURRENCY_ID:  'INR',
+    };
+
+    await callBitrix('crm.item.productrow.set', {
+      ownerType:   'SI',
+      ownerId:     entityId,
+      productRows: [productRow],
+    });
+
+    logger.info('[InvoiceProcessor] Product row attached from inventory catalog', {
+      entityId,
+      productId:   matchedProduct.ID,
+      productName: matchedProduct.NAME,
+      amount:      totalAmount,
+    });
+
+  } catch (err) {
+    // Non-fatal — Tally sync already completed; this is enrichment only
+    logger.warn('[InvoiceProcessor] Product row attach failed — non-fatal', {
+      entityId,
+      message: err.message,
+    });
   }
 }
 
