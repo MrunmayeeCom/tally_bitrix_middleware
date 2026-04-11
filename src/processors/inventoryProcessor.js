@@ -342,15 +342,21 @@ async function syncBitrixToTally() {
 
         const tallyItem = tallyMap[key];
         if (!tallyItem) {
-          // Item exists in Bitrix24 but not in Tally — create it
+          // Item exists in Bitrix24 but not in Tally — create it using 'Not Applicable' unit
+          // which is always present in every TallyPrime company by default
           logger.info('[BitrixToTally] Creating new stock item in Tally', { name: product.NAME });
-          await updateTallyStockItem({
-            name:     product.NAME,
-            baseUnit: '',
-            quantity: bitrixQty,
-            rate:     bitrixRate,
-          });
-          updated++;
+          try {
+            await createTallyStockItem({
+              name: product.NAME,
+              rate: bitrixRate,
+            });
+            updated++;
+          } catch (createErr) {
+            logger.error('[BitrixToTally] Failed to create stock item in Tally', {
+              name: product.NAME, message: createErr.message,
+            });
+            failed++;
+          }
           await sleep(600);
           continue;
         }
@@ -446,19 +452,16 @@ async function updateTallyStockItem({ name, baseUnit, quantity, rate }) {
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
           <STOCKITEM NAME="${escapeXml(name)}" Action="Alter">
             <NAME>${escapeXml(name)}</NAME>
-            <OPENINGBALANCE>${quantity}</OPENINGBALANCE>
-            <OPENINGRATE>${rate}</OPENINGRATE>
-            <OPENINGVALUE>${value}</OPENINGVALUE>
-            <STANDARDCOSTLIST.LIST>
+            <STANDARDCOSTLIST.LIST ACTION="Replace">
               <STANDARDCOSTLIST>
                 <DATE>${dateStr}</DATE>
-                <RATE>${rate}</RATE>
+                <RATE>${rate} /</RATE>
               </STANDARDCOSTLIST>
             </STANDARDCOSTLIST.LIST>
-            <STANDARDPRICELIST.LIST>
+            <STANDARDPRICELIST.LIST ACTION="Replace">
               <STANDARDPRICELIST>
                 <DATE>${dateStr}</DATE>
-                <RATE>${rate}</RATE>
+                <RATE>${rate} /</RATE>
               </STANDARDPRICELIST>
             </STANDARDPRICELIST.LIST>
           </STOCKITEM>
@@ -487,6 +490,50 @@ async function updateTallyStockItem({ name, baseUnit, quantity, rate }) {
   logger.info('[BitrixToTally] Stock item updated in Tally via ALTER', {
     name, quantity, rate, altered, created,
   });
+}
+
+async function createTallyStockItem({ name, rate }) {
+  const { sendToTally } = require('../connectors/tallyConnector');
+  const tallyConfig     = require('../config/tallyConfig');
+
+  const escapeXml = (s) => (s || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+
+  const xml = `
+<ENVELOPE>
+  <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(tallyConfig.company)}</SVCURRENTCOMPANY>
+          <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="${escapeXml(name)}" Action="Create">
+            <NAME>${escapeXml(name)}</NAME>
+          </STOCKITEM>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+
+  const resp = await sendToTally(xml);
+  const created  = parseInt((resp || '').match(/<CREATED>(\d+)<\/CREATED>/i)?.[1]  ?? '0');
+  const altered  = parseInt((resp || '').match(/<ALTERED>(\d+)<\/ALTERED>/i)?.[1]  ?? '0');
+  const errors   = parseInt((resp || '').match(/<ERRORS>(\d+)<\/ERRORS>/i)?.[1]    ?? '0');
+  const lineErr  = (resp || '').match(/<LINEERROR>(.*?)<\/LINEERROR>/i)?.[1] || '';
+
+  if (errors > 0 || lineErr) {
+    throw new Error(`Tally stock item create failed for "${name}": ${lineErr || 'ERRORS=' + errors}`);
+  }
+
+  logger.info('[BitrixToTally] Stock item created in Tally', { name, rate, created, altered });
 }
 
 module.exports = { processInventory, getStockItems, fetchAllBitrixProducts, validateClosingStock, syncBitrixToTally };

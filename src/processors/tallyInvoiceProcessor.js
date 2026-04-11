@@ -315,14 +315,13 @@ async function invoiceExistsInBitrix(voucherNumber) {
       `${bitrixConfig.webhookUrl}/crm.item.list.json`,
       {
         entityTypeId: 31,
-        filter: { UF_TALLY_VOUCHER_NO: voucherNumber },
-        select: ['id'],
+        filter: { '=accountNumber': voucherNumber },
+        select: ['id', 'accountNumber'],
       },
       { timeout: 10000 }
     );
     return (res.data?.result?.items?.length ?? 0) > 0;
   } catch (e) {
-    // 400 means UF_TALLY_VOUCHER_NO field doesn't exist yet — safe to proceed
     logger.warn('[TallyInvoice] Pre-push dedup check failed — proceeding', {
       voucherNumber,
       message: e.message,

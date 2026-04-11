@@ -143,8 +143,8 @@ async function _attachProductRowsIfMissing(entityId, invoice, totalAmount) {
     let existingRows = [];
     try {
       const existing = await callBitrix('crm.item.productrow.list', {
-        ownerTypeId: 31,
-        ownerId:     Number(entityId),
+        ownerType: 'SI',
+        ownerId:   Number(entityId),
       });
       existingRows = existing.result?.productRows || existing.result || [];
     } catch (rowCheckErr) {
