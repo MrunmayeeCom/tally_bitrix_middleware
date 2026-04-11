@@ -338,12 +338,25 @@ async function processOutstanding() {
         const attachInvoiceToDeal = async (dealId, outstanding) => {
           try {
             // Check if invoice already exists for this voucher
-            const existing = await callBitrix('crm.item.list', {
-              entityTypeId: 31,
-              filter: { UF_TALLY_VOUCHER_NO: outstanding.voucherNumber },
-              select: ['id'],
-            });
-            if (existing.result?.items?.length > 0) return; // already attached
+            let alreadyAttached = false;
+            try {
+              const axios = require('axios');
+              const bitrixConfig = require('../config/bitrixConfig');
+              const res = await axios.post(
+                `${bitrixConfig.webhookUrl}/crm.item.list.json`,
+                {
+                  entityTypeId: 31,
+                  filter: { UF_TALLY_VOUCHER_NO: outstanding.voucherNumber },
+                  select: ['id'],
+                },
+                { timeout: 8000 }
+              );
+              alreadyAttached = (res.data?.result?.items?.length ?? 0) > 0;
+            } catch (e) {
+              // 400 = custom field not yet created; skip the check and proceed
+              logger.warn('Could not check existing invoice — proceeding', { message: e.message });
+            }
+            if (alreadyAttached) return; // already attached
 
             // Create Smart Invoice linked to this deal
             await callBitrix('crm.item.add', {

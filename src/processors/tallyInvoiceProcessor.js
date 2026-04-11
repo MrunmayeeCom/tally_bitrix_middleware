@@ -68,6 +68,7 @@ async function getSalesVouchers(fromDate = null) {
 
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   let allVouchers = [];
+  const seenVoucherKeys = new Set(); // dedup across chunks since Tally ignores date filters
 
   for (const chunk of chunks) {
     try {
@@ -120,7 +121,19 @@ async function getSalesVouchers(fromDate = null) {
       }
 
       const vouchers = parseSalesVouchersXml(response, chunk.from, chunk.to);
-      allVouchers = allVouchers.concat(vouchers);
+      // Dedup: if Tally ignores date filters, every chunk returns same vouchers
+      const newVouchers = vouchers.filter(v => {
+        const key = `${v.voucherNumber}_${v.amount}`;
+        if (seenVoucherKeys.has(key)) return false;
+        seenVoucherKeys.add(key);
+        return true;
+      });
+      allVouchers = allVouchers.concat(newVouchers);
+      // If Tally returned vouchers but none were new, all future chunks will be identical — stop early
+      if (vouchers.length > 0 && newVouchers.length === 0) {
+        logger.info('[TallyInvoice] All vouchers already seen — Tally is ignoring date filters, stopping early');
+        break;
+      }
       await sleep(2500); // Day Book is lighter than Sales Register — 2.5s avoids Tally lag
     } catch (e) {
       logger.warn(`[TallyInvoice] Chunk ${chunk.from}→${chunk.to} failed — skipping`, { message: e.message });
@@ -212,17 +225,17 @@ function parseSalesVouchersXml(xml, chunkFrom, chunkTo) {
       const dateRaw   = get('DATE') || '';
       const narration = get('NARRATION') || '';
 
-      // Enforce chunk date range — skip vouchers Tally returned outside the requested window
-      if (dateRaw.length === 8 && chunkStart && chunkEnd) {
-        const vy = parseInt(dateRaw.slice(0, 4));
-        const vm = parseInt(dateRaw.slice(4, 6)) - 1;
-        const vd = parseInt(dateRaw.slice(6, 8));
-        const voucherDate = new Date(vy, vm, vd);
-        if (voucherDate < chunkStart || voucherDate > chunkEnd) {
-          logger.info(`[TallyInvoice] Skipping out-of-range voucher | date: ${dateRaw} | chunk: ${chunkFrom}→${chunkTo}`);
-          continue;
-        }
-      }
+      // // Enforce chunk date range — skip vouchers Tally returned outside the requested window
+      // if (dateRaw.length === 8 && chunkStart && chunkEnd) {
+      //   const vy = parseInt(dateRaw.slice(0, 4));
+      //   const vm = parseInt(dateRaw.slice(4, 6)) - 1;
+      //   const vd = parseInt(dateRaw.slice(6, 8));
+      //   const voucherDate = new Date(vy, vm, vd);
+      //   if (voucherDate < chunkStart || voucherDate > chunkEnd) {
+      //     logger.info(`[TallyInvoice] Skipping out-of-range voucher | date: ${dateRaw} | chunk: ${chunkFrom}→${chunkTo}`);
+      //     continue;
+      //   }
+      // }
 
       // AMOUNT on the voucher tag may be negative (credit side) — try absolute value
       // Also check BASICAMOUNT and ledger entry amounts as fallback
@@ -296,14 +309,20 @@ async function findBitrixParty(partyName) {
 // but if the cache is wiped we need this to avoid creating duplicates.
 async function invoiceExistsInBitrix(voucherNumber) {
   try {
-    const data = await callBitrix('crm.item.list', {
-      entityTypeId: 31,
-      filter: { UF_TALLY_VOUCHER_NO: voucherNumber },
-      select: ['id'],
-    });
-    return (data.result?.items?.length ?? 0) > 0;
+    const axios = require('axios');
+    const bitrixConfig = require('../config/bitrixConfig');
+    const res = await axios.post(
+      `${bitrixConfig.webhookUrl}/crm.item.list.json`,
+      {
+        entityTypeId: 31,
+        filter: { UF_TALLY_VOUCHER_NO: voucherNumber },
+        select: ['id'],
+      },
+      { timeout: 10000 }
+    );
+    return (res.data?.result?.items?.length ?? 0) > 0;
   } catch (e) {
-    // Non-fatal — if the check fails we proceed and let the cache guard handle it
+    // 400 means UF_TALLY_VOUCHER_NO field doesn't exist yet — safe to proceed
     logger.warn('[TallyInvoice] Pre-push dedup check failed — proceeding', {
       voucherNumber,
       message: e.message,
