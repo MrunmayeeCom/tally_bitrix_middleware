@@ -15,6 +15,9 @@ async function withRetry(fn, options = {}) {
       return await fn();
     } catch (err) {
       lastError = err;
+      if (err._noRetry) {
+        break;
+      }
       if (attempt < maxAttempts) {
         const wait = delayMs * attempt; // 2s, 4s, 6s
         logger.warn(`${label} failed (attempt ${attempt}/${maxAttempts}), retrying in ${wait}ms`, {

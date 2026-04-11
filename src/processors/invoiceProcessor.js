@@ -2,9 +2,33 @@ const { getInvoice } = require('../services/bitrixService');
 const { mapInvoiceToVoucher } = require('../utils/mapper');
 const { createVoucher } = require('../services/tallyService');
 const logger = require('../utils/logger');
+const fs = require('fs');
+const path = require('path');
 
-// In-memory dedup set — prevents duplicate vouchers if webhook fires twice within 60s
-const invoiceDedup = new Set();
+const INVOICE_DEDUP_PATH = path.join(__dirname, '../../logs/invoice-dedup-cache.json');
+
+function loadInvoiceDedup() {
+  try {
+    if (fs.existsSync(INVOICE_DEDUP_PATH)) {
+      const data = JSON.parse(fs.readFileSync(INVOICE_DEDUP_PATH, 'utf8'));
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      return Object.fromEntries(
+        Object.entries(data).filter(([, ts]) => ts > cutoff)
+      );
+    }
+  } catch {}
+  return {};
+}
+
+function saveInvoiceDedup(data) {
+  try {
+    const dir = path.dirname(INVOICE_DEDUP_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(INVOICE_DEDUP_PATH, JSON.stringify(data, null, 2));
+  } catch {}
+}
+
+let _invoiceDedupCache = loadInvoiceDedup();
 
 async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart') {
   try {
@@ -27,6 +51,32 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
         reason:  'No contact or company linked to invoice in Bitrix24'
       };
     }
+    // Step 2: Map to Tally voucher format
+    const voucher = mapInvoiceToVoucher(invoice);
+    logger.info('Invoice mapped', {
+      voucherNumber: voucher.voucherNumber,
+      partyName:     voucher.partyName,
+      amount:        voucher.amount
+    });
+
+    // Step 3: Dedup check — FIRST thing before ANY async work
+    // Moving this before ledger lookup eliminates the ~150ms Tally race window
+    if (!isUpdate) {
+      const dedupKey = `invoice_${voucher.voucherNumber}`;
+      _invoiceDedupCache = loadInvoiceDedup();
+      if (_invoiceDedupCache[dedupKey]) {
+        logger.warn('Duplicate invoice webhook (persistent dedup) — skipping', {
+          voucherNumber: voucher.voucherNumber,
+          firstSeenAt: new Date(_invoiceDedupCache[dedupKey]).toISOString()
+        });
+        return { success: true, voucher, skipped: true };
+      }
+      // Claim this key before any awaited calls — no async gap after this point
+      _invoiceDedupCache[dedupKey] = Date.now();
+      saveInvoiceDedup(_invoiceDedupCache);
+    }
+
+    // Step 3b: Ensure party ledger exists in Tally
     try {
       const { getLedgerByName, createLedger } = require('../services/tallyService');
       const existingLedger = await getLedgerByName(partyName);
@@ -39,26 +89,6 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
       }
     } catch (ledgerErr) {
       logger.warn('Ledger check/create failed — proceeding anyway', { message: ledgerErr.message });
-    }
-
-    // Step 2: Map to Tally voucher format
-    const voucher = mapInvoiceToVoucher(invoice);
-    logger.info('Invoice mapped', {
-      voucherNumber: voucher.voucherNumber,
-      partyName:     voucher.partyName,
-      amount:        voucher.amount
-    });
-
-    // Step 3: Check if voucher already exists in Tally before creating
-    if (!isUpdate) {
-      // Use voucherNumber as dedup key — if same invoice fires twice, skip second
-      const dedupKey = `invoice_${voucher.voucherNumber}`;
-      if (invoiceDedup.has(dedupKey)) {
-        logger.warn('Duplicate invoice webhook — skipping', { voucherNumber: voucher.voucherNumber });
-        return { success: true, voucher, skipped: true };
-      }
-      invoiceDedup.add(dedupKey);
-      setTimeout(() => invoiceDedup.delete(dedupKey), 60000); // clear after 60s
     }
 
     // Tally does not support altering existing vouchers via XML API.
@@ -148,7 +178,15 @@ async function _attachProductRowsIfMissing(entityId, invoice, totalAmount) {
       });
       existingRows = existing.result?.productRows || existing.result || [];
     } catch (rowCheckErr) {
-      logger.info('[InvoiceProcessor] productrow.list not supported for this invoice — skipping attach', {
+      if (rowCheckErr.message.includes('400')) {
+        // 400 = this Bitrix24 instance does not support productrow.list for SI type
+        // This is a permanent configuration issue, not a transient error — skip silently
+        logger.info('[InvoiceProcessor] productrow.list not supported on this Bitrix24 instance — skipping attach', {
+          entityId,
+        });
+        return;
+      }
+      logger.info('[InvoiceProcessor] productrow.list failed — skipping attach', {
         entityId, message: rowCheckErr.message,
       });
       return;

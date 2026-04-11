@@ -68,12 +68,20 @@ async function confirmEvents(eventIds) {
   try {
     const axios    = require('axios');
     const clientId = _lockedClientId || getClientId();
-    await axios.post(`${RENDER_URL}/api/events/confirm`, {
+    const res = await axios.post(`${RENDER_URL}/api/events/confirm`, {
       clientId,
       eventIds,
     }, { timeout: 5000 });
+    if (!res.data?.success) {
+      logger.warn('[Poller] Event confirmation returned failure', {
+        eventIds,
+        response: res.data,
+      });
+    } else {
+      logger.info('[Poller] Events confirmed successfully', { count: eventIds.length, eventIds });
+    }
   } catch (err) {
-    logger.warn(`[Poller] Could not confirm events: ${err.message}`);
+    logger.warn(`[Poller] Could not confirm events: ${err.message}`, { eventIds });
   }
 }
 

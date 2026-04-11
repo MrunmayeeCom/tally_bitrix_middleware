@@ -241,18 +241,25 @@ function startScheduler() {
     logger.info('[Scheduler] Item-based invoice sync registered');
   }
 
-  // Tally → Bitrix24 invoice sync (two-way)
+  // Tally → Bitrix24 invoice sync (two-way) — runs offset from invoice poller to avoid Bitrix24 overload
   if (featureGate.isEnabled('invoice-sync')) {
-    _activeTasks.push(cron.schedule(syncCron, () => {
+    // Offset by half the sync interval so it never fires simultaneously with the invoice poller
+    const tallyInvoiceCron = syncMinutes >= 60
+      ? '30 * * * *'
+      : syncMinutes >= 30
+      ? `15,45 * * * *`
+      : `${Math.floor(syncMinutes / 2)}-59/${syncMinutes} * * * *`;
+
+    _activeTasks.push(cron.schedule(tallyInvoiceCron, () => {
       if (isTallyInvoiceSyncing) return;
       isTallyInvoiceSyncing = true;
       const { processTallyInvoices } = require('./processors/tallyInvoiceProcessor');
       processTallyInvoices()
-        .then(r => logger.info(`${syncMinutes}min — tally invoice sync completed`, r))
+        .then(r => logger.info(`Tally invoice sync completed`, r))
         .catch(e => logger.error('Tally invoice sync failed', { message: e.message }))
         .finally(() => { isTallyInvoiceSyncing = false; });
     }, { timezone: 'Asia/Kolkata' }));
-    logger.info('[Scheduler] Tally → Bitrix24 invoice sync registered');
+    logger.info(`[Scheduler] Tally → Bitrix24 invoice sync registered (offset cron: ${tallyInvoiceCron})`);
   }
 
   // Payment sync — runs on same interval if payment-sync is enabled
@@ -271,8 +278,12 @@ function startScheduler() {
     logger.info('[Scheduler] Inventory sync registered');
 
     // Bitrix24 → Tally reverse inventory sync — runs every 2 sync cycles to avoid conflicts
+    // Starts after a 5-minute delay on startup to avoid flooding logs at boot
     let _bitrixToTallyCycle = 0;
+    let _bitrixToTallyReady = false;
+    setTimeout(() => { _bitrixToTallyReady = true; }, 5 * 60 * 1000);
     _activeTasks.push(cron.schedule(syncCron, () => {
+      if (!_bitrixToTallyReady) return; // skip first few cycles after startup
       _bitrixToTallyCycle++;
       if (_bitrixToTallyCycle % 2 !== 0) return; // run every other cycle
       const { syncBitrixToTally } = require('./processors/inventoryProcessor');
@@ -280,7 +291,7 @@ function startScheduler() {
         .then(r => logger.info(`Bitrix→Tally inventory sync completed`, r))
         .catch(e => logger.error('Bitrix→Tally inventory sync failed', { message: e.message }));
     }, { timezone: 'Asia/Kolkata' }));
-    logger.info('[Scheduler] Bitrix24 → Tally reverse inventory sync registered');
+    logger.info('[Scheduler] Bitrix24 → Tally reverse inventory sync registered (5min startup delay)');
   }
 
   // Feature 6: Inventory match — runs every 6 hours
