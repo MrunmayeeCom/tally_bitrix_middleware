@@ -43,6 +43,9 @@ async function callBitrix(method, params = {}) {
         logger.warn(`Bitrix24 rate limit / overload (${status}) on ${method} — waiting 5s before retry`);
         await new Promise(r => setTimeout(r, 5000));
       }
+      if (status === 401) {
+        error._noRetry = true;
+      }
       logger.error(`Bitrix24 API error: ${method}`, { message: error.message });
       throw error;
     }

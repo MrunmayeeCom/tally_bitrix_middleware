@@ -197,8 +197,7 @@ async function processInventory() {
           const tallyQty     = item.closingBalance || 0;
           const tallyRate    = item.closingRate    || 0;
           const noChange = Math.abs(existingQty - tallyQty) < 0.01
-                        && Math.abs(existingRate - tallyRate) < 0.01
-                        && !(tallyQty === 0 && tallyRate === 0 && existingQty === 0 && existingRate === 0 && !existingProduct.NAME);
+                        && Math.abs(existingRate - tallyRate) < 0.01;
           if (noChange) { skipped++; continue; }
           await updateBitrixProduct(existingProduct.ID, item);
           logger.info('Product updated in Bitrix24', {
@@ -307,4 +306,187 @@ function validateClosingStock(tallyItems, bitrixProducts) {
   return discrepancies;
 }
 
-module.exports = { processInventory, getStockItems, fetchAllBitrixProducts, validateClosingStock };
+// Sync Bitrix24 product changes back to Tally stock items
+async function syncBitrixToTally() {
+  try {
+    logger.info('[BritrixToTally] Starting Bitrix24 → Tally inventory sync');
+
+    const [bitrixProducts, tallyItems] = await Promise.all([
+      fetchAllBitrixProducts(),
+      getStockItems(),
+    ]);
+
+    if (!bitrixProducts || bitrixProducts.length === 0) {
+      logger.info('[BitrixToTally] No Bitrix24 products found — skipping');
+      return { success: true, updated: 0, skipped: 0 };
+    }
+
+    const tallyMap = {};
+    tallyItems.forEach(item => {
+      tallyMap[item.name.toLowerCase()] = item;
+    });
+
+    let updated = 0;
+    let skipped = 0;
+    let failed = 0;
+    let catalogPriceAvailable = true;
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    for (const product of bitrixProducts) {
+      try {
+        const key = (product.NAME || '').toLowerCase();
+        if (!key) { skipped++; continue; }
+
+        const bitrixQty  = parseFloat(product.QUANTITY) || 0;
+        let bitrixRate = parseFloat(product.PRICE) || 0;
+
+        const tallyItem = tallyMap[key];
+        if (!tallyItem) {
+          // Item exists in Bitrix24 but not in Tally — create it
+          logger.info('[BitrixToTally] Creating new stock item in Tally', { name: product.NAME });
+          await updateTallyStockItem({
+            name:     product.NAME,
+            baseUnit: '',
+            quantity: bitrixQty,
+            rate:     bitrixRate,
+          });
+          updated++;
+          await sleep(600);
+          continue;
+        }
+        if (bitrixRate === 0 && product.ID && catalogPriceAvailable) {
+          try {
+            const priceData = await callBitrix('catalog.price.list', {
+              filter: { PRODUCT_ID: product.ID },
+              select: ['PRICE', 'CURRENCY_ID'],
+            });
+            const prices = priceData.result?.prices || priceData.result || [];
+            if (prices.length > 0) {
+              bitrixRate = parseFloat(prices[0].PRICE) || 0;
+            }
+          } catch (priceErr) {
+            if (priceErr.message.includes('401')) {
+              catalogPriceAvailable = false;
+              logger.warn('[BitrixToTally] catalog.price.list unauthorized — disabling for this sync run');
+            }
+          }
+        }
+        const tallyQty   = tallyItem.closingBalance || 0;
+        const tallyRate  = tallyItem.closingRate || 0;
+
+        const qtyChanged  = Math.abs(bitrixQty - tallyQty) > 0.01;
+        const rateChanged = Math.abs(bitrixRate - tallyRate) > 0.01;
+
+        if (!qtyChanged && !rateChanged) {
+          skipped++;
+          continue;
+        }
+
+        logger.info('[BitrixToTally] Pushing stock update to Tally', {
+          name: product.NAME,
+          bitrixQty, tallyQty,
+          bitrixRate, tallyRate,
+        });
+
+        await updateTallyStockItem({
+          name:        product.NAME,
+          baseUnit:    tallyItem.baseUnit || '',
+          quantity:    bitrixQty,
+          rate:        bitrixRate,
+        });
+
+        updated++;
+        await sleep(600);
+
+      } catch (itemErr) {
+        logger.error('[BitrixToTally] Failed to update stock item in Tally', {
+          name: product.NAME, message: itemErr.message,
+        });
+        failed++;
+      }
+    }
+
+    logger.info('[BitrixToTally] Sync completed', { updated, skipped, failed });
+    return { success: true, updated, skipped, failed };
+
+  } catch (error) {
+    if (error.message === 'TALLY_OFFLINE') {
+      logger.warn('[BitrixToTally] Skipped — Tally is not running');
+      return { success: true, updated: 0, skipped: 0 };
+    }
+    logger.error('[BitrixToTally] Sync failed', { message: error.message });
+    throw error;
+  }
+}
+
+async function updateTallyStockItem({ name, baseUnit, quantity, rate }) {
+  const { sendToTally } = require('../connectors/tallyConnector');
+  const tallyConfig     = require('../config/tallyConfig');
+
+  const escapeXml = (s) => (s || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const value   = (quantity * rate).toFixed(2);
+
+  const alterXml = `
+<ENVELOPE>
+  <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(tallyConfig.company)}</SVCURRENTCOMPANY>
+          <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="${escapeXml(name)}" Action="Alter">
+            <NAME>${escapeXml(name)}</NAME>
+            <OPENINGBALANCE>${quantity}</OPENINGBALANCE>
+            <OPENINGRATE>${rate}</OPENINGRATE>
+            <OPENINGVALUE>${value}</OPENINGVALUE>
+            <STANDARDCOSTLIST.LIST>
+              <STANDARDCOSTLIST>
+                <DATE>${dateStr}</DATE>
+                <RATE>${rate}</RATE>
+              </STANDARDCOSTLIST>
+            </STANDARDCOSTLIST.LIST>
+            <STANDARDPRICELIST.LIST>
+              <STANDARDPRICELIST>
+                <DATE>${dateStr}</DATE>
+                <RATE>${rate}</RATE>
+              </STANDARDPRICELIST>
+            </STANDARDPRICELIST.LIST>
+          </STOCKITEM>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+
+  logger.info('[BitrixToTally] Sending alter XML to Tally', { name, xml: alterXml });
+  const resp = await sendToTally(alterXml);
+  const altered  = parseInt((resp || '').match(/<ALTERED>(\d+)<\/ALTERED>/i)?.[1]  ?? '0');
+  const created  = parseInt((resp || '').match(/<CREATED>(\d+)<\/CREATED>/i)?.[1]  ?? '0');
+  const errors   = parseInt((resp || '').match(/<ERRORS>(\d+)<\/ERRORS>/i)?.[1]    ?? '0');
+  const lineErr  = (resp || '').match(/<LINEERROR>(.*?)<\/LINEERROR>/i)?.[1] || '';
+
+  if (errors > 0 || lineErr) {
+    throw new Error(`Tally stock item alter failed for "${name}": ${lineErr || 'ERRORS=' + errors}`);
+  }
+
+  if (altered === 0 && created === 0) {
+    logger.warn('[BitrixToTally] Stock item alter returned 0 — item may not exist in Tally', { name });
+    return;
+  }
+
+  logger.info('[BitrixToTally] Stock item updated in Tally via ALTER', {
+    name, quantity, rate, altered, created,
+  });
+}
+
+module.exports = { processInventory, getStockItems, fetchAllBitrixProducts, validateClosingStock, syncBitrixToTally };

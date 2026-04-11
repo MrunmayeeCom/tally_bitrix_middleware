@@ -423,6 +423,23 @@ app.post('/sync/payments', authMiddleware, async (req, res) => {
   }
 });
 
+// Bitrix24 → Tally inventory sync trigger
+app.post('/sync/inventory-bitrix-to-tally', authMiddleware, async (req, res) => {
+  const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
+  if (featureGate && !featureGate.isEnabled('inventory-sync')) {
+    return res.status(403).json({ success: false, message: 'inventory-sync not enabled on your plan' });
+  }
+  try {
+    logger.info('Manual Bitrix24 → Tally inventory sync triggered');
+    const { syncBitrixToTally } = require('./processors/inventoryProcessor');
+    const result = await syncBitrixToTally();
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Bitrix24 → Tally inventory sync failed', { message: error.message });
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // Manual inventory sync trigger
 app.post('/sync/inventory', authMiddleware, async (req, res) => {
   const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();

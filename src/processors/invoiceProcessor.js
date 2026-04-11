@@ -140,11 +140,19 @@ async function _attachProductRowsIfMissing(entityId, invoice, totalAmount) {
     const { callBitrix } = require('../connectors/bitrixConnector');
 
     // Check whether this invoice already has product rows
-    const existing = await callBitrix('crm.item.productrow.list', {
-      ownerType: 'SI',
-      ownerId:   entityId,
-    });
-    const existingRows = existing.result?.productRows || existing.result || [];
+    let existingRows = [];
+    try {
+      const existing = await callBitrix('crm.item.productrow.list', {
+        ownerTypeId: 31,
+        ownerId:     Number(entityId),
+      });
+      existingRows = existing.result?.productRows || existing.result || [];
+    } catch (rowCheckErr) {
+      logger.info('[InvoiceProcessor] productrow.list not supported for this invoice — skipping attach', {
+        entityId, message: rowCheckErr.message,
+      });
+      return;
+    }
     if (existingRows.length > 0) {
       logger.info('[InvoiceProcessor] Invoice already has product rows — skipping catalog attach', {
         entityId,
@@ -184,8 +192,8 @@ async function _attachProductRowsIfMissing(entityId, invoice, totalAmount) {
     };
 
     await callBitrix('crm.item.productrow.set', {
-      ownerType:   'SI',
-      ownerId:     entityId,
+      ownerTypeId: 31,
+      ownerId:     Number(entityId),
       productRows: [productRow],
     });
 

@@ -269,6 +269,18 @@ function startScheduler() {
       runInventorySync(`${syncMinutes}min — inventory sync`);
     }, { timezone: 'Asia/Kolkata' }));
     logger.info('[Scheduler] Inventory sync registered');
+
+    // Bitrix24 → Tally reverse inventory sync — runs every 2 sync cycles to avoid conflicts
+    let _bitrixToTallyCycle = 0;
+    _activeTasks.push(cron.schedule(syncCron, () => {
+      _bitrixToTallyCycle++;
+      if (_bitrixToTallyCycle % 2 !== 0) return; // run every other cycle
+      const { syncBitrixToTally } = require('./processors/inventoryProcessor');
+      syncBitrixToTally()
+        .then(r => logger.info(`Bitrix→Tally inventory sync completed`, r))
+        .catch(e => logger.error('Bitrix→Tally inventory sync failed', { message: e.message }));
+    }, { timezone: 'Asia/Kolkata' }));
+    logger.info('[Scheduler] Bitrix24 → Tally reverse inventory sync registered');
   }
 
   // Feature 6: Inventory match — runs every 6 hours
