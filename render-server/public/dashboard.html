@@ -436,6 +436,12 @@ html,body{
           <span class="trig-label">Tally → Bitrix</span>
           <span class="trig-desc">Sales vouchers → invoices</span>
         </div>
+        <div class="trig amber" id="trig-tallybackfill" onclick="trigger('tallybackfill')">
+          <div class="spin-ring"></div>
+          <span class="trig-icon">📅</span>
+          <span class="trig-label">Historical Backfill</span>
+          <span class="trig-desc">2016→now, runs in background</span>
+        </div>
         <div class="trig blue" id="trig-iteminvoices" onclick="trigger('iteminvoices')">
           <div class="spin-ring"></div>
           <span class="trig-icon">📋</span>
@@ -672,7 +678,8 @@ const trigMap = {
   invoices:    { path: '/sync/invoices',        label: 'Invoice sync',     slug: 'invoice-sync' },
   inventory:   { path: '/sync/inventory',       label: 'Inventory sync',   slug: 'inventory-sync' },
   payments:      { path: '/sync/payments',        label: 'Payment sync',        slug: 'payment-sync'  },
-  tallyinvoices: { path: '/sync/tally-invoices',   label: 'Tally invoice sync',  slug: 'invoice-sync'  },
+  tallyinvoices:  { path: '/sync/tally-invoices',          label: 'Tally → Bitrix invoice sync', slug: null },
+  tallybackfill:  { path: '/sync/tally-invoices/backfill', label: 'Historical backfill (2016→now)', slug: null },
   iteminvoices:  { path: '/sync/item-invoices',    label: 'Item invoice sync',   slug: 'invoice-sync'  },
   invmatch:      { path: '/sync/inventory-match',   label: 'Inventory match',     slug: 'inventory-sync'},
   receiptmatch:  { path: '/sync/receipts-match',    label: 'Receipt match',       slug: 'payment-sync'  },

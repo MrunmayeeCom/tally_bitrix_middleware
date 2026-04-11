@@ -384,6 +384,28 @@ app.post('/sync/tally-invoices', authMiddleware, async (req, res) => {
   }
 });
 
+// Historical Tally → Bitrix24 invoice backfill (2016 → now, runs async, non-blocking)
+app.post('/sync/tally-invoices/backfill', authMiddleware, async (req, res) => {
+  const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
+  if (featureGate && !featureGate.isEnabled('invoice-sync')) {
+    return res.status(403).json({ success: false, message: 'invoice-sync not enabled on your plan' });
+  }
+  try {
+    logger.info('Historical Tally invoice backfill triggered (2016-04-01 → now)');
+    res.status(200).json({ success: true, message: 'Backfill started — this will run in background, check logs' });
+    // Run async so HTTP response returns immediately
+    const { getSalesVouchers } = require('./processors/tallyInvoiceProcessor');
+    const { processTallyInvoicesFromVouchers } = require('./processors/tallyInvoiceProcessor');
+    getSalesVouchers('2016-04-01')
+      .then(vouchers => processTallyInvoicesFromVouchers(vouchers))
+      .then(r => logger.info('Historical backfill completed', r))
+      .catch(e => logger.error('Historical backfill failed', { message: e.message }));
+  } catch (error) {
+    logger.error('Historical backfill trigger failed', { message: error.message });
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // Manual payment sync trigger
 app.post('/sync/payments', authMiddleware, async (req, res) => {
   const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();

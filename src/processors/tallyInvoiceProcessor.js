@@ -1,4 +1,4 @@
-const { sendToTally } = require('../connectors/tallyConnector');
+const { sendToTallyLarge } = require('../connectors/tallyConnector');
 const { callBitrix } = require('../connectors/bitrixConnector');
 const tallyConfig = require('../config/tallyConfig');
 const logger = require('../utils/logger');
@@ -25,8 +25,17 @@ function saveCache(data) {
 }
 
 // Fetch sales vouchers from Tally Day Book
-async function getSalesVouchers() {
-  logger.info('Fetching sales vouchers from Tally (monthly chunks)');
+async function getSalesVouchers(fromDate = null) {
+  const rawCompany = tallyConfig.company || '';
+  // TallyPrime Gold requires the FULL company name including the date suffix
+  // e.g. "Rajlaxmi Solutions Private Limited - (From 1-Apr-2016)"
+  // Do NOT strip it — Tally uses this as the exact internal identifier
+  const companyName = rawCompany;
+
+  logger.info(`Fetching sales vouchers from Tally (quarterly chunks) | company: "${companyName}"`);
+  if (!companyName || companyName === 'Test Company') {
+    logger.warn('[TallyInvoice] Company name looks like default — make sure the correct company is set in Settings');
+  }
 
   const fmt = (d) => {
     const dd   = String(d.getDate()).padStart(2, '0');
@@ -35,20 +44,26 @@ async function getSalesVouchers() {
     return `${dd}-${mm}-${yyyy}`;
   };
 
-  // Fetch only current month + previous month to avoid hanging TallyPrime.
-  // Increase MONTHS_BACK cautiously — each extra month adds load.
-  const startDate = new Date('2025-04-01'); // FY 2025-26
-  const endDate   = new Date();             // up to today 
+  // Default: current financial year only (fast, won't freeze Tally)
+  // For historical backfill, pass an explicit fromDate
+  const now = new Date();
+  const fyStart = now.getMonth() >= 3
+    ? new Date(now.getFullYear(), 3, 1)      // Apr this year
+    : new Date(now.getFullYear() - 1, 3, 1); // Apr last year
+  const startDate = fromDate ? new Date(fromDate) : fyStart;
+  const endDate   = new Date();
   const chunks    = [];
   let cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
   while (cursor <= endDate) {
     const chunkStart = new Date(cursor);
-    const chunkEnd   = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+    // 3-month (quarterly) chunks instead of monthly — fewer API calls,
+    // but still small enough to avoid Tally timeout on large datasets
+    const chunkEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 3, 0);
     chunks.push({
       from: fmt(chunkStart),
       to:   fmt(chunkEnd > endDate ? endDate : chunkEnd),
     });
-    cursor.setMonth(cursor.getMonth() + 1);
+    cursor.setMonth(cursor.getMonth() + 3);
   }
 
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -64,9 +79,9 @@ async function getSalesVouchers() {
           <BODY>
             <EXPORTDATA>
               <REQUESTDESC>
-                <REPORTNAME>Sales Register</REPORTNAME>
+                <REPORTNAME>Day Book</REPORTNAME>
                 <STATICVARIABLES>
-                  <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+                  <SVCURRENTCOMPANY>${companyName}</SVCURRENTCOMPANY>
                   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
                   <SVFROMDATE>${chunk.from}</SVFROMDATE>
                   <SVTODATE>${chunk.to}</SVTODATE>
@@ -77,7 +92,12 @@ async function getSalesVouchers() {
         </ENVELOPE>`.trim();
 
       logger.info(`[TallyInvoice] Fetching ${chunk.from} → ${chunk.to}`);
-      const response = await sendToTally(xml);
+      const response = await sendToTallyLarge(xml);
+
+      // Log raw response when it's suspiciously short (empty envelope)
+      if (response.length < 300) {
+        logger.warn(`[TallyInvoice] Short response (${response.length} bytes) — raw: ${response}`);
+      }
 
       // Diagnostic — log what voucher types exist in this chunk's response
       const totalVoucherTags = (response.match(/<VOUCHER\b/gi) || []).length;
@@ -99,9 +119,9 @@ async function getSalesVouchers() {
         logger.warn(`[TallyInvoice] Chunk ${chunk.from}→${chunk.to} — 0 VOUCHER tags in response (response length: ${response.length})`);
       }
 
-      const vouchers = parseSalesVouchersXml(response);
+      const vouchers = parseSalesVouchersXml(response, chunk.from, chunk.to);
       allVouchers = allVouchers.concat(vouchers);
-      await sleep(1500); // pause between chunks so Tally can breathe
+      await sleep(2500); // Day Book is lighter than Sales Register — 2.5s avoids Tally lag
     } catch (e) {
       logger.warn(`[TallyInvoice] Chunk ${chunk.from}→${chunk.to} failed — skipping`, { message: e.message });
     }
@@ -112,7 +132,15 @@ async function getSalesVouchers() {
 }
 
 // Parse sales vouchers from Day Book XML
-function parseSalesVouchersXml(xml) {
+function parseSalesVouchersXml(xml, chunkFrom, chunkTo) {
+  // Parse chunk boundaries for date filtering (DD-MM-YYYY → Date objects)
+  function parseChunkDate(str) {
+    if (!str) return null;
+    const [dd, mm, yyyy] = str.split('-');
+    return new Date(parseInt(yyyy), parseInt(mm) - 1, parseInt(dd));
+  }
+  const chunkStart = parseChunkDate(chunkFrom);
+  const chunkEnd   = parseChunkDate(chunkTo);
   try {
     const vouchers = [];
     const voucherRegex = /<VOUCHER\b([^>]*)>([\s\S]*?)<\/VOUCHER>/gi;
@@ -137,18 +165,28 @@ function parseSalesVouchersXml(xml) {
       // Skip vouchers with no type info at all
       if (!voucherType.trim()) continue;
 
-      const VOUCHER_TYPE_ALLOWLIST = [
-        'tax invoice thane',
-        'tax invoice tss',
-        'tally service invoice',
-        'tax invoice mumbai',
-        'tax invoice cloud',
-        'tax invoice license',
-      ];
+      // Skip vouchers whose DATE doesn't fall within the requested chunk range
+      // Tally sometimes returns master/template vouchers regardless of date filter
+      const voucherDateRaw = get('DATE') || '';
+      if (voucherDateRaw.length === 8) {
+        const vy = parseInt(voucherDateRaw.slice(0, 4));
+        const vm = parseInt(voucherDateRaw.slice(4, 6));
+        const vd = parseInt(voucherDateRaw.slice(6, 8));
+        // Parse chunk.from and chunk.to (DD-MM-YYYY) for comparison
+        // These are available via closure from the outer loop
+        // We'll store parsed chunk dates on the voucher regex context
+        // Simple approach: skip if date is clearly outside any reasonable sales window
+        // The known bad voucher has DATE=20251231 but appears in ALL chunks - flag repeats
+      }
+
       const voucherTypeLower = voucherType.toLowerCase();
-      const isSales = VOUCHER_TYPE_ALLOWLIST.some(t => voucherTypeLower === t);
+      // Day Book contains all voucher types — exclude everything that is clearly not a sales invoice
+      const SALES_EXCLUDE = ['receipt', 'payment', 'journal', 'contra', 'purchase', 'credit note', 'stock journal', 'stock transfer', 'delivery', 'tally service invoice'];
+      const SALES_INCLUDE = ['tax invoice', 'sales invoice', 'sales', 'invoice'];
+      const isSales = SALES_INCLUDE.some(t => voucherTypeLower.includes(t))
+        && !SALES_EXCLUDE.some(t => voucherTypeLower.includes(t));
       if (!isSales) {
-        logger.info(`[TallyInvoice] Skipped voucher type: "${voucherType}"`);
+        logger.info(`[TallyInvoice] Skipped voucher type: "${voucherType}" | cancelled: ${isCancelled} | date: ${get('DATE')}`);
         continue;
       }
       logger.info(`[TallyInvoice] Accepted voucher type: "${voucherType}" | party: "${get('PARTYLEDGERNAME')}" | amount: ${get('AMOUNT')}`);
@@ -173,6 +211,18 @@ function parseSalesVouchersXml(xml) {
 
       const dateRaw   = get('DATE') || '';
       const narration = get('NARRATION') || '';
+
+      // Enforce chunk date range — skip vouchers Tally returned outside the requested window
+      if (dateRaw.length === 8 && chunkStart && chunkEnd) {
+        const vy = parseInt(dateRaw.slice(0, 4));
+        const vm = parseInt(dateRaw.slice(4, 6)) - 1;
+        const vd = parseInt(dateRaw.slice(6, 8));
+        const voucherDate = new Date(vy, vm, vd);
+        if (voucherDate < chunkStart || voucherDate > chunkEnd) {
+          logger.info(`[TallyInvoice] Skipping out-of-range voucher | date: ${dateRaw} | chunk: ${chunkFrom}→${chunkTo}`);
+          continue;
+        }
+      }
 
       // AMOUNT on the voucher tag may be negative (credit side) — try absolute value
       // Also check BASICAMOUNT and ledger entry amounts as fallback
@@ -368,4 +418,40 @@ async function processTallyInvoices() {
   }
 }
 
-module.exports = { processTallyInvoices, getSalesVouchers };
+// Separated so backfill endpoint can call push logic independently
+async function processTallyInvoicesFromVouchers(vouchers) {
+  if (!vouchers || vouchers.length === 0) {
+    logger.info('No sales vouchers to process');
+    return { success: true, created: 0, skipped: 0 };
+  }
+  const cache    = loadCache();
+  const newCache = { ...cache };
+  let created = 0, skipped = 0, failed = 0;
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  for (const voucher of vouchers) {
+    try {
+      const cacheKey = `${voucher.voucherNumber}_${voucher.amount}`;
+      if (cache[cacheKey]) { skipped++; continue; }
+      const alreadyExists = await invoiceExistsInBitrix(voucher.voucherNumber);
+      if (alreadyExists) {
+        newCache[cacheKey] = { bitrixId: null, syncedAt: new Date().toISOString(), source: 'dedup-check' };
+        skipped++; continue;
+      }
+      await sleep(300);
+      const partyIds = await findBitrixParty(voucher.partyName);
+      const bitrixId = await pushVoucherToBitrix(voucher, partyIds);
+      newCache[cacheKey] = { bitrixId, syncedAt: new Date().toISOString() };
+      logger.info('Tally invoice pushed to Bitrix24', { voucherNumber: voucher.voucherNumber, partyName: voucher.partyName, amount: voucher.amount, bitrixId });
+      created++;
+      await sleep(500);
+    } catch (e) {
+      logger.error('Failed to push Tally invoice', { voucherNumber: voucher.voucherNumber, message: e.message });
+      failed++;
+    }
+  }
+  saveCache(newCache);
+  logger.info('Tally → Bitrix24 invoice sync completed', { created, skipped, failed });
+  return { success: true, created, skipped, failed };
+}
+
+module.exports = { processTallyInvoices, getSalesVouchers, processTallyInvoicesFromVouchers };

@@ -5,11 +5,11 @@ const { withRetry } = require('../utils/retry');
 
 // Do NOT cache tallyClient — create fresh on each request
 // so host/port changes are picked up immediately
-function getTallyClient() {
+function getTallyClient(timeoutMs = 120000) {
   return axios.create({
     baseURL: `http://${tallyConfig.host}:${tallyConfig.port}`,
     headers: { 'Content-Type': 'text/xml' },
-    timeout: 8000
+    timeout: timeoutMs
   });
 }
 
@@ -251,4 +251,30 @@ async function getCompanyList() {
   };
 }
 
-module.exports = { sendToTally, getTallyClient, getCompanyList };
+async function sendToTallyLarge(xml) {
+  const net = require('net');
+  const isPortOpen = await new Promise((resolve) => {
+    const sock = new net.Socket();
+    sock.setTimeout(3000);
+    sock.on('connect', () => { sock.destroy(); resolve(true);  });
+    sock.on('error',   () => { sock.destroy(); resolve(false); });
+    sock.on('timeout', () => { sock.destroy(); resolve(false); });
+    sock.connect(parseInt(tallyConfig.port), tallyConfig.host);
+  });
+  if (!isPortOpen) throw new Error('TALLY_OFFLINE');
+
+  try {
+    logger.info('Sending large request to Tally (5min timeout)');
+    const response = await getTallyClient(300000).post('/', xml);
+    logger.info('Tally response received');
+    return response.data;
+  } catch (error) {
+    const reason = error.code || error.message || 'unknown';
+    if (reason === 'ECONNABORTED' || reason === 'ECONNREFUSED' || reason === 'ETIMEDOUT') {
+      throw new Error('TALLY_OFFLINE');
+    }
+    throw new Error(`Tally unreachable: ${reason}`);
+  }
+}
+
+module.exports = { sendToTally, sendToTallyLarge, getTallyClient, getCompanyList };
