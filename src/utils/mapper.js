@@ -69,7 +69,8 @@ function mapInvoiceToVoucher(invoice) {
     currency:      currency                    || 'INR',
     narration:     `Bitrix24 Invoice #${id}`,
     dueDate:       closeDateRaw?.split('T')[0] || '',
-    bitrixId:      String(id)
+    bitrixId:      String(id),
+    productRows:   invoice.productRows         || [],  // line items from Bitrix24
   };
 }
 

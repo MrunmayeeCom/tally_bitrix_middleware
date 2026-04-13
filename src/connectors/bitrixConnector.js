@@ -20,7 +20,7 @@ const VERBOSE_RESPONSE_METHODS = [
 ];
 
 async function callBitrix(method, params = {}) {
-  const isWrite = /\.(add|create)$/i.test(method);
+  const isWrite = /\.(add|create|set|delete)$/i.test(method);
   return withRetry(async () => {
     try {
       logger.info(`Bitrix24 API call: ${method}`, params);
@@ -43,7 +43,7 @@ async function callBitrix(method, params = {}) {
         logger.warn(`Bitrix24 rate limit / overload (${status}) on ${method} — waiting 5s before retry`);
         await new Promise(r => setTimeout(r, 5000));
       }
-      if (status === 401 || status === 400) {
+      if (status === 401 || status === 400 || status === 404) {
         error._noRetry = true;
       }
       logger.error(`Bitrix24 API error: ${method}`, { message: error.message });

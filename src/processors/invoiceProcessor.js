@@ -51,8 +51,34 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
         reason:  'No contact or company linked to invoice in Bitrix24'
       };
     }
+    // Step 2: Fetch product rows from Bitrix24 Smart Invoice
+    let productRows = [];
+    if (invoiceType === 'smart') {
+      try {
+        const { callBitrix: _callBitrix } = require('../connectors/bitrixConnector');
+        let rowData = { result: [] };
+        try {
+          rowData = await _callBitrix('crm.productrow.list', {
+            filter: { OWNER_ID: Number(entityId), OWNER_TYPE: 'SI' },
+          });
+          logger.info('[InvoiceProcessor] productrow fetch succeeded', { entityId, count: (rowData.result || []).length });
+        } catch (e) {
+          logger.info('[InvoiceProcessor] productrow fetch failed', { entityId, message: e.message });
+        }
+        productRows = Array.isArray(rowData.result) ? rowData.result : [];
+        if (productRows.length > 0) {
+          logger.info('Product rows fetched from Bitrix24 invoice', {
+            entityId, count: productRows.length,
+            items: productRows.map(r => `${r.PRODUCT_NAME} × ${r.QUANTITY}`).join(', ')
+          });
+        }
+      } catch (rowErr) {
+        logger.warn('Could not fetch product rows — voucher will be amount-only', { entityId, message: rowErr.message });
+      }
+    }
+
     // Step 2: Map to Tally voucher format
-    const voucher = mapInvoiceToVoucher(invoice);
+    const voucher = mapInvoiceToVoucher({ ...invoice, productRows });
     logger.info('Invoice mapped', {
       voucherNumber: voucher.voucherNumber,
       partyName:     voucher.partyName,
@@ -135,9 +161,10 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     //
     // We skip this if the invoice already has rows — no need to overwrite something
     // the user explicitly set.
-    if (invoiceType === 'smart') {
+    if (invoiceType === 'smart' && voucher.productRows && voucher.productRows.length > 0) {
       await _attachProductRowsIfMissing(entityId, invoice, voucher.amount);
     }
+
 
     logger.info('Invoice processor completed', {
       entityId,
@@ -170,34 +197,10 @@ async function _attachProductRowsIfMissing(entityId, invoice, totalAmount) {
     const { callBitrix } = require('../connectors/bitrixConnector');
 
     // Check whether this invoice already has product rows
-    let existingRows = [];
-    try {
-      const existing = await callBitrix('crm.item.productrow.list', {
-        ownerType: 'SI',
-        ownerId:   Number(entityId),
-      });
-      existingRows = existing.result?.productRows || existing.result || [];
-    } catch (rowCheckErr) {
-      if (rowCheckErr.message.includes('400')) {
-        // 400 = this Bitrix24 instance does not support productrow.list for SI type
-        // This is a permanent configuration issue, not a transient error — skip silently
-        logger.info('[InvoiceProcessor] productrow.list not supported on this Bitrix24 instance — skipping attach', {
-          entityId,
-        });
-        return;
-      }
-      logger.info('[InvoiceProcessor] productrow.list failed — skipping attach', {
-        entityId, message: rowCheckErr.message,
-      });
-      return;
-    }
-    if (existingRows.length > 0) {
-      logger.info('[InvoiceProcessor] Invoice already has product rows — skipping catalog attach', {
-        entityId,
-        rowCount: existingRows.length,
-      });
-      return;
-    }
+    // Skip the productrow.list existence check entirely — it 400s on this Bitrix24 instance.
+    // The set call is idempotent so calling it when rows already exist just overwrites them,
+    // which is acceptable for catalog-attach enrichment.
+    logger.info('[InvoiceProcessor] Skipping productrow.list check — proceeding directly to attach', { entityId });
 
     // Fetch the Bitrix24 product catalog (populated by inventory sync)
     const { fetchAllBitrixProducts } = require('../processors/inventoryProcessor');
@@ -229,11 +232,23 @@ async function _attachProductRowsIfMissing(entityId, invoice, totalAmount) {
       CURRENCY_ID:  'INR',
     };
 
-    await callBitrix('crm.item.productrow.set', {
-      ownerTypeId: 31,
-      ownerId:     Number(entityId),
-      productRows: [productRow],
-    });
+    // Try string ownerType first — integer ownerTypeId 400s on some Bitrix24 plans
+    let setResult;
+    try {
+      setResult = await callBitrix('crm.item.productrow.set', {
+        ownerType: 'SI',
+        ownerId:   Number(entityId),
+        productRows: [productRow],
+      });
+    } catch (setErr1) {
+      if (!setErr1.message?.includes('400')) throw setErr1;
+      // Fallback: try integer form
+      setResult = await callBitrix('crm.item.productrow.set', {
+        ownerTypeId: 31,
+        ownerId:     Number(entityId),
+        productRows: [productRow],
+      });
+    }
 
     logger.info('[InvoiceProcessor] Product row attached from inventory catalog', {
       entityId,

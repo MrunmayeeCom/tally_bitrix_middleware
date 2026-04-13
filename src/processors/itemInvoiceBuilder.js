@@ -63,6 +63,7 @@ async function getSalesVouchersWithItems() {
 
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   let allVouchers = [];
+  const seenVoucherKeys = new Set(); // dedup: Tally often ignores date filters and returns all vouchers in every chunk
 
   for (const chunk of chunks) {
     try {
@@ -87,14 +88,29 @@ async function getSalesVouchersWithItems() {
       logger.info(`[ItemInvoice] Fetching ${chunk.from} → ${chunk.to}`);
       const response = await sendToTally(xml);
       const vouchers = parseSalesVouchersWithItems(response);
-      allVouchers = allVouchers.concat(vouchers);
+      const newVouchers = vouchers.filter(v => {
+        const key = `${v.voucherNumber}_${v.amount}`;
+        if (seenVoucherKeys.has(key)) return false;
+        seenVoucherKeys.add(key);
+        return true;
+      });
+      logger.info(`[ItemInvoice] Chunk ${chunk.from}→${chunk.to} — ${vouchers.length} parsed, ${newVouchers.length} new after dedup`);
+      allVouchers = allVouchers.concat(newVouchers);
       await sleep(1500);
     } catch (e) {
       logger.warn(`[ItemInvoice] Chunk ${chunk.from}→${chunk.to} failed — skipping`, { message: e.message });
     }
   }
 
-  logger.info(`[ItemInvoice] Total vouchers fetched across all chunks: ${allVouchers.length}`);
+  const withItems = allVouchers.filter(v => v.items && v.items.length > 0);
+  if (withItems.length > 0) {
+    withItems.forEach(v => {
+      logger.info(`[ItemInvoice] Voucher with line items — #${v.voucherNumber} | party: ${v.partyName} | amount: ${v.amount} | items: ${v.items.map(i => `${i.stockItemName} × ${i.qty} @ ${i.rate}`).join(', ')}`);
+    });
+  } else {
+    logger.warn('[ItemInvoice] No vouchers have inventory line items — check Tally voucher type and ALLINVENTORYENTRIES tags');
+  }
+  logger.info(`[ItemInvoice] Total vouchers fetched across all chunks: ${allVouchers.length} | with line items: ${withItems.length}`);
   return allVouchers;
 }
 
@@ -172,9 +188,10 @@ function parseSalesVouchersWithItems(xml) {
       const qtyNum  = Math.abs(parseFloat(qtyRaw) || 0);
       const qtyUnit = (qtyRaw.match(/[a-zA-Z]+/) || [''])[0].trim();
 
-      // RATE comes as "10.00/Nos" — extract number only
-      const rateRaw = getI('RATE') || '0';
-      const rate    = Math.abs(parseFloat(rateRaw) || 0);
+      // RATE comes as "10.00/Nos" or "10.00/ Nos" — extract number before the slash
+      const rateRaw  = getI('RATE') || '0';
+      const ratePart = rateRaw.split('/')[0].replace(/,/g, '').trim();
+      const rate     = Math.abs(parseFloat(ratePart) || 0);
 
       const itemAmount = Math.abs(parseFloat(getI('AMOUNT')) || 0);
 
@@ -262,8 +279,11 @@ function buildProductRows(tallyItems, bitrixProducts) {
       PRODUCT_NAME: item.stockItemName,
       PRICE:        price,
       QUANTITY:     item.qty,
+      DISCOUNT_TYPE_ID: 1,
       DISCOUNT:     0,
+      TAX_RATE:     0,
       CURRENCY_ID:  'INR',
+      SORT:         rows.length + 100,
     };
 
     // Link to existing Bitrix24 product if found in catalog
@@ -319,12 +339,31 @@ async function processItemInvoices() {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
     for (const voucher of vouchers) {
+      const cacheKey = `item_${voucher.partyName}_${voucher.voucherNumber}_${voucher.amount}`;
       try {
-        // Skip if already synced (same voucher number + amount)
-        const cacheKey = `item_${voucher.voucherNumber}_${voucher.amount}`;
+        // Skip if already synced or previously failed with non-retryable error
         if (cache[cacheKey]) {
-          skipped++;
-          continue;
+          const entry = cache[cacheKey];
+          // Tombstoned failures expire after 1 hour — retry after code fix
+          if (entry.failed) {
+            const ageMs = Date.now() - (entry.failedAt || 0);
+            if (ageMs < 60 * 60 * 1000) {
+              logger.info('[ItemInvoice] Skipping tombstoned voucher (< 1hr old)', {
+                voucherNumber: voucher.voucherNumber,
+                ageMinutes: Math.floor(ageMs / 60000),
+              });
+              skipped++;
+              continue;
+            }
+            // Expired tombstone — remove it and retry
+            logger.info('[ItemInvoice] Tombstone expired — retrying voucher', {
+              voucherNumber: voucher.voucherNumber,
+            });
+            delete newCache[cacheKey];
+          } else {
+            skipped++;
+            continue;
+          }
         }
 
         // Skip vouchers with no inventory line items
@@ -345,18 +384,14 @@ async function processItemInvoices() {
         const productRows = buildProductRows(voucher.items, bitrixProducts);
 
         // Step 1 — Create the Smart Invoice in Bitrix24
+        // Only fields confirmed valid for crm.item.add (entityTypeId 31)
+        // accountNumber and begindate cause 400 on some Bitrix24 versions
         const invoiceFields = {
           title:       `${voucher.partyName} - ${voucher.voucherNumber}`,
           opportunity: voucher.amount,
           currencyId:  'INR',
-          createdTime: voucher.date,
           closeDate:   voucher.date,
           ...partyIds,
-          // Custom fields to track Tally origin
-          UF_TALLY_VOUCHER_NO: voucher.voucherNumber,
-          UF_TALLY_SYNCED:     'Y',
-          UF_INVOICE_NUMBER:   voucher.voucherNumber,
-          UF_INVOICE_DATE:     voucher.date,
         };
 
         const invoiceData = await callBitrix('crm.item.add', {
@@ -364,7 +399,17 @@ async function processItemInvoices() {
           fields:       invoiceFields,
         });
 
-        const invoiceId = invoiceData.result?.item?.id || invoiceData.result;
+        const invoiceId = invoiceData.result?.item?.id
+          || invoiceData.result?.id
+          || (typeof invoiceData.result === 'number' ? invoiceData.result : null);
+
+        if (!invoiceId) {
+          logger.error('[ItemInvoice] Invoice creation returned no ID — raw result: ' + JSON.stringify(invoiceData.result).substring(0, 200), {
+            voucherNumber: voucher.voucherNumber,
+          });
+          failed++;
+          continue;
+        }
 
         if (!invoiceId) {
           logger.error('[ItemInvoice] Invoice creation returned no ID', {
@@ -377,22 +422,63 @@ async function processItemInvoices() {
         // Step 2 — Attach product rows to the invoice
         if (productRows.length > 0) {
           await callBitrix('crm.item.productrow.set', {
-            ownerType:   'SI',  // SI = Smart Invoice
-            ownerId:     invoiceId,
+            ownerType: '31',
+            ownerId:   Number(invoiceId),
             productRows,
           });
-          logger.info('[ItemInvoice] Product rows attached to invoice', {
-            invoiceId,
-            rows:      productRows.length,
-            products:  productRows.map(r => `${r.PRODUCT_NAME} × ${r.QUANTITY}`).join(', '),
+          // Verify rows actually saved — Bitrix24 sometimes returns 200 but saves nothing
+          try {
+            const verify = await callBitrix('crm.item.productrow.list', {
+              ownerTypeId: 31,
+              ownerId:     Number(invoiceId),
+            });
+            const savedRows = verify.result?.productRows || [];
+            if (savedRows.length === 0) {
+              logger.warn('[ItemInvoice] productrow.set returned 200 but rows are empty — Bitrix24 silently dropped them', {
+                invoiceId,
+                attempted: productRows.length,
+              });
+            } else {
+              logger.info('[ItemInvoice] Product rows confirmed saved', {
+                invoiceId,
+                rows:     savedRows.length,
+                products: productRows.map(r => `${r.PRODUCT_NAME} × ${r.QUANTITY}`).join(', '),
+              });
+            }
+          } catch (verifyErr) {
+            // Non-fatal — log and move on
+            logger.info('[ItemInvoice] Product rows attached (verify check skipped)', {
+              invoiceId,
+              rows:     productRows.length,
+              products: productRows.map(r => `${r.PRODUCT_NAME} × ${r.QUANTITY}`).join(', '),
+            });
+          }
+        }
+
+        // Try to write tracking fields separately — non-fatal if UF_ fields don't exist
+        try {
+          await callBitrix('crm.item.update', {
+            entityTypeId: 31,
+            id:           invoiceId,
+            fields: {
+              UF_TALLY_VOUCHER_NO: voucher.voucherNumber,
+              UF_INVOICE_NUMBER:   voucher.voucherNumber,
+              UF_INVOICE_DATE:     voucher.date,
+            },
+          });
+        } catch (ufErr) {
+          logger.info('[ItemInvoice] UF_ field update skipped — fields may not exist on this instance', {
+            invoiceId, message: ufErr.message,
           });
         }
 
         // Save to cache so we don't recreate on next run
         newCache[cacheKey] = {
           invoiceId,
-          syncedAt:  new Date().toISOString(),
-          itemCount: productRows.length,
+          syncedAt:   new Date().toISOString(),
+          itemCount:  productRows.length,
+          partyName:  voucher.partyName,
+          voucherNumber: voucher.voucherNumber,
         };
 
         logger.info('[ItemInvoice] Item-based invoice created successfully', {
@@ -412,12 +498,20 @@ async function processItemInvoices() {
           partyName:     voucher.partyName,
           message:       e.message,
         });
+        // Tombstone 400 errors for 1 hour — prevents hammering but allows retry after fix
+        if (e.message && e.message.includes('400')) {
+          newCache[cacheKey] = {
+            failed:    true,
+            reason:    e.message,
+            failedAt:  Date.now(),
+          };
+        }
         failed++;
       }
     }
 
-    // Only save cache if something was created
-    if (created > 0) saveCache(newCache);
+    // Save cache if anything was created or tombstoned (failed 400s)
+    if (created > 0 || failed > 0) saveCache(newCache);
 
     logger.info('[ItemInvoice] Sync complete', { created, skipped, noItems, failed });
     return { success: true, created, skipped, noItems, failed };

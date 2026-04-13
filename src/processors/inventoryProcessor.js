@@ -255,7 +255,7 @@ async function fetchAllBitrixProducts() {
     
     while (true) {
       const data = await callBitrix('crm.product.list', {
-        select: ['ID', 'NAME', 'PRICE', 'QUANTITY'],
+        select: ['ID', 'NAME', 'PRICE', 'QUANTITY', 'MEASURE', 'CURRENCY_ID'],
         start
       });
       const products = data.result || [];

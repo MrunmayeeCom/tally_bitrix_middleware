@@ -210,6 +210,23 @@ async function createVoucher(voucher) {
                   <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
                   <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
                 </ALLLEDGERENTRIES.LIST>
+                ${(voucher.productRows && voucher.productRows.length > 0)
+                  ? voucher.productRows.map(row => {
+                      const name = row.PRODUCT_NAME || row.productName || '';
+                      const price = parseFloat(row.PRICE || row.price || 0);
+                      const qty = parseFloat(row.QUANTITY || row.quantity || 1);
+                      const amount = (price * qty).toFixed(2);
+                      return `
+                <ALLINVENTORYENTRIES.LIST>
+                  <STOCKITEMNAME>${escapeXml(name)}</STOCKITEMNAME>
+                  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+                  <RATE>${price}</RATE>
+                  <AMOUNT>-${amount}</AMOUNT>
+                  <ACTUALQTY>${qty} Nos</ACTUALQTY>
+                  <BILLEDQTY>${qty} Nos</BILLEDQTY>
+                </ALLINVENTORYENTRIES.LIST>`;
+                    }).join('\n')
+                  : ''}
               </VOUCHER>
             </TALLYMESSAGE>
           </REQUESTDATA>
@@ -379,8 +396,13 @@ function escapeXml(str) {
       .replace(/&lt;/g,   '<')
       .replace(/&gt;/g,   '>')
       .replace(/&quot;/g, '"')
-      .replace(/&apos;/g, "'");
+      .replace(/&apos;/g, "'")
+      .replace(/&#13;/g,  '')
+      .replace(/&#10;/g,  ' ')
+      .replace(/&#9;/g,   ' ');
   }
+  // Strip any remaining control characters (CR, LF, TAB, etc.)
+  decoded = decoded.replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim();
   return decoded
     .replace(/&/g,  '&amp;')
     .replace(/</g,  '&lt;')
