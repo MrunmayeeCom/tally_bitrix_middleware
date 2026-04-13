@@ -56,14 +56,13 @@ async function getSalesVouchers(fromDate = null) {
   let cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
   while (cursor <= endDate) {
     const chunkStart = new Date(cursor);
-    // 3-month (quarterly) chunks instead of monthly — fewer API calls,
-    // but still small enough to avoid Tally timeout on large datasets
-    const chunkEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 3, 0);
+    // Monthly chunks — Sales Register respects date filters better than Day Book
+    const chunkEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
     chunks.push({
       from: fmt(chunkStart),
       to:   fmt(chunkEnd > endDate ? endDate : chunkEnd),
     });
-    cursor.setMonth(cursor.getMonth() + 3);
+    cursor.setMonth(cursor.getMonth() + 1);
   }
 
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -80,7 +79,7 @@ async function getSalesVouchers(fromDate = null) {
           <BODY>
             <EXPORTDATA>
               <REQUESTDESC>
-                <REPORTNAME>Day Book</REPORTNAME>
+                <REPORTNAME>Sales Register</REPORTNAME>
                 <STATICVARIABLES>
                   <SVCURRENTCOMPANY>${companyName}</SVCURRENTCOMPANY>
                   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
@@ -121,18 +120,31 @@ async function getSalesVouchers(fromDate = null) {
       }
 
       const vouchers = parseSalesVouchersXml(response, chunk.from, chunk.to);
+
+      // Hard JS-side date guard — reject any voucher whose date falls outside this chunk
+      // This catches the case where Tally ignores SVFROMDATE/SVTODATE entirely
+      const [cfdd, cfmm, cfyyyy] = chunk.from.split('-').map(Number);
+      const [ctdd, ctmm, ctyyyy] = chunk.to.split('-').map(Number);
+      const chunkStartMs = new Date(cfyyyy, cfmm - 1, cfdd).getTime();
+      const chunkEndMs   = new Date(ctyyyy, ctmm - 1, ctdd).getTime();
+
+      const dateFilteredVouchers = vouchers.filter(v => {
+        if (!v.date || v.date.length < 10) return true; // can't filter, keep it
+        const vMs = new Date(v.date).getTime();
+        return vMs >= chunkStartMs && vMs <= chunkEndMs;
+      });
+
       // Dedup: if Tally ignores date filters, every chunk returns same vouchers
-      const newVouchers = vouchers.filter(v => {
+      const newVouchers = dateFilteredVouchers.filter(v => {
         const key = `${v.voucherNumber}_${v.amount}`;
         if (seenVoucherKeys.has(key)) return false;
         seenVoucherKeys.add(key);
         return true;
       });
       allVouchers = allVouchers.concat(newVouchers);
-      // If Tally returned vouchers but none were new, all future chunks will be identical — stop early
-      if (vouchers.length > 0 && newVouchers.length === 0) {
-        logger.info('[TallyInvoice] All vouchers already seen — Tally is ignoring date filters, stopping early');
-        break;
+      // Log if date-filtered result differs from raw parse (Tally ignoring date filters)
+      if (vouchers.length > 0 && dateFilteredVouchers.length === 0) {
+        logger.warn(`[TallyInvoice] Chunk ${chunk.from}→${chunk.to} — Tally returned ${vouchers.length} vouchers but 0 match this date range (Tally ignoring SVFROMDATE/SVTODATE)`);
       }
       await sleep(2500); // Day Book is lighter than Sales Register — 2.5s avoids Tally lag
     } catch (e) {
@@ -207,6 +219,18 @@ function parseSalesVouchersXml(xml, chunkFrom, chunkTo) {
       // Skip vouchers created by Bitrix24 (already synced Bitrix→Tally)
       const voucherNumber = get('VOUCHERNUMBER') || '';
       if (voucherNumber.startsWith('BX-')) continue;
+
+      // Skip vouchers outside the requested chunk date range
+      // Tally ignores SVFROMDATE/SVTODATE in Day Book for many configurations
+      if (voucherDateRaw.length === 8 && chunkStart && chunkEnd) {
+        const vy = parseInt(voucherDateRaw.slice(0, 4));
+        const vm = parseInt(voucherDateRaw.slice(4, 6)) - 1;
+        const vd = parseInt(voucherDateRaw.slice(6, 8));
+        const voucherDate = new Date(vy, vm, vd);
+        if (voucherDate < chunkStart || voucherDate > chunkEnd) {
+          continue; // silently skip — Tally returned out-of-range voucher
+        }
+      }
 
       // Tally uses different tags depending on voucher type — try all known locations
       const partyName = get('PARTYLEDGERNAME')
@@ -309,18 +333,12 @@ async function findBitrixParty(partyName) {
 // but if the cache is wiped we need this to avoid creating duplicates.
 async function invoiceExistsInBitrix(voucherNumber) {
   try {
-    const axios = require('axios');
-    const bitrixConfig = require('../config/bitrixConfig');
-    const res = await axios.post(
-      `${bitrixConfig.webhookUrl}/crm.item.list.json`,
-      {
-        entityTypeId: 31,
-        filter: { '=accountNumber': voucherNumber },
-        select: ['id', 'accountNumber'],
-      },
-      { timeout: 10000 }
-    );
-    return (res.data?.result?.items?.length ?? 0) > 0;
+    const res = await callBitrix('crm.item.list', {
+      entityTypeId: 31,
+      filter: { '=UF_TALLY_VOUCHER_NO': voucherNumber },
+      select: ['id', 'UF_TALLY_VOUCHER_NO'],
+    });
+    return (res.result?.items?.length ?? 0) > 0;
   } catch (e) {
     logger.warn('[TallyInvoice] Pre-push dedup check failed — proceeding', {
       voucherNumber,
@@ -373,7 +391,7 @@ async function processTallyInvoices() {
 
     for (const voucher of vouchers) {
       try {
-        const cacheKey = `${voucher.voucherNumber}_${voucher.amount}`;
+        const cacheKey = `${voucher.partyName}_${voucher.voucherNumber}_${voucher.amount}`;
 
         // Primary guard — skip if already in local cache
         if (cache[cacheKey]) {
@@ -398,6 +416,17 @@ async function processTallyInvoices() {
 
         // Find party in Bitrix24
         const partyIds = await findBitrixParty(voucher.partyName);
+
+        // Skip push if party lookup returned nothing — avoids creating orphaned invoices
+        // during 503 bursts where the lookup silently fails and returns {}
+        if (!partyIds.COMPANY_ID && !partyIds.CONTACT_ID) {
+          logger.warn('[TallyInvoice] Party not found in Bitrix24 — skipping push to avoid orphan invoice', {
+            voucherNumber: voucher.voucherNumber,
+            partyName: voucher.partyName,
+          });
+          failed++;
+          continue;
+        }
 
         // Push to Bitrix24
         const bitrixId = await pushVoucherToBitrix(voucher, partyIds);
@@ -448,7 +477,7 @@ async function processTallyInvoicesFromVouchers(vouchers) {
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   for (const voucher of vouchers) {
     try {
-      const cacheKey = `${voucher.voucherNumber}_${voucher.amount}`;
+      const cacheKey = `${voucher.partyName}_${voucher.voucherNumber}_${voucher.amount}`;
       if (cache[cacheKey]) { skipped++; continue; }
       const alreadyExists = await invoiceExistsInBitrix(voucher.voucherNumber);
       if (alreadyExists) {
@@ -457,6 +486,14 @@ async function processTallyInvoicesFromVouchers(vouchers) {
       }
       await sleep(300);
       const partyIds = await findBitrixParty(voucher.partyName);
+      if (!partyIds.COMPANY_ID && !partyIds.CONTACT_ID) {
+        logger.warn('[TallyInvoice] Party not found in Bitrix24 — skipping push to avoid orphan invoice', {
+          voucherNumber: voucher.voucherNumber,
+          partyName: voucher.partyName,
+        });
+        failed++;
+        continue;
+      }
       const bitrixId = await pushVoucherToBitrix(voucher, partyIds);
       newCache[cacheKey] = { bitrixId, syncedAt: new Date().toISOString() };
       logger.info('Tally invoice pushed to Bitrix24', { voucherNumber: voucher.voucherNumber, partyName: voucher.partyName, amount: voucher.amount, bitrixId });

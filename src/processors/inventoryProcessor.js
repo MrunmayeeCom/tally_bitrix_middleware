@@ -326,6 +326,77 @@ async function syncBitrixToTally() {
       tallyMap[item.name.toLowerCase()] = item;
     });
 
+    // Pre-create required masters once before any stock item operations
+    const escapeXml = (s) => (s || '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+
+    // Step 1: Delete the broken Nos unit exception, then recreate it cleanly
+    const deleteNosXml = `
+<ENVELOPE>
+  <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(tallyConfig.company)}</SVCURRENTCOMPANY>
+          <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <UNIT NAME="Nos" Action="Delete">
+            <NAME>Nos</NAME>
+          </UNIT>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+
+    try {
+      const delResp = await sendToTally(deleteNosXml);
+      logger.info('[BitrixToTally] Deleted Nos unit exception', { resp: delResp });
+    } catch (e) {
+      logger.warn('[BitrixToTally] Could not delete Nos unit', { message: e.message });
+    }
+
+    // Step 2: Recreate Nos unit cleanly
+    const prerequisiteXml = `
+<ENVELOPE>
+  <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(tallyConfig.company)}</SVCURRENTCOMPANY>
+          <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <UNIT NAME="Nos" Action="Create">
+            <NAME>Nos</NAME>
+            <ORIGINALNAME>Numbers</ORIGINALNAME>
+            <UQCNAME>NOT APPLICABLE</UQCNAME>
+            <ISSIMPLEUNIT>Yes</ISSIMPLEUNIT>
+            <DECIMALPLACES>0</DECIMALPLACES>
+          </UNIT>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+
+    try {
+      const prereqResp = await sendToTally(prerequisiteXml);
+      logger.info('[BitrixToTally] Pre-created Nos unit', { resp: prereqResp });
+    } catch (prereqErr) {
+      logger.warn('[BitrixToTally] Could not pre-create Nos unit', { message: prereqErr.message });
+    }
+
     let updated = 0;
     let skipped = 0;
     let failed = 0;
@@ -396,10 +467,19 @@ async function syncBitrixToTally() {
 
         await updateTallyStockItem({
           name:        product.NAME,
-          baseUnit:    tallyItem.baseUnit || '',
+          baseUnit:    tallyItem.baseUnit || 'Nos',
           quantity:    bitrixQty,
           rate:        bitrixRate,
         });
+        // Push quantity via opening stock voucher if quantity changed
+        if (qtyChanged) {
+          await _pushQuantityToTally({
+            name:     product.NAME,
+            baseUnit: tallyItem.baseUnit || 'Nos',
+            quantity: bitrixQty,
+            rate:     bitrixRate,
+          }, tallyConfig, sendToTally, escapeXml, logger);
+        }
 
         updated++;
         await sleep(600);
@@ -436,6 +516,8 @@ async function updateTallyStockItem({ name, baseUnit, quantity, rate }) {
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const value   = (quantity * rate).toFixed(2);
 
+  const unit = baseUnit || '';
+
   const alterXml = `
 <ENVELOPE>
   <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
@@ -455,13 +537,13 @@ async function updateTallyStockItem({ name, baseUnit, quantity, rate }) {
             <STANDARDCOSTLIST.LIST ACTION="Replace">
               <STANDARDCOSTLIST>
                 <DATE>${dateStr}</DATE>
-                <RATE>${rate} /</RATE>
+                <RATE>${rate}</RATE>
               </STANDARDCOSTLIST>
             </STANDARDCOSTLIST.LIST>
             <STANDARDPRICELIST.LIST ACTION="Replace">
               <STANDARDPRICELIST>
                 <DATE>${dateStr}</DATE>
-                <RATE>${rate} /</RATE>
+                <RATE>${rate}</RATE>
               </STANDARDPRICELIST>
             </STANDARDPRICELIST.LIST>
           </STOCKITEM>
@@ -500,6 +582,8 @@ async function createTallyStockItem({ name, rate }) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
   const xml = `
 <ENVELOPE>
   <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
@@ -516,6 +600,8 @@ async function createTallyStockItem({ name, rate }) {
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
           <STOCKITEM NAME="${escapeXml(name)}" Action="Create">
             <NAME>${escapeXml(name)}</NAME>
+            <GSTAPPLICABLE>@@APPLICABLEYES</GSTAPPLICABLE>
+            <GSTTYPEOFSUPPLY>Goods</GSTTYPEOFSUPPLY>
           </STOCKITEM>
         </TALLYMESSAGE>
       </REQUESTDATA>
@@ -523,7 +609,10 @@ async function createTallyStockItem({ name, rate }) {
   </BODY>
 </ENVELOPE>`.trim();
 
+  // Ensure 'Primary' stock group exists — Tally requires it as default parent
+  // Primary stock group ensured once per sync at the top level — no per-item call needed
   const resp = await sendToTally(xml);
+
   const created  = parseInt((resp || '').match(/<CREATED>(\d+)<\/CREATED>/i)?.[1]  ?? '0');
   const altered  = parseInt((resp || '').match(/<ALTERED>(\d+)<\/ALTERED>/i)?.[1]  ?? '0');
   const errors   = parseInt((resp || '').match(/<ERRORS>(\d+)<\/ERRORS>/i)?.[1]    ?? '0');
@@ -533,7 +622,71 @@ async function createTallyStockItem({ name, rate }) {
     throw new Error(`Tally stock item create failed for "${name}": ${lineErr || 'ERRORS=' + errors}`);
   }
 
+  if (created === 0 && altered === 0) {
+    throw new Error(`Tally stock item create returned 0 for "${name}" — item may already exist or was ignored`);
+  }
+
   logger.info('[BitrixToTally] Stock item created in Tally', { name, rate, created, altered });
+}
+
+async function _pushQuantityToTally({ name, baseUnit, quantity, rate }, tallyConfig, sendToTally, escapeXml, logger) {
+  // Tally does not allow directly setting closing stock via master alter.
+  // The correct approach is to create/replace a Physical Stock voucher.
+  const unit    = baseUnit || 'Nos';
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const value   = (quantity * rate).toFixed(2);
+
+  const xml = `
+<ENVELOPE>
+  <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(tallyConfig.company)}</SVCURRENTCOMPANY>
+          <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER VCHTYPE="Physical Stock" ACTION="Create">
+            <DATE>${dateStr}</DATE>
+            <VOUCHERTYPENAME>Physical Stock</VOUCHERTYPENAME>
+            <VOUCHERNUMBER>BX-STOCK-${name.replace(/\s+/g, '-').substring(0, 20)}-${dateStr}</VOUCHERNUMBER>
+            <ALLinventoryentries.LIST>
+              <STOCKITEMNAME>${escapeXml(name)}</STOCKITEMNAME>
+              <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+              <RATE>${rate} /${unit}</RATE>
+              <AMOUNT>-${value}</AMOUNT>
+              <ACTUALQTY>${quantity} ${unit}</ACTUALQTY>
+              <BILLEDQTY>${quantity} ${unit}</BILLEDQTY>
+            </ALLinventoryentries.LIST>
+          </VOUCHER>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+
+  try {
+    const resp    = await sendToTally(xml);
+    const created = parseInt((resp || '').match(/<CREATED>(\d+)<\/CREATED>/i)?.[1] ?? '0');
+    const altered = parseInt((resp || '').match(/<ALTERED>(\d+)<\/ALTERED>/i)?.[1] ?? '0');
+    const errors  = parseInt((resp || '').match(/<ERRORS>(\d+)<\/ERRORS>/i)?.[1]   ?? '0');
+    const lineErr = (resp || '').match(/<LINEERROR>(.*?)<\/LINEERROR>/i)?.[1] || '';
+
+    if (errors > 0 || lineErr) {
+      logger.warn('[BitrixToTally] Physical Stock voucher failed — quantity not updated in Tally', {
+        name, error: lineErr || `ERRORS=${errors}`,
+        hint: 'Ensure "Physical Stock" voucher type exists in Tally: Gateway → Accounts Info → Voucher Types',
+      });
+    } else {
+      logger.info('[BitrixToTally] Physical Stock voucher pushed to Tally', { name, quantity, rate, created, altered });
+    }
+  } catch (e) {
+    logger.warn('[BitrixToTally] Physical Stock voucher exception — non-fatal', { name, message: e.message });
+  }
 }
 
 module.exports = { processInventory, getStockItems, fetchAllBitrixProducts, validateClosingStock, syncBitrixToTally };
