@@ -67,6 +67,11 @@ async function getSalesVouchersWithItems() {
 
   for (const chunk of chunks) {
     try {
+      // Convert DD-MM-YYYY → YYYYMMDD for Tally date variables
+      const toTallyDate = (dmy) => {
+        const [dd, mm, yyyy] = dmy.split('-');
+        return `${yyyy}${mm}${dd}`;
+      };
       const xml = `
         <ENVELOPE>
           <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
@@ -77,8 +82,8 @@ async function getSalesVouchersWithItems() {
                 <STATICVARIABLES>
                   <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
                   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-                  <SVFROMDATE>${chunk.from}</SVFROMDATE>
-                  <SVTODATE>${chunk.to}</SVTODATE>
+                  <SVFROMDATE>${toTallyDate(chunk.from)}</SVFROMDATE>
+                  <SVTODATE>${toTallyDate(chunk.to)}</SVTODATE>
                 </STATICVARIABLES>
               </REQUESTDESC>
             </EXPORTDATA>
@@ -87,6 +92,7 @@ async function getSalesVouchersWithItems() {
 
       logger.info(`[ItemInvoice] Fetching ${chunk.from} → ${chunk.to}`);
       const response = await sendToTally(xml);
+
       const vouchers = parseSalesVouchersWithItems(response);
       const newVouchers = vouchers.filter(v => {
         const key = `${v.voucherNumber}_${v.amount}`;
@@ -167,13 +173,15 @@ function parseSalesVouchersWithItems(xml) {
     if (!partyName || amount === 0) continue;
 
     // ── Parse inventory line items ────────────────────────────────────────────
-    // Tally stores each product row inside ALLINVENTORYENTRIES.LIST blocks
+    // Tally uses different tags depending on voucher mode:
+    // "As Invoice" → ALLINVENTORYENTRIES.LIST
+    // "As Voucher" → INVENTORYENTRIES.LIST or INVENTORYALLOCATIONS.LIST
     const items = [];
-    const itemRegex = /<ALLINVENTORYENTRIES\.LIST>([\s\S]*?)<\/ALLINVENTORYENTRIES\.LIST>/gi;
+    const itemRegex = /<(?:ALL)?INVENTORYENTRIES\.LIST>([\s\S]*?)<\/(?:ALL)?INVENTORYENTRIES\.LIST>|<INVENTORYALLOCATIONS\.LIST>([\s\S]*?)<\/INVENTORYALLOCATIONS\.LIST>/gi;
     let itemMatch;
 
     while ((itemMatch = itemRegex.exec(block)) !== null) {
-      const itemBlock = itemMatch[1];
+      const itemBlock = itemMatch[1] || itemMatch[2]; // capture group 1 or 2
 
       const getI = (tag) => {
         const m = new RegExp(`<${tag}[^>]*>(.*?)</${tag}>`, 'i').exec(itemBlock);
@@ -204,6 +212,26 @@ function parseSalesVouchersWithItems(xml) {
           unit:   qtyUnit,
         });
       }
+    }
+
+    // Fallback: scan for STOCKITEMNAME anywhere in the voucher block
+    // Some Tally configurations embed inventory under LEDGERENTRIES or other tags
+    if (items.length === 0) {
+      const stockNameMatches = [...block.matchAll(/<STOCKITEMNAME[^>]*>(.*?)<\/STOCKITEMNAME>/gi)];
+      const qtyMatches       = [...block.matchAll(/<ACTUALQTY[^>]*>(.*?)<\/ACTUALQTY>/gi)];
+      const rateMatches      = [...block.matchAll(/<RATE[^>]*>(.*?)<\/RATE>/gi)];
+      stockNameMatches.forEach((nm, i) => {
+        const sName = nm[1].trim();
+        if (!sName) return;
+        const qtyRaw  = (qtyMatches[i]  || [])[1] || '0';
+        const rateRaw = (rateMatches[i] || [])[1] || '0';
+        const qtyNum  = Math.abs(parseFloat(qtyRaw) || 0);
+        const rate    = Math.abs(parseFloat(rateRaw.split('/')[0].replace(/,/g, '').trim()) || 0);
+        if (qtyNum > 0) {
+          items.push({ stockItemName: sName, qty: qtyNum, rate, amount: qtyNum * rate, unit: '' });
+          logger.info('[ItemInvoice] Stock item found via fallback scan', { stockItemName: sName, qty: qtyNum, rate });
+        }
+      });
     }
 
     const date = dateRaw.length === 8
@@ -390,14 +418,11 @@ async function processItemInvoices() {
           }
         }
 
-        // Skip vouchers with no inventory line items
-        // These are service invoices or amount-only entries — handled by tallyInvoiceProcessor
-        if (!voucher.items || voucher.items.length === 0) {
-          logger.info('[ItemInvoice] No inventory line items — skipping (handled by amount-only sync)', {
-            voucherNumber: voucher.voucherNumber,
-          });
-          noItems++;
-          continue;
+        // Vouchers without inventory line items are synced as amount-only invoices.
+        // The title and amount are still valuable in Bitrix24 even without product rows.
+        const hasItems = voucher.items && voucher.items.length > 0;
+        if (!hasItems) {
+          noItems++; // counted but NOT skipped
         }
 
         // Check if this invoice already exists in Bitrix24 before creating

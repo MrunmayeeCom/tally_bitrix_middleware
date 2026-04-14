@@ -97,9 +97,6 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
         });
         return { success: true, voucher, skipped: true };
       }
-      // Claim this key before any awaited calls — no async gap after this point
-      _invoiceDedupCache[dedupKey] = Date.now();
-      saveInvoiceDedup(_invoiceDedupCache);
     }
 
     // Step 3b: Ensure party ledger exists in Tally
@@ -130,8 +127,55 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
       return { success: true, voucher, skipped: true };
     }
 
+    // Step 4a: Ensure all stock items in product rows exist in Tally before creating voucher
+    if (voucher.productRows && voucher.productRows.length > 0) {
+      const { sendToTally: _stt } = require('../connectors/tallyConnector');
+      for (const row of voucher.productRows) {
+        const itemName = row.PRODUCT_NAME || row.productName || '';
+        if (!itemName) continue;
+        const escName = escapeXml(itemName);
+        const ensureXml = `
+<ENVELOPE>
+  <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+          <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <STOCKITEM NAME="${escName}" Action="Create">
+            <NAME>${escName}</NAME>
+            <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>
+          </STOCKITEM>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`.trim();
+        try {
+          await _stt(ensureXml);
+          logger.info('Stock item ensured in Tally before voucher', { name: itemName });
+        } catch (e) {
+          logger.warn('Could not ensure stock item — voucher may fail', { name: itemName, message: e.message });
+        }
+      }
+    }
+
     // Step 4: Create voucher in Tally (new invoices only)
     const result = await createVoucher(voucher);
+
+    // Write dedup key only after confirmed success — prevents failed invoices from being permanently blocked
+    if (!isUpdate) {
+      const dedupKey = `invoice_${voucher.voucherNumber}`;
+      _invoiceDedupCache = loadInvoiceDedup();
+      _invoiceDedupCache[dedupKey] = Date.now();
+      saveInvoiceDedup(_invoiceDedupCache);
+    }
 
     // Step 5: Store the created voucher reference for reverse sync
     try {

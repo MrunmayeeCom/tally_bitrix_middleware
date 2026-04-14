@@ -188,11 +188,15 @@ async function processInventory() {
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    // Step 2: Sync each item to Bitrix24
+    // Step 2: Sync each item to Bitrix24 — use pre-fetched catalog for O(1) lookups
+    const bitrixProductMap = {};
+    existingProducts.forEach(p => {
+      bitrixProductMap[(p.NAME || '').trim().toLowerCase()] = p;
+    });
+
     for (const item of stockItems) {
       try {
-        // Check if product already exists
-        const existingProduct = await findBitrixProduct(item.name);
+        const existingProduct = bitrixProductMap[item.name.trim().toLowerCase()] || null;
 
         if (existingProduct) {
           const existingQty  = parseFloat(existingProduct.QUANTITY) || 0;

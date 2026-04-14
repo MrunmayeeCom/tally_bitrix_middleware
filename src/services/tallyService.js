@@ -193,22 +193,26 @@ async function createVoucher(voucher) {
           </REQUESTDESC>
           <REQUESTDATA>
             <TALLYMESSAGE xmlns:UDF="TallyUDF">
-              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create">
+              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="${(voucher.productRows && voucher.productRows.length > 0) ? 'Invoice Voucher View' : 'Accounting Voucher View'}">
                 <DATE>${voucher.date.replace(/-/g, '')}</DATE>
                 <VOUCHERTYPENAME>${voucher.voucherType}</VOUCHERTYPENAME>
                 <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
                 <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
+                <PERSISTEDVIEW>${(voucher.productRows && voucher.productRows.length > 0) ? 'Invoice Voucher View' : 'Accounting Voucher View'}</PERSISTEDVIEW>
+                <ISINVOICE>${(voucher.productRows && voucher.productRows.length > 0) ? 'Yes' : 'No'}</ISINVOICE>
                 <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
                 <NARRATION>${escapeXml(voucher.narration)}</NARRATION>
                 <ALLLEDGERENTRIES.LIST>
                   <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
                   <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+                  <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+                  <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
                   <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
-                </ALLLEDGERENTRIES.LIST>
-                <ALLLEDGERENTRIES.LIST>
-                  <LEDGERNAME>Sales</LEDGERNAME>
-                  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                  <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
+                  <BILLALLOCATIONS.LIST>
+                    <NAME>BX-${voucher.voucherNumber}</NAME>
+                    <BILLTYPE>New Ref</BILLTYPE>
+                    <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
+                  </BILLALLOCATIONS.LIST>
                 </ALLLEDGERENTRIES.LIST>
                 ${(voucher.productRows && voucher.productRows.length > 0)
                   ? voucher.productRows.map(row => {
@@ -219,14 +223,32 @@ async function createVoucher(voucher) {
                       return `
                 <ALLINVENTORYENTRIES.LIST>
                   <STOCKITEMNAME>${escapeXml(name)}</STOCKITEMNAME>
-                  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-                  <RATE>${price}</RATE>
-                  <AMOUNT>-${amount}</AMOUNT>
+                  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                  <RATE>${price}/Nos</RATE>
+                  <AMOUNT>${amount}</AMOUNT>
                   <ACTUALQTY>${qty} Nos</ACTUALQTY>
                   <BILLEDQTY>${qty} Nos</BILLEDQTY>
+                  <BATCHALLOCATIONS.LIST>
+                    <GODOWNNAME>Main Location</GODOWNNAME>
+                    <BATCHNAME>Primary Batch</BATCHNAME>
+                    <DESTINATIONGODOWNNAME>Main Location</DESTINATIONGODOWNNAME>
+                    <AMOUNT>${amount}</AMOUNT>
+                    <ACTUALQTY>${qty} Nos</ACTUALQTY>
+                    <BILLEDQTY>${qty} Nos</BILLEDQTY>
+                  </BATCHALLOCATIONS.LIST>
+                  <ACCOUNTINGALLOCATIONS.LIST>
+                    <LEDGERNAME>Sales</LEDGERNAME>
+                    <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                    <AMOUNT>${amount}</AMOUNT>
+                  </ACCOUNTINGALLOCATIONS.LIST>
                 </ALLINVENTORYENTRIES.LIST>`;
                     }).join('\n')
-                  : ''}
+                  : `
+                <ALLLEDGERENTRIES.LIST>
+                  <LEDGERNAME>Sales</LEDGERNAME>
+                  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                  <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
+                </ALLLEDGERENTRIES.LIST>`}
               </VOUCHER>
             </TALLYMESSAGE>
           </REQUESTDATA>
@@ -249,8 +271,13 @@ async function createVoucher(voucher) {
     throw new Error(`Tally rejected voucher: ${errMsg}`);
   }
 
-  const created    = parseInt((response || '').match(/<CREATED>(\d+)<\/CREATED>/i)?.[1] ?? '0');
+  // Log full response when EXCEPTIONS > 0 but no LINEERROR — helps diagnose silent failures
   const exceptions = parseInt((response || '').match(/<EXCEPTIONS>(\d+)<\/EXCEPTIONS>/i)?.[1] ?? '0');
+  if (exceptions > 0) {
+    logger.error('Tally voucher exception (no LINEERROR) — full response:', (response || '').substring(0, 500));
+  }
+
+  const created    = parseInt((response || '').match(/<CREATED>(\d+)<\/CREATED>/i)?.[1] ?? '0');
   const errors     = parseInt((response || '').match(/<ERRORS>(\d+)<\/ERRORS>/i)?.[1] ?? '0');
   const altered    = parseInt((response || '').match(/<ALTERED>(\d+)<\/ALTERED>/i)?.[1] ?? '0');
 
