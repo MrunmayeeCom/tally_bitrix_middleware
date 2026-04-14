@@ -344,8 +344,33 @@ async function processItemInvoices() {
         // Skip if already synced or previously failed with non-retryable error
         if (cache[cacheKey]) {
           const entry = cache[cacheKey];
-          // Tombstoned failures expire after 1 hour — retry after code fix
           if (entry.failed) {
+            // Before waiting for tombstone to expire, check if invoice already exists
+            // This clears stuck tombstones caused by productrow.set failures
+            try {
+              const existCheck = await callBitrix('crm.item.list', {
+                entityTypeId: 31,
+                filter: { '=title': `${voucher.partyName} - ${voucher.voucherNumber}` },
+                select: ['id'],
+              });
+              if ((existCheck.result?.items?.length ?? 0) > 0) {
+                const existingId = existCheck.result.items[0].id;
+                logger.info('[ItemInvoice] Tombstoned voucher already exists in Bitrix24 — clearing tombstone', {
+                  voucherNumber: voucher.voucherNumber,
+                  invoiceId: existingId,
+                });
+                newCache[cacheKey] = {
+                  invoiceId:     existingId,
+                  syncedAt:      new Date().toISOString(),
+                  source:        'tombstone-cleared',
+                  partyName:     voucher.partyName,
+                  voucherNumber: voucher.voucherNumber,
+                };
+                skipped++;
+                continue;
+              }
+            } catch (_) {}
+
             const ageMs = Date.now() - (entry.failedAt || 0);
             if (ageMs < 60 * 60 * 1000) {
               logger.info('[ItemInvoice] Skipping tombstoned voucher (< 1hr old)', {
@@ -355,7 +380,6 @@ async function processItemInvoices() {
               skipped++;
               continue;
             }
-            // Expired tombstone — remove it and retry
             logger.info('[ItemInvoice] Tombstone expired — retrying voucher', {
               voucherNumber: voucher.voucherNumber,
             });
@@ -374,6 +398,34 @@ async function processItemInvoices() {
           });
           noItems++;
           continue;
+        }
+
+        // Check if this invoice already exists in Bitrix24 before creating
+        // Handles tombstone-retry case where invoice was created but productrow.set failed
+        try {
+          const existCheck = await callBitrix('crm.item.list', {
+            entityTypeId: 31,
+            filter: { '=title': `${voucher.partyName} - ${voucher.voucherNumber}` },
+            select: ['id'],
+          });
+          if ((existCheck.result?.items?.length ?? 0) > 0) {
+            const existingId = existCheck.result.items[0].id;
+            logger.info('[ItemInvoice] Invoice already exists in Bitrix24 — marking as synced', {
+              voucherNumber: voucher.voucherNumber,
+              invoiceId: existingId,
+            });
+            newCache[cacheKey] = {
+              invoiceId:     existingId,
+              syncedAt:      new Date().toISOString(),
+              source:        'dedup-check',
+              partyName:     voucher.partyName,
+              voucherNumber: voucher.voucherNumber,
+            };
+            skipped++;
+            continue;
+          }
+        } catch (_) {
+          // Check failed — proceed with create, dedup cache will prevent future duplicates
         }
 
         // Find the party in Bitrix24
@@ -404,16 +456,9 @@ async function processItemInvoices() {
           || (typeof invoiceData.result === 'number' ? invoiceData.result : null);
 
         if (!invoiceId) {
-          logger.error('[ItemInvoice] Invoice creation returned no ID — raw result: ' + JSON.stringify(invoiceData.result).substring(0, 200), {
-            voucherNumber: voucher.voucherNumber,
-          });
-          failed++;
-          continue;
-        }
-
-        if (!invoiceId) {
           logger.error('[ItemInvoice] Invoice creation returned no ID', {
             voucherNumber: voucher.voucherNumber,
+            rawResult: JSON.stringify(invoiceData.result).substring(0, 200),
           });
           failed++;
           continue;
@@ -421,11 +466,12 @@ async function processItemInvoices() {
 
         // Step 2 — Attach product rows to the invoice
         if (productRows.length > 0) {
-          await callBitrix('crm.item.productrow.set', {
-            ownerType: '31',
-            ownerId:   Number(invoiceId),
-            productRows,
-          });
+          try {
+            await callBitrix('crm.item.productrow.set', {
+              ownerTypeId: 31,
+              ownerId:     Number(invoiceId),
+              productRows,
+            });
           // Verify rows actually saved — Bitrix24 sometimes returns 200 but saves nothing
           try {
             const verify = await callBitrix('crm.item.productrow.list', {
@@ -451,6 +497,14 @@ async function processItemInvoices() {
               invoiceId,
               rows:     productRows.length,
               products: productRows.map(r => `${r.PRODUCT_NAME} × ${r.QUANTITY}`).join(', '),
+            });
+          }
+          } catch (rowErr) {
+            // productrow.set failed — non-fatal, invoice already created successfully
+            logger.warn('[ItemInvoice] Product row attach failed — invoice created but rows missing', {
+              invoiceId,
+              voucherNumber: voucher.voucherNumber,
+              message: rowErr.message,
             });
           }
         }
@@ -510,8 +564,8 @@ async function processItemInvoices() {
       }
     }
 
-    // Save cache if anything was created or tombstoned (failed 400s)
-    if (created > 0 || failed > 0) saveCache(newCache);
+    // Save cache whenever anything changed — created, tombstoned, or dedup-backfilled
+    saveCache(newCache);
 
     logger.info('[ItemInvoice] Sync complete', { created, skipped, noItems, failed });
     return { success: true, created, skipped, noItems, failed };

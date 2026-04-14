@@ -34,7 +34,8 @@ async function getSalesVouchers(fromDate = null) {
 
   logger.info(`Fetching sales vouchers from Tally (quarterly chunks) | company: "${companyName}"`);
   if (!companyName || companyName === 'Test Company') {
-    logger.warn('[TallyInvoice] Company name looks like default — make sure the correct company is set in Settings');
+    logger.warn('[TallyInvoice] Company name is default "Test Company" — skipping sync until real company is configured in Settings');
+    return [];
   }
 
   const fmt = (d) => {
@@ -193,16 +194,6 @@ function parseSalesVouchersXml(xml, chunkFrom, chunkTo) {
       // Skip vouchers whose DATE doesn't fall within the requested chunk range
       // Tally sometimes returns master/template vouchers regardless of date filter
       const voucherDateRaw = get('DATE') || '';
-      if (voucherDateRaw.length === 8) {
-        const vy = parseInt(voucherDateRaw.slice(0, 4));
-        const vm = parseInt(voucherDateRaw.slice(4, 6));
-        const vd = parseInt(voucherDateRaw.slice(6, 8));
-        // Parse chunk.from and chunk.to (DD-MM-YYYY) for comparison
-        // These are available via closure from the outer loop
-        // We'll store parsed chunk dates on the voucher regex context
-        // Simple approach: skip if date is clearly outside any reasonable sales window
-        // The known bad voucher has DATE=20251231 but appears in ALL chunks - flag repeats
-      }
 
       const voucherTypeLower = voucherType.toLowerCase();
       // Day Book contains all voucher types — exclude everything that is clearly not a sales invoice
@@ -289,7 +280,29 @@ function parseSalesVouchersXml(xml, chunkFrom, chunkTo) {
         ? `${dateRaw.slice(0,4)}-${dateRaw.slice(4,6)}-${dateRaw.slice(6,8)}`
         : dateRaw;
 
-      vouchers.push({ voucherNumber, partyName, date, amount, voucherType, narration });
+      // Parse inventory line items from this voucher
+      const items = [];
+      const itemRegex = /<ALLINVENTORYENTRIES\.LIST>([\s\S]*?)<\/ALLINVENTORYENTRIES\.LIST>/gi;
+      let itemMatch;
+      while ((itemMatch = itemRegex.exec(block)) !== null) {
+        const itemBlock = itemMatch[1];
+        const getI = (tag) => {
+          const m = new RegExp(`<${tag}[^>]*>(.*?)</${tag}>`, 'i').exec(itemBlock);
+          return m ? m[1].trim() : '';
+        };
+        const stockItemName = getI('STOCKITEMNAME') || '';
+        if (!stockItemName) continue;
+        const qtyRaw  = getI('ACTUALQTY') || '0';
+        const qtyNum  = Math.abs(parseFloat(qtyRaw) || 0);
+        const rateRaw = getI('RATE') || '0';
+        const rate    = Math.abs(parseFloat(rateRaw.split('/')[0].replace(/,/g, '').trim()) || 0);
+        const itemAmt = Math.abs(parseFloat(getI('AMOUNT')) || 0);
+        if (qtyNum > 0) {
+          items.push({ stockItemName, qty: qtyNum, rate, amount: itemAmt });
+        }
+      }
+
+      vouchers.push({ voucherNumber, partyName, date, amount, voucherType, narration, items });
     }
 
     logger.info(`Parsed ${vouchers.length} sales vouchers from Tally`);
@@ -331,25 +344,44 @@ async function findBitrixParty(partyName) {
 // Check if a Smart Invoice with this Tally voucher number already exists in Bitrix24.
 // This is the secondary dedup guard — the local file cache is the primary guard,
 // but if the cache is wiped we need this to avoid creating duplicates.
-async function invoiceExistsInBitrix(voucherNumber) {
+async function invoiceExistsInBitrix(voucherNumber, partyName = '') {
+  // Check 1: by UF_ custom field (fast, may 400 if field not created)
   try {
     const res = await callBitrix('crm.item.list', {
       entityTypeId: 31,
       filter: { '=UF_TALLY_VOUCHER_NO': voucherNumber },
-      select: ['id', 'UF_TALLY_VOUCHER_NO'],
+      select: ['id'],
     });
-    return (res.result?.items?.length ?? 0) > 0;
-  } catch (e) {
-    logger.warn('[TallyInvoice] Pre-push dedup check failed — proceeding', {
-      voucherNumber,
-      message: e.message,
-    });
-    return false;
+    if ((res.result?.items?.length ?? 0) > 0) return true;
+  } catch (_) {
+    // UF_ field not available — fall through to title check
   }
+
+  // Check 2: by exact title (always available, no custom field needed)
+  if (partyName) {
+    try {
+      const res = await callBitrix('crm.item.list', {
+        entityTypeId: 31,
+        filter: { '=title': `${partyName} - ${voucherNumber}` },
+        select: ['id'],
+      });
+      if ((res.result?.items?.length ?? 0) > 0) return true;
+    } catch (e) {
+      logger.warn('[TallyInvoice] Title dedup check failed — blocking push to be safe', {
+        voucherNumber,
+        message: e.message,
+      });
+      // Both checks failed — return true to BLOCK the push
+      // safer to skip one invoice than to create 100 duplicates
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // Push a Tally sales voucher into Bitrix24 as a Smart Invoice
-async function pushVoucherToBitrix(voucher, partyIds) {
+async function pushVoucherToBitrix(voucher, partyIds, dealId = null, productRows = []) {
   const fields = {
     title:        `${voucher.partyName} - ${voucher.voucherNumber}`,
     opportunity:  voucher.amount,
@@ -359,14 +391,37 @@ async function pushVoucherToBitrix(voucher, partyIds) {
     ...partyIds,
     UF_TALLY_VOUCHER_NO: voucher.voucherNumber,
     UF_TALLY_SYNCED:     'Y',
+    ...(dealId ? { parentId2: dealId } : {}),
   };
 
   const data = await callBitrix('crm.item.add', {
-    entityTypeId: 31, // Smart Invoice
+    entityTypeId: 31,
     fields,
   });
 
-  return data.result?.item?.id || data.result;
+  const invoiceId = data.result?.item?.id || data.result;
+
+  // Attach product rows if available
+  if (invoiceId && productRows.length > 0) {
+    try {
+      await callBitrix('crm.item.productrow.set', {
+        ownerType:   'SI',
+        ownerId:     Number(invoiceId),
+        productRows,
+      });
+      logger.info('[TallyInvoice] Product rows attached to invoice', {
+        invoiceId,
+        rows: productRows.length,
+      });
+    } catch (rowErr) {
+      logger.warn('[TallyInvoice] Product row attach failed — non-fatal', {
+        invoiceId,
+        message: rowErr.message,
+      });
+    }
+  }
+
+  return invoiceId;
 }
 
 // Main Tally → Bitrix24 invoice processor
@@ -402,7 +457,7 @@ async function processTallyInvoices() {
         // Secondary guard — check Bitrix24 directly in case cache was wiped.
         // Runs only when the local cache has no record (avoids an extra API
         // call for the common case where everything is already cached).
-        const alreadyExists = await invoiceExistsInBitrix(voucher.voucherNumber);
+        const alreadyExists = await invoiceExistsInBitrix(voucher.voucherNumber, voucher.partyName);
         if (alreadyExists) {
           logger.info('[TallyInvoice] Invoice already in Bitrix24 — updating cache entry', {
             voucherNumber: voucher.voucherNumber,
@@ -428,9 +483,79 @@ async function processTallyInvoices() {
           continue;
         }
 
+        // Find matching deal in Bitrix24 pipeline for this voucher
+        let dealId = null;
+        try {
+          const { getTallyPipelineCategoryId } = require('../services/pipelineService');
+          const categoryId = await getTallyPipelineCategoryId();
+          if (categoryId) {
+            const dealSearch = await callBitrix('crm.deal.list', {
+              filter: {
+                '=TITLE':    `${voucher.partyName} - ${voucher.voucherNumber}`,
+                CATEGORY_ID: categoryId,
+              },
+              select: ['ID', 'TITLE'],
+            });
+            const deals = (dealSearch.result || []).filter(
+              d => (d.TITLE || '').trim().toLowerCase() ===
+                   `${voucher.partyName} - ${voucher.voucherNumber}`.trim().toLowerCase()
+            );
+            if (deals.length > 0) {
+              dealId = deals[0].ID;
+              logger.info('[TallyInvoice] Matched deal for invoice', {
+                voucherNumber: voucher.voucherNumber,
+                dealId,
+              });
+            }
+          }
+        } catch (dealErr) {
+          logger.warn('[TallyInvoice] Deal lookup failed — invoice will be unlinked', {
+            voucherNumber: voucher.voucherNumber,
+            message: dealErr.message,
+          });
+        }
+
+        // Build product rows if this voucher has line items
+        let productRows = [];
+        if (voucher.items && voucher.items.length > 0) {
+          try {
+            const { fetchAllBitrixProducts } = require('./inventoryProcessor');
+            const bitrixProducts = await fetchAllBitrixProducts();
+            const productMap = {};
+            bitrixProducts.forEach(p => { productMap[(p.NAME || '').toLowerCase()] = p; });
+
+            for (const item of voucher.items) {
+              const key = item.stockItemName.toLowerCase();
+              const matched = productMap[key];
+              productRows.push({
+                PRODUCT_NAME: item.stockItemName,
+                PRICE:        item.rate > 0 ? item.rate : (matched ? parseFloat(matched.PRICE) || 0 : 0),
+                QUANTITY:     item.qty,
+                DISCOUNT:     0,
+                CURRENCY_ID:  'INR',
+                ...(matched ? { PRODUCT_ID: matched.ID } : {}),
+              });
+            }
+            logger.info('[TallyInvoice] Product rows built', {
+              voucherNumber: voucher.voucherNumber,
+              count: productRows.length,
+            });
+          } catch (rowErr) {
+            logger.warn('[TallyInvoice] Product row build failed — amount-only invoice', {
+              voucherNumber: voucher.voucherNumber,
+              message: rowErr.message,
+            });
+          }
+        }
+
         // Push to Bitrix24
-        const bitrixId = await pushVoucherToBitrix(voucher, partyIds);
+        const bitrixId = await pushVoucherToBitrix(voucher, partyIds, dealId, productRows);
         newCache[cacheKey] = { bitrixId, syncedAt: new Date().toISOString() };
+
+        // Deduct inventory in Bitrix24 for each line item
+        if (productRows.length > 0) {
+          await _deductInventory(productRows, voucher.voucherNumber);
+        }
 
         logger.info('Tally invoice pushed to Bitrix24', {
           voucherNumber: voucher.voucherNumber,
@@ -479,7 +604,7 @@ async function processTallyInvoicesFromVouchers(vouchers) {
     try {
       const cacheKey = `${voucher.partyName}_${voucher.voucherNumber}_${voucher.amount}`;
       if (cache[cacheKey]) { skipped++; continue; }
-      const alreadyExists = await invoiceExistsInBitrix(voucher.voucherNumber);
+      const alreadyExists = await invoiceExistsInBitrix(voucher.voucherNumber, voucher.partyName);
       if (alreadyExists) {
         newCache[cacheKey] = { bitrixId: null, syncedAt: new Date().toISOString(), source: 'dedup-check' };
         skipped++; continue;
@@ -494,8 +619,52 @@ async function processTallyInvoicesFromVouchers(vouchers) {
         failed++;
         continue;
       }
-      const bitrixId = await pushVoucherToBitrix(voucher, partyIds);
+      // Find matching deal
+      let dealId = null;
+      try {
+        const { getTallyPipelineCategoryId } = require('../services/pipelineService');
+        const categoryId = await getTallyPipelineCategoryId();
+        if (categoryId) {
+          const dealSearch = await callBitrix('crm.deal.list', {
+            filter: { '=TITLE': `${voucher.partyName} - ${voucher.voucherNumber}`, CATEGORY_ID: categoryId },
+            select: ['ID', 'TITLE'],
+          });
+          const exactDeal = (dealSearch.result || []).find(
+            d => (d.TITLE || '').trim().toLowerCase() ===
+                 `${voucher.partyName} - ${voucher.voucherNumber}`.trim().toLowerCase()
+          );
+          if (exactDeal) dealId = exactDeal.ID;
+        }
+      } catch (_) {}
+
+      // Build product rows
+      let productRows = [];
+      if (voucher.items && voucher.items.length > 0) {
+        try {
+          const { fetchAllBitrixProducts } = require('./inventoryProcessor');
+          const prods = await fetchAllBitrixProducts();
+          const pmap = {};
+          prods.forEach(p => { pmap[(p.NAME || '').toLowerCase()] = p; });
+          for (const item of voucher.items) {
+            const mp = pmap[item.stockItemName.toLowerCase()];
+            productRows.push({
+              PRODUCT_NAME: item.stockItemName,
+              PRICE:        item.rate > 0 ? item.rate : (mp ? parseFloat(mp.PRICE) || 0 : 0),
+              QUANTITY:     item.qty,
+              DISCOUNT:     0,
+              CURRENCY_ID:  'INR',
+              ...(mp ? { PRODUCT_ID: mp.ID } : {}),
+            });
+          }
+        } catch (_) {}
+      }
+
+      const bitrixId = await pushVoucherToBitrix(voucher, partyIds, dealId, productRows);
       newCache[cacheKey] = { bitrixId, syncedAt: new Date().toISOString() };
+
+      if (productRows.length > 0) {
+        await _deductInventory(productRows, voucher.voucherNumber);
+      }
       logger.info('Tally invoice pushed to Bitrix24', { voucherNumber: voucher.voucherNumber, partyName: voucher.partyName, amount: voucher.amount, bitrixId });
       created++;
       await sleep(500);
@@ -507,6 +676,43 @@ async function processTallyInvoicesFromVouchers(vouchers) {
   saveCache(newCache);
   logger.info('Tally → Bitrix24 invoice sync completed', { created, skipped, failed });
   return { success: true, created, skipped, failed };
+}
+
+// Deduct sold quantities from Bitrix24 product catalog after a Tally invoice is synced.
+// This keeps inventory levels accurate — when a bill is created in Tally the stock goes down.
+async function _deductInventory(productRows, voucherNumber) {
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  for (const row of productRows) {
+    if (!row.PRODUCT_ID) continue; // unmapped product — skip
+    try {
+      // Fetch current quantity from Bitrix24
+      const data = await callBitrix('crm.product.get', { id: row.PRODUCT_ID });
+      const product = data.result || {};
+      const currentQty = parseFloat(product.QUANTITY) || 0;
+      const newQty     = Math.max(0, currentQty - (row.QUANTITY || 0));
+
+      await callBitrix('crm.product.update', {
+        id:     row.PRODUCT_ID,
+        fields: { QUANTITY: newQty },
+      });
+
+      logger.info('[TallyInvoice] Inventory deducted', {
+        voucherNumber,
+        product:    row.PRODUCT_NAME,
+        productId:  row.PRODUCT_ID,
+        before:     currentQty,
+        sold:       row.QUANTITY,
+        after:      newQty,
+      });
+      await sleep(300);
+    } catch (e) {
+      logger.warn('[TallyInvoice] Inventory deduction failed — non-fatal', {
+        voucherNumber,
+        product:  row.PRODUCT_NAME,
+        message:  e.message,
+      });
+    }
+  }
 }
 
 module.exports = { processTallyInvoices, getSalesVouchers, processTallyInvoicesFromVouchers };

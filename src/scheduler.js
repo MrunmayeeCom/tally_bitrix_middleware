@@ -241,21 +241,23 @@ function startScheduler() {
     logger.info('[Scheduler] Item-based invoice sync registered');
   }
 
-  // Tally → Bitrix24 invoice sync (two-way) — runs offset from invoice poller to avoid Bitrix24 overload
+  // Tally → Bitrix24 invoice sync — offset by 3 minutes from the base interval
   if (featureGate.isEnabled('invoice-sync')) {
-    // Offset by half the sync interval so it never fires simultaneously with the invoice poller
     const tallyInvoiceCron = syncMinutes >= 60
-      ? '30 * * * *'
+      ? '18 * * * *'   // 18 past the hour — never same minute as outstanding (0) or ledger (0)
       : syncMinutes >= 30
-      ? `15,45 * * * *`
-      : `${Math.floor(syncMinutes / 2)}-59/${syncMinutes} * * * *`;
+      ? '8,38 * * * *'  // offset 8 minutes
+      : `3-59/${syncMinutes} * * * *`; // starts 3 min late
 
     _activeTasks.push(cron.schedule(tallyInvoiceCron, () => {
-      if (isTallyInvoiceSyncing) return;
+      if (isTallyInvoiceSyncing) {
+        logger.warn('[Scheduler] Tally invoice sync already running — skipping duplicate trigger');
+        return;
+      }
       isTallyInvoiceSyncing = true;
       const { processTallyInvoices } = require('./processors/tallyInvoiceProcessor');
       processTallyInvoices()
-        .then(r => logger.info(`Tally invoice sync completed`, r))
+        .then(r => logger.info('Tally invoice sync completed', r))
         .catch(e => logger.error('Tally invoice sync failed', { message: e.message }))
         .finally(() => { isTallyInvoiceSyncing = false; });
     }, { timezone: 'Asia/Kolkata' }));

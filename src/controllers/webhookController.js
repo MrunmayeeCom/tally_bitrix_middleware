@@ -100,6 +100,18 @@ async function handleWebhook(req, res) {
           logger.info('invoice-sync not enabled — skipping dynamic item', { entityId });
           break;
         }
+        // Skip invoices created by Tally sync — prevents double-voucher in Tally
+        try {
+          const itemData = await require('../connectors/bitrixConnector').callBitrix('crm.item.get', { entityTypeId: 31, id: entityId });
+          const item = itemData.result?.item || itemData.result || {};
+          const isTallyCreated = item.ufCrm_64E895A2E83B1 === 'Y'
+            || (item.accountNumber && String(item.accountNumber).startsWith('BX-'))
+            || item.sourceDescription === 'TALLY_SYNC';
+          if (isTallyCreated) {
+            logger.info('Skipping ONCRMDYNAMICITEMADD — invoice was created by Tally sync', { entityId });
+            break;
+          }
+        } catch (_) {}
         await processInvoice(entityId, event === 'ONCRMDYNAMICITEMUPDATE', 'smart');
         break;
       }
@@ -178,6 +190,23 @@ async function handleWebhookPayload(payload) {
       if (!featureGate.isEnabled('invoice-sync')) {
         logger.info('[Poller] invoice-sync not enabled — skipping dynamic item', { entityId });
         break;
+      }
+      // Skip invoices created by Tally sync itself — title starts with a known party
+      // and was just created by itemInvoiceBuilder or tallyInvoiceProcessor.
+      // We check by fetching the invoice title and seeing if it was synced from Tally.
+      try {
+        const { callBitrix: _cb } = require('../connectors/bitrixConnector');
+        const itemData = await _cb('crm.item.get', { entityTypeId: 31, id: entityId });
+        const item = itemData.result?.item || itemData.result || {};
+        const isTallyCreated = item.ufCrm_64E895A2E83B1 === 'Y' // UF_TALLY_SYNCED
+          || (item.accountNumber && String(item.accountNumber).startsWith('BX-'))
+          || item.sourceDescription === 'TALLY_SYNC';
+        if (isTallyCreated) {
+          logger.info('[Poller] Skipping ONCRMDYNAMICITEMADD — invoice was created by Tally sync', { entityId });
+          break;
+        }
+      } catch (_) {
+        // If check fails, proceed normally — better to process than miss a real event
       }
       await processInvoice(entityId, event === 'ONCRMDYNAMICITEMUPDATE', 'smart');
       break;

@@ -8,6 +8,34 @@ const { recordSync } = require('../utils/syncHistory');
 const logger = require('../utils/logger');
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// In-memory store — survives for lifetime of the process
+let _userLimit = 0;
+
+// ── Persistent deal dedup ─────────────────────────────────────────────────────
+// Prevents re-creating deals across sync runs when the deal already exists
+const fs   = require('fs');
+const path = require('path');
+const DEAL_DEDUP_PATH = path.join(__dirname, '../../logs/deal-dedup-cache.json');
+
+function loadDealDedup() {
+  try {
+    if (fs.existsSync(DEAL_DEDUP_PATH)) {
+      return JSON.parse(fs.readFileSync(DEAL_DEDUP_PATH, 'utf8'));
+    }
+  } catch {}
+  return {};
+}
+
+function saveDealDedup(data) {
+  try {
+    const dir = path.dirname(DEAL_DEDUP_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DEAL_DEDUP_PATH, JSON.stringify(data, null, 2));
+  } catch (e) {
+    logger.warn('[OutstandingSync] Deal dedup cache save failed', { message: e.message });
+  }
+}
+
 // Process items in small parallel batches instead of one-by-one
 async function processInBatches(items, handler, batchSize = 3) {
   for (let i = 0; i < items.length; i += batchSize) {
@@ -158,17 +186,26 @@ async function findExistingDeal(partyName, voucherNumber) {
   try {
     const categoryId = await getTallyPipelineCategoryId();
     const fullTitle = `${partyName} - ${voucherNumber}`;
+
+    // Use exact TITLE match (=) not contains (%TITLE) to prevent
+    // "ABC - 001" matching "ABC - 0011" and causing false negatives
     const data = await callBitrix('crm.deal.list', {
       filter: {
-        TITLE:       fullTitle,
-        CATEGORY_ID: categoryId
+        '=TITLE':    fullTitle,
+        CATEGORY_ID: categoryId,
       },
-      select: ['ID', 'TITLE']
+      select: ['ID', 'TITLE'],
     });
     const deals = data.result || [];
-    if (deals.length > 0) {
-      logger.info('Existing deal found', { dealId: deals[0].ID, title: fullTitle });
-      return deals[0].ID;
+
+    // Extra safety: verify title matches exactly (Bitrix24 ignores = on some plans)
+    const exact = deals.find(
+      d => (d.TITLE || '').trim().toLowerCase() === fullTitle.trim().toLowerCase()
+    );
+
+    if (exact) {
+      logger.info('Existing deal found (exact match)', { dealId: exact.ID, title: fullTitle });
+      return exact.ID;
     }
   } catch (e) {
     logger.warn('Existing deal lookup failed', { voucherNumber, message: e.message });
@@ -330,7 +367,18 @@ async function processOutstanding() {
         }
 
         inFlightVouchers.add(dealKey);
-        const existingDealId = await findExistingDeal(outstanding.partyName, outstanding.voucherNumber);
+
+        // Check persistent dedup cache FIRST — avoids an API call for already-known deals
+        const _dealDedupCache = loadDealDedup();
+        const existingDealId = _dealDedupCache[dealKey]?.dealId
+          || await findExistingDeal(outstanding.partyName, outstanding.voucherNumber);
+
+        if (_dealDedupCache[dealKey]) {
+          logger.info('[OutstandingSync] Deal known from persistent cache — skipped API lookup', {
+            dealKey,
+            cachedDealId: _dealDedupCache[dealKey].dealId,
+          });
+        }
         let action;
 
         try {
@@ -339,6 +387,8 @@ async function processOutstanding() {
           try {
             // Check if invoice already exists for this voucher
             let alreadyAttached = false;
+
+            // Check 1: search by voucher number custom field
             try {
               const axios = require('axios');
               const bitrixConfig = require('../config/bitrixConfig');
@@ -353,10 +403,35 @@ async function processOutstanding() {
               );
               alreadyAttached = (res.data?.result?.items?.length ?? 0) > 0;
             } catch (e) {
-              // 400 = custom field not yet created; skip the check and proceed
-              logger.warn('Could not check existing invoice — proceeding', { message: e.message });
+              // UF_ field may not exist yet — fall through to title check
             }
-            if (alreadyAttached) return; // already attached
+
+            // Check 2: fallback search by exact title match (no UF_ dependency)
+            if (!alreadyAttached) {
+              try {
+                const titleCheck = await callBitrix('crm.item.list', {
+                  entityTypeId: 31,
+                  filter: {
+                    '=title': `${outstanding.partyName} - ${outstanding.voucherNumber}`,
+                  },
+                  select: ['id'],
+                });
+                alreadyAttached = (titleCheck.result?.items?.length ?? 0) > 0;
+              } catch (e) {
+                logger.warn('Invoice title dedup check failed — proceeding with caution', {
+                  message: e.message,
+                });
+                // If both checks fail, do NOT proceed — safer to skip than duplicate
+                alreadyAttached = true;
+              }
+            }
+
+            if (alreadyAttached) {
+              logger.info('Invoice already exists — skipping attach', {
+                voucherNumber: outstanding.voucherNumber,
+              });
+              return;
+            }
 
             // Create Smart Invoice linked to this deal
             await callBitrix('crm.item.add', {
@@ -444,6 +519,15 @@ async function processOutstanding() {
             if (newDealId) {
               await attachInvoiceToDeal(newDealId, outstanding);
               await postTimelineComment(newDealId, outstanding, 'created');
+
+              // Write to persistent dedup cache immediately so next sync skips creation
+              _dealDedupCache[dealKey] = {
+                dealId:    newDealId,
+                createdAt: new Date().toISOString(),
+                partyName: outstanding.partyName,
+                voucherNumber: outstanding.voucherNumber,
+              };
+              saveDealDedup(_dealDedupCache);
             }
             action = 'created';
           }

@@ -101,13 +101,16 @@ async function getStockItems() {
 // Find existing product in Bitrix24 by name
 async function findBitrixProduct(itemName) {
   try {
+    // Use %NAME (contains) instead of NAME (exact) because Bitrix24
+    // ignores exact match on NAME in crm.product.list on many plans
     const data = await callBitrix('crm.product.list', {
-      filter: { NAME: itemName },
+      filter: { '%NAME': itemName },
       select: ['ID', 'NAME', 'PRICE']
     });
     const products = data.result || [];
-    return products.find(p => 
-      (p.NAME || '').toLowerCase() === itemName.toLowerCase()
+    // JS-side exact match after the broad search
+    return products.find(p =>
+      (p.NAME || '').trim().toLowerCase() === itemName.trim().toLowerCase()
     ) || null;
   } catch (e) {
     logger.warn('Product search failed', { itemName, message: e.message });
