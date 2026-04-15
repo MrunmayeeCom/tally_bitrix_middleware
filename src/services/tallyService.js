@@ -224,18 +224,10 @@ async function createVoucher(voucher) {
                 <ALLINVENTORYENTRIES.LIST>
                   <STOCKITEMNAME>${escapeXml(name)}</STOCKITEMNAME>
                   <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                  <RATE>${price}/Nos</RATE>
+                  <RATE>${price}</RATE>
                   <AMOUNT>${amount}</AMOUNT>
-                  <ACTUALQTY>${qty} Nos</ACTUALQTY>
-                  <BILLEDQTY>${qty} Nos</BILLEDQTY>
-                  <BATCHALLOCATIONS.LIST>
-                    <GODOWNNAME>Main Location</GODOWNNAME>
-                    <BATCHNAME>Primary Batch</BATCHNAME>
-                    <DESTINATIONGODOWNNAME>Main Location</DESTINATIONGODOWNNAME>
-                    <AMOUNT>${amount}</AMOUNT>
-                    <ACTUALQTY>${qty} Nos</ACTUALQTY>
-                    <BILLEDQTY>${qty} Nos</BILLEDQTY>
-                  </BATCHALLOCATIONS.LIST>
+                  <ACTUALQTY>${qty}</ACTUALQTY>
+                  <BILLEDQTY>${qty}</BILLEDQTY>
                   <ACCOUNTINGALLOCATIONS.LIST>
                     <LEDGERNAME>Sales</LEDGERNAME>
                     <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>

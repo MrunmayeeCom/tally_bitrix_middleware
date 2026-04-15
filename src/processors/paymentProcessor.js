@@ -4,6 +4,90 @@ const { getTallyPipelineCategoryId } = require('../services/pipelineService');
 const tallyConfig = require('../config/tallyConfig');
 const logger = require('../utils/logger');
 
+function escapeXml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+// Create Invoice in Tally when Receipt comes first (no existing invoice)
+async function createInvoiceInTally(partyName, invoiceNumber, amount, date) {
+  try {
+    const formattedDate = date.replace(/-/g, '');
+    
+    const xml = `
+      <ENVELOPE>
+        <HEADER>
+          <TALLYREQUEST>Import Data</TALLYREQUEST>
+        </HEADER>
+        <BODY>
+          <IMPORTDATA>
+            <REQUESTDESC>
+              <REPORTNAME>Vouchers</REPORTNAME>
+              <STATICVARIABLES>
+                <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+              </STATICVARIABLES>
+            </REQUESTDESC>
+            <REQUESTDATA>
+              <TALLYMESSAGE xmlns:UDF="TallyUDF">
+                <VOUCHER VCHTYPE="Sales" ACTION="Create" OBJVIEW="Invoice Voucher View">
+                  <DATE>${formattedDate}</DATE>
+                  <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+                  <VOUCHERNUMBER>${invoiceNumber}</VOUCHERNUMBER>
+                  <REFERENCE>${invoiceNumber}</REFERENCE>
+                  <PERSISTEDVIEW>Invoice Voucher View</PERSISTEDVIEW>
+                  <ISINVOICE>Yes</ISINVOICE>
+                  <PARTYLEDGERNAME>${partyName}</PARTYLEDGERNAME>
+                  <NARRATION>Auto-created from Receipt ${invoiceNumber}</NARRATION>
+                  <ALLLEDGERENTRIES.LIST>
+                    <LEDGERNAME>${partyName}</LEDGERNAME>
+                    <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+                    <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+                    <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
+                    <AMOUNT>-${amount}</AMOUNT>
+                    <BILLALLOCATIONS.LIST>
+                      <NAME>${invoiceNumber}</NAME>
+                      <BILLTYPE>New Ref</BILLTYPE>
+                      <AMOUNT>-${amount}</AMOUNT>
+                    </BILLALLOCATIONS.LIST>
+                  </ALLLEDGERENTRIES.LIST>
+                  <ALLLEDGERENTRIES.LIST>
+                    <LEDGERNAME>Sales</LEDGERNAME>
+                    <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                    <AMOUNT>${amount}</AMOUNT>
+                  </ALLLEDGERENTRIES.LIST>
+                </VOUCHER>
+              </TALLYMESSAGE>
+            </REQUESTDATA>
+          </IMPORTDATA>
+        </BODY>
+      </ENVELOPE>`.trim();
+
+    const response = await sendToTally(xml);
+    const created = response.includes('<CREATED>1</CREATED>') || response.includes('<CREATED>1</CREATED>');
+    
+    logger.info('Auto-created invoice in Tally from receipt', {
+      invoiceNumber,
+      partyName,
+      amount,
+      created
+    });
+    
+    return created;
+  } catch (err) {
+    logger.error('Failed to auto-create invoice in Tally', {
+      invoiceNumber,
+      partyName,
+      message: err.message
+    });
+    return false;
+  }
+}
+
 // Fetch receipts from Tally (payment received vouchers)
 async function getReceipts() {
   logger.info('Fetching receipts from Tally');
@@ -100,6 +184,21 @@ function parseReceiptsXml(xml) {
   }
 }
 
+// Find Bitrix24 company by name
+async function findCompanyByName(companyName) {
+  try {
+    const data = await callBitrix('crm.company.list', {
+      filter: { '%TITLE': companyName },
+      select: ['ID', 'TITLE'],
+    });
+    const companies = data.result || [];
+    return companies[0] || null;
+  } catch (e) {
+    logger.warn('Company search failed', { companyName, message: e.message });
+    return null;
+  }
+}
+
 // Find Bitrix24 deal by party name and bill reference
 async function findDealByBillRef(partyName, billRef) {
   try {
@@ -188,7 +287,60 @@ async function processPayments() {
           : [{ billName: '', amount: receipt.amount }];
 
         for (const ref of refs) {
-          const deal = await findDealByBillRef(receipt.partyName, ref.billName);
+          let deal = await findDealByBillRef(receipt.partyName, ref.billName);
+          
+          // If no deal found but we have receipt — create invoice in Tally, then deal in Bitrix
+          if (!deal && ref.amount > 0) {
+            try {
+              // First create invoice in Tally (if doesn't exist)
+              const invoiceName = ref.billName || `RX-${receipt.voucherNumber}`;
+              const invoiceCreated = await createInvoiceInTally(
+                receipt.partyName,
+                invoiceName,
+                ref.amount,
+                receipt.date
+              );
+              
+              // Find company in Bitrix
+              const company = await findCompanyByName(receipt.partyName);
+              if (company) {
+                const categoryId = 542;
+                const dealTitle = ref.billName 
+                  ? `${receipt.partyName} - ${ref.billName}`
+                  : `${receipt.partyName} - Receipt ${receipt.voucherNumber}`;
+                
+                const newDeal = await callBitrix('crm.deal.add', {
+                  fields: {
+                    TITLE: dealTitle,
+                    OPPORTUNITY: ref.amount,
+                    COMPANY_ID: company.ID,
+                    CATEGORY_ID: categoryId,
+                    STAGE_ID: 'WON',
+                    UF_PAYMENT_STATUS: 'Paid',
+                    UF_RECEIPT_NUMBER: receipt.voucherNumber,
+                    UF_PAYMENT_DATE: receipt.date,
+                    UF_PAYMENT_AMOUNT: ref.amount,
+                    UF_BILL_DATE: receipt.date,
+                    UF_INVOICE_NUMBER: ref.billName || `TALLY-${receipt.voucherNumber}`,
+                  }
+                });
+                
+                deal = { ID: newDeal.result, TITLE: dealTitle, OPPORTUNITY: ref.amount };
+                logger.info('Deal auto-created from Tally receipt', {
+                  dealId: deal.ID,
+                  partyName: receipt.partyName,
+                  amount: ref.amount,
+                  voucherNumber: receipt.voucherNumber,
+                });
+              }
+            } catch (createErr) {
+              logger.error('Failed to auto-create deal from receipt', {
+                partyName: receipt.partyName,
+                message: createErr.message,
+              });
+            }
+          }
+          
           if (!deal) {
             logger.info('No matching deal found for receipt', {
               partyName: receipt.partyName,

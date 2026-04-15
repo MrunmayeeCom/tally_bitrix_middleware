@@ -6,7 +6,7 @@
  * Separate from tallyInvoiceProcessor.js which only syncs the total amount.
  */
 
-const { sendToTally }          = require('../connectors/tallyConnector');
+const { sendToTally, sendToTallyLarge } = require('../connectors/tallyConnector');
 const { callBitrix }           = require('../connectors/bitrixConnector');
 const { fetchAllBitrixProducts } = require('./inventoryProcessor');
 const tallyConfig              = require('../config/tallyConfig');
@@ -14,7 +14,7 @@ const logger                   = require('../utils/logger');
 const fs                       = require('fs');
 const path                     = require('path');
 
-const CACHE_PATH = path.join(__dirname, '../../logs/item-invoice-cache.json');
+const CACHE_PATH = path.join(__dirname, '../../logs/invoice-sync-cache.json');
 
 // ── cache helpers ─────────────────────────────────────────────────────────────
 
@@ -78,12 +78,14 @@ async function getSalesVouchersWithItems() {
           <BODY>
             <EXPORTDATA>
               <REQUESTDESC>
-                <REPORTNAME>Day Book</REPORTNAME>
+                <REPORTNAME>Sales Register</REPORTNAME>
                 <STATICVARIABLES>
                   <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
                   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
                   <SVFROMDATE>${toTallyDate(chunk.from)}</SVFROMDATE>
                   <SVTODATE>${toTallyDate(chunk.to)}</SVTODATE>
+                  <EXPLODEFLAG>Yes</EXPLODEFLAG>
+                  <SVDISPLAYFORMAT>##DEFAULTFORMAT</SVDISPLAYFORMAT>
                 </STATICVARIABLES>
               </REQUESTDESC>
             </EXPORTDATA>
@@ -91,8 +93,19 @@ async function getSalesVouchersWithItems() {
         </ENVELOPE>`.trim();
 
       logger.info(`[ItemInvoice] Fetching ${chunk.from} → ${chunk.to}`);
-      const response = await sendToTally(xml);
+      const response = await sendToTallyLarge(xml);
 
+      // Diagnostic: confirm inventory entry tags are present in raw Tally response
+      const invTagCount = (response.match(/<ALLINVENTORYENTRIES\.LIST>/gi) || []).length
+        + (response.match(/<INVENTORYENTRIES\.LIST>/gi) || []).length
+        + (response.match(/<INVENTORYALLOCATIONS\.LIST>/gi) || []).length;
+      logger.info(`[ItemInvoice] Raw XML inventory tag count for chunk ${chunk.from}→${chunk.to}`, {
+        ALLINVENTORYENTRIES: (response.match(/<ALLINVENTORYENTRIES\.LIST>/gi) || []).length,
+        INVENTORYENTRIES:    (response.match(/<INVENTORYENTRIES\.LIST>/gi) || []).length,
+        INVENTORYALLOCATIONS:(response.match(/<INVENTORYALLOCATIONS\.LIST>/gi) || []).length,
+        totalInvTags:        invTagCount,
+        responseBytes:       response.length,
+      });
       const vouchers = parseSalesVouchersWithItems(response);
       const newVouchers = vouchers.filter(v => {
         const key = `${v.voucherNumber}_${v.amount}`;
@@ -309,7 +322,7 @@ function buildProductRows(tallyItems, bitrixProducts) {
       QUANTITY:     item.qty,
       DISCOUNT_TYPE_ID: 1,
       DISCOUNT:     0,
-      TAX_RATE:     0,
+      // TAX_RATE:     0,
       CURRENCY_ID:  'INR',
       SORT:         rows.length + 100,
     };
@@ -360,15 +373,27 @@ async function processItemInvoices() {
     logger.info(`[ItemInvoice] ${vouchers.length} vouchers from Tally | ` +
       `${bitrixProducts.length} products in Bitrix24 catalog`);
 
-    const cache    = loadCache();
-    const newCache = { ...cache };
+    let cache    = loadCache();
+    const newCache = {};
+    for (const [key, val] of Object.entries(cache)) {
+      const normalizedKey = key.replace(/_(\d+\.\d+)$/, (_, amt) => `_${Math.round(parseFloat(amt))}`);
+      newCache[normalizedKey] = val;
+    }
+    if (Object.keys(newCache).length !== Object.keys(cache).length) {
+      logger.info('[ItemInvoice] Cache keys normalized (float → integer amounts)');
+      saveCache(newCache);
+    }
     let created = 0, skipped = 0, failed = 0, noItems = 0;
 
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
     for (const voucher of vouchers) {
-      const cacheKey = `item_${voucher.partyName}_${voucher.voucherNumber}_${voucher.amount}`;
+      // Normalize amount to integer string to avoid float mismatch (1756 vs 1756.0 vs 1756.00)
+      const normalizedAmount = Math.round(voucher.amount);
+      const cacheKey = `${voucher.partyName}_${voucher.voucherNumber}_${normalizedAmount}`;
       try {
+        // Reload cache from disk periodically to pick up entries written this run
+        cache = loadCache();
         // Skip if already synced or previously failed with non-retryable error
         if (cache[cacheKey]) {
           const entry = cache[cacheKey];
@@ -446,6 +471,7 @@ async function processItemInvoices() {
               partyName:     voucher.partyName,
               voucherNumber: voucher.voucherNumber,
             };
+            saveCache(newCache); // write immediately so next run skips via cache, not Bitrix API
             skipped++;
             continue;
           }
@@ -490,18 +516,33 @@ async function processItemInvoices() {
         }
 
         // Step 2 — Attach product rows to the invoice
+        logger.info('[ItemInvoice] Product rows to attach', {
+          invoiceId,
+          count: productRows.length,
+          rows: productRows.map(r => `${r.PRODUCT_NAME} × ${r.QUANTITY} @ ${r.PRICE}`).join(', '),
+        });
         if (productRows.length > 0) {
           try {
-            await callBitrix('crm.item.productrow.set', {
-              ownerTypeId: 31,
-              ownerId:     Number(invoiceId),
-              productRows,
-            });
+            let rowSetResult;
+            try {
+              rowSetResult = await callBitrix('crm.item.productrow.set', {
+                ownerType: 'SI',
+                ownerId:   Number(invoiceId),
+                productRows,
+              });
+            } catch (e1) {
+              logger.warn('[ItemInvoice] productrow.set with ownerType SI failed — retrying with ownerTypeId 31', { message: e1.message });
+              rowSetResult = await callBitrix('crm.item.productrow.set', {
+                ownerTypeId: 31,
+                ownerId:     Number(invoiceId),
+                productRows,
+              });
+            }
           // Verify rows actually saved — Bitrix24 sometimes returns 200 but saves nothing
           try {
             const verify = await callBitrix('crm.item.productrow.list', {
-              ownerTypeId: 31,
-              ownerId:     Number(invoiceId),
+              ownerType: 'SI',
+              ownerId:   Number(invoiceId),
             });
             const savedRows = verify.result?.productRows || [];
             if (savedRows.length === 0) {
@@ -559,6 +600,7 @@ async function processItemInvoices() {
           partyName:  voucher.partyName,
           voucherNumber: voucher.voucherNumber,
         };
+        saveCache(newCache); 
 
         logger.info('[ItemInvoice] Item-based invoice created successfully', {
           voucherNumber: voucher.voucherNumber,

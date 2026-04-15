@@ -114,7 +114,6 @@ async function pollInvoices() {
         const id = item.id || item.ID;
         const isNew = !cache[key];
         await processInvoice(id, !isNew, type);
-        // Only update hash cache on success — failed invoices must be retried next poll
         newCache[key] = hash;
         processed++;
         await sleep(800);
@@ -122,7 +121,6 @@ async function pollInvoices() {
         logger.error('[InvoicePoller] Failed to process invoice', {
           id: item.id || item.ID, message: e.message
         });
-        // Do NOT write to newCache — hash stays stale so next poll retries this invoice
         failed++;
       }
     }

@@ -328,6 +328,16 @@ async function processOutstanding() {
           }
         }
         _syncedParties.add(outstanding.partyName);
+
+        // Skip bills that were created from Bitrix (BX- prefix) — don't create reverse deals
+        if (outstanding.voucherNumber?.startsWith('BX-')) {
+          logger.info('Skipping Bitrix-originated voucher — no reverse deal', {
+            voucherNumber: outstanding.voucherNumber,
+            partyName: outstanding.partyName,
+          });
+          return;
+        }
+
         outstanding.daysPending   = daysPending(outstanding.dueDate);
         outstanding.pendingAmount = formatAmount(outstanding.pendingAmount);
         outstanding.billAmount    = formatAmount(outstanding.billAmount);

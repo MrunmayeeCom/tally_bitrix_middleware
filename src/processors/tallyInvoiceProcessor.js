@@ -5,7 +5,7 @@ const logger = require('../utils/logger');
 const fs   = require('fs');
 const path = require('path');
 
-const CACHE_PATH = path.join(__dirname, '../../logs/tally-invoice-cache.json');
+const CACHE_PATH = path.join(__dirname, '../../logs/invoice-sync-cache.json');
 
 function loadCache() {
   try {
@@ -34,8 +34,7 @@ async function getSalesVouchers(fromDate = null) {
 
   logger.info(`Fetching sales vouchers from Tally (quarterly chunks) | company: "${companyName}"`);
   if (!companyName || companyName === 'Test Company') {
-    logger.warn('[TallyInvoice] Company name is default "Test Company" — skipping sync until real company is configured in Settings');
-    return [];
+    logger.warn('[TallyInvoice] Company name looks like default — make sure the correct company is set in Settings');
   }
 
   const fmt = (d) => {
@@ -446,7 +445,8 @@ async function processTallyInvoices() {
 
     for (const voucher of vouchers) {
       try {
-        const cacheKey = `${voucher.partyName}_${voucher.voucherNumber}_${voucher.amount}`;
+        const normalizedAmount = Math.round(voucher.amount);
+        const cacheKey = `${voucher.partyName}_${voucher.voucherNumber}_${normalizedAmount}`;
 
         // Primary guard — skip if already in local cache
         if (cache[cacheKey]) {
@@ -491,15 +491,12 @@ async function processTallyInvoices() {
           if (categoryId) {
             const dealSearch = await callBitrix('crm.deal.list', {
               filter: {
-                '=TITLE':    `${voucher.partyName} - ${voucher.voucherNumber}`,
+                '%TITLE': `${voucher.partyName} - ${voucher.voucherNumber}`,
                 CATEGORY_ID: categoryId,
               },
               select: ['ID', 'TITLE'],
             });
-            const deals = (dealSearch.result || []).filter(
-              d => (d.TITLE || '').trim().toLowerCase() ===
-                   `${voucher.partyName} - ${voucher.voucherNumber}`.trim().toLowerCase()
-            );
+            const deals = dealSearch.result || [];
             if (deals.length > 0) {
               dealId = deals[0].ID;
               logger.info('[TallyInvoice] Matched deal for invoice', {
@@ -626,14 +623,10 @@ async function processTallyInvoicesFromVouchers(vouchers) {
         const categoryId = await getTallyPipelineCategoryId();
         if (categoryId) {
           const dealSearch = await callBitrix('crm.deal.list', {
-            filter: { '=TITLE': `${voucher.partyName} - ${voucher.voucherNumber}`, CATEGORY_ID: categoryId },
-            select: ['ID', 'TITLE'],
+            filter: { '%TITLE': `${voucher.partyName} - ${voucher.voucherNumber}`, CATEGORY_ID: categoryId },
+            select: ['ID'],
           });
-          const exactDeal = (dealSearch.result || []).find(
-            d => (d.TITLE || '').trim().toLowerCase() ===
-                 `${voucher.partyName} - ${voucher.voucherNumber}`.trim().toLowerCase()
-          );
-          if (exactDeal) dealId = exactDeal.ID;
+          if ((dealSearch.result || []).length > 0) dealId = dealSearch.result[0].ID;
         }
       } catch (_) {}
 

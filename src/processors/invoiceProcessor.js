@@ -2,6 +2,17 @@ const { getInvoice } = require('../services/bitrixService');
 const { mapInvoiceToVoucher } = require('../utils/mapper');
 const { createVoucher } = require('../services/tallyService');
 const logger = require('../utils/logger');
+const tallyConfig = require('../config/tallyConfig');
+
+function escapeXml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
 const fs = require('fs');
 const path = require('path');
 
@@ -130,10 +141,11 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     // Step 4a: Ensure all stock items in product rows exist in Tally before creating voucher
     if (voucher.productRows && voucher.productRows.length > 0) {
       const { sendToTally: _stt } = require('../connectors/tallyConnector');
+      const _esc = (s) => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
       for (const row of voucher.productRows) {
         const itemName = row.PRODUCT_NAME || row.productName || '';
         if (!itemName) continue;
-        const escName = escapeXml(itemName);
+        const escName = _esc(itemName);
         const ensureXml = `
 <ENVELOPE>
   <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
@@ -151,6 +163,7 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
           <STOCKITEM NAME="${escName}" Action="Create">
             <NAME>${escName}</NAME>
             <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>
+            <BASEUNIT>Nos</BASEUNIT>
           </STOCKITEM>
         </TALLYMESSAGE>
       </REQUESTDATA>
