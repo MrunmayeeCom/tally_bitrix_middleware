@@ -178,6 +178,43 @@ function parseLedgersXml(xml) {
 async function createVoucher(voucher) {
   logger.info('Creating voucher in Tally', { voucherNumber: voucher.voucherNumber });
 
+  const hasInventory = voucher.productRows && voucher.productRows.length > 0;
+  const objView      = hasInventory ? 'Invoice Voucher View' : 'Accounting Voucher View';
+  const totalAmount  = parseFloat(voucher.amount); // gross/brutto total (party ledger amount)
+
+  // For the Sales ledger entry: use net (ex-tax) amount if inventory mode, else gross
+  // In invoice view Tally derives tax separately, so Sales ledger = sum of PRICE_EXCLUSIVE
+  const netAmount = hasInventory
+    ? voucher.productRows.reduce((sum, row) => {
+        const exclusive = parseFloat(row.PRICE_EXCLUSIVE || row.priceExclusive || row.PRICE || row.price || 0);
+        const qty       = parseFloat(row.QUANTITY || row.quantity || 1);
+        return sum + exclusive * qty;
+      }, 0)
+    : totalAmount;
+
+  const inventoryXml = hasInventory
+    ? voucher.productRows.map(row => {
+        const name      = escapeXml(row.PRODUCT_NAME || row.productName || '');
+        const exclusive = parseFloat(row.PRICE_EXCLUSIVE || row.priceExclusive || row.PRICE || row.price || 0);
+        const qty       = parseFloat(row.QUANTITY || row.quantity || 1);
+        const amount    = (exclusive * qty).toFixed(2);
+        return `
+                <ALLINVENTORYENTRIES.LIST>
+                  <STOCKITEMNAME>${name}</STOCKITEMNAME>
+                  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                  <RATE>${exclusive} Nos</RATE>
+                  <AMOUNT>-${amount}</AMOUNT>
+                  <ACTUALQTY>${qty} Nos</ACTUALQTY>
+                  <BILLEDQTY>${qty} Nos</BILLEDQTY>
+                  <ACCOUNTINGALLOCATIONS.LIST>
+                    <LEDGERNAME>Sales</LEDGERNAME>
+                    <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                    <AMOUNT>-${amount}</AMOUNT>
+                  </ACCOUNTINGALLOCATIONS.LIST>
+                </ALLINVENTORYENTRIES.LIST>`;
+      }).join('\n')
+    : '';
+
   const xml = `
     <ENVELOPE>
       <HEADER>
@@ -193,54 +230,44 @@ async function createVoucher(voucher) {
           </REQUESTDESC>
           <REQUESTDATA>
             <TALLYMESSAGE xmlns:UDF="TallyUDF">
-              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="${(voucher.productRows && voucher.productRows.length > 0) ? 'Invoice Voucher View' : 'Accounting Voucher View'}">
+              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="${objView}">
                 <DATE>${voucher.date.replace(/-/g, '')}</DATE>
                 <VOUCHERTYPENAME>${voucher.voucherType}</VOUCHERTYPENAME>
                 <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
                 <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
-                <PERSISTEDVIEW>${(voucher.productRows && voucher.productRows.length > 0) ? 'Invoice Voucher View' : 'Accounting Voucher View'}</PERSISTEDVIEW>
-                <ISINVOICE>${(voucher.productRows && voucher.productRows.length > 0) ? 'Yes' : 'No'}</ISINVOICE>
+                <PERSISTEDVIEW>${objView}</PERSISTEDVIEW>
+                <ISINVOICE>${hasInventory ? 'Yes' : 'No'}</ISINVOICE>
+
                 <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
+                <BASICBUYERNAME>${escapeXml(voucher.partyName)}</BASICBUYERNAME>
+                <BASICBASEPARTYNAME>${escapeXml(voucher.partyName)}</BASICBASEPARTYNAME>
+
                 <NARRATION>${escapeXml(voucher.narration)}</NARRATION>
+
+                <!-- Party receivable: negative = debit in both view modes -->
                 <ALLLEDGERENTRIES.LIST>
                   <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
                   <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
                   <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
                   <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
-                  <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
+                  <AMOUNT>-${totalAmount.toFixed(2)}</AMOUNT>
                   <BILLALLOCATIONS.LIST>
                     <NAME>BX-${voucher.voucherNumber}</NAME>
                     <BILLTYPE>New Ref</BILLTYPE>
-                    <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
+                    <AMOUNT>-${totalAmount.toFixed(2)}</AMOUNT>
                   </BILLALLOCATIONS.LIST>
                 </ALLLEDGERENTRIES.LIST>
-                ${(voucher.productRows && voucher.productRows.length > 0)
-                  ? voucher.productRows.map(row => {
-                      const name = row.PRODUCT_NAME || row.productName || '';
-                      const price = parseFloat(row.PRICE || row.price || 0);
-                      const qty = parseFloat(row.QUANTITY || row.quantity || 1);
-                      const amount = (price * qty).toFixed(2);
-                      return `
-                <ALLINVENTORYENTRIES.LIST>
-                  <STOCKITEMNAME>${escapeXml(name)}</STOCKITEMNAME>
-                  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                  <RATE>${price}</RATE>
-                  <AMOUNT>${amount}</AMOUNT>
-                  <ACTUALQTY>${qty}</ACTUALQTY>
-                  <BILLEDQTY>${qty}</BILLEDQTY>
-                  <ACCOUNTINGALLOCATIONS.LIST>
-                    <LEDGERNAME>Sales</LEDGERNAME>
-                    <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                    <AMOUNT>${amount}</AMOUNT>
-                  </ACCOUNTINGALLOCATIONS.LIST>
-                </ALLINVENTORYENTRIES.LIST>`;
-                    }).join('\n')
-                  : `
+
+                <!-- Sales ledger: negative in invoice view = credit -->
                 <ALLLEDGERENTRIES.LIST>
                   <LEDGERNAME>Sales</LEDGERNAME>
                   <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                  <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
-                </ALLLEDGERENTRIES.LIST>`}
+                  <ISPARTYLEDGER>No</ISPARTYLEDGER>
+                  <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>
+                  <AMOUNT>-${netAmount.toFixed(2)}</AMOUNT>
+                </ALLLEDGERENTRIES.LIST>
+
+                ${inventoryXml}
               </VOUCHER>
             </TALLYMESSAGE>
           </REQUESTDATA>
@@ -277,6 +304,29 @@ async function createVoucher(voucher) {
     if (voucher.voucherType === 'Sales Order') {
       logger.warn('Sales Order rejected by Tally — retrying as Sales Invoice', { voucherNumber: voucher.voucherNumber });
       return createVoucher({ ...voucher, voucherType: 'Sales' });
+    }
+    // Exception with no LINEERROR almost always means the party ledger doesn't exist in Tally.
+    // Auto-create it under Sundry Debtors and retry once.
+    if (voucher.partyName && exceptions > 0 && errors === 0) {
+      logger.warn('Tally exception — party ledger likely missing, auto-creating and retrying', {
+        voucherNumber: voucher.voucherNumber,
+        partyName: voucher.partyName,
+      });
+      try {
+        await createLedger({ ledgerName: voucher.partyName, groupName: 'Sundry Debtors', openingBalance: 0 });
+        logger.info('Party ledger auto-created — retrying voucher', { partyName: voucher.partyName });
+        // Retry once — do NOT recurse again if it fails
+        const retryResponse = await sendToTally(xml);
+        const retryCreated    = parseInt((retryResponse || '').match(/<CREATED>(\d+)<\/CREATED>/i)?.[1] ?? '0');
+        const retryExceptions = parseInt((retryResponse || '').match(/<EXCEPTIONS>(\d+)<\/EXCEPTIONS>/i)?.[1] ?? '0');
+        if (retryCreated > 0) {
+          logger.info('Voucher created successfully after ledger auto-create', { voucherNumber: voucher.voucherNumber });
+          return retryResponse;
+        }
+        logger.error('Retry after ledger auto-create still failed', { voucherNumber: voucher.voucherNumber, retryExceptions });
+      } catch (ledgerErr) {
+        logger.warn('Ledger auto-create failed', { partyName: voucher.partyName, message: ledgerErr.message });
+      }
     }
     logger.error('Tally voucher create failed', { voucherNumber: voucher.voucherNumber, created, exceptions, errors });
     throw new Error(`Tally voucher create failed (created=${created}, exceptions=${exceptions}, errors=${errors})`);

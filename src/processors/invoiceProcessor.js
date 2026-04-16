@@ -206,6 +206,28 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
       logger.warn('Invoice MASTERID cache failed', { message: cacheErr.message });
     }
 
+    // Step 5b: Link this Bitrix24 invoice to its parent Deal
+    try {
+      const dealId = invoice.parentId2 || invoice.DEAL_ID || null;
+      if (dealId && entityId) {
+        const { callBitrix } = require('../connectors/bitrixConnector');
+        await callBitrix('crm.item.update', {
+          entityTypeId: 31,
+          id:           Number(entityId),
+          fields:       { parentId2: Number(dealId) },
+        });
+        logger.info('Invoice linked to Deal in Bitrix24', {
+          entityId,
+          dealId,
+          voucherNumber: voucher.voucherNumber,
+        });
+      } else {
+        logger.info('Invoice has no parent Deal — skipping Deal link', { entityId });
+      }
+    } catch (dealLinkErr) {
+      logger.warn('Deal link failed — non-fatal', { entityId, message: dealLinkErr.message });
+    }
+
     // Step 6: Attach product rows from inventory catalog back to the Bitrix24 invoice.
     //
     // This is the Feature 7 addition. When a new Smart Invoice is created in Bitrix24

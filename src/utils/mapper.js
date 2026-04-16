@@ -54,9 +54,6 @@ function mapInvoiceToVoucher(invoice) {
   const partyName =
     invoice.CLIENT_TITLE  ||
     invoice.clientTitle   ||
-    (invoice.contactId  > 0 ? `Contact#${invoice.contactId}`  : null) ||
-    (invoice.companyId  > 0 ? `Company#${invoice.companyId}`  : null) ||
-    invoice.title         ||   // e.g. "Invoice #164" as last resort
     '';
 
   const today = new Date().toISOString().split('T')[0];

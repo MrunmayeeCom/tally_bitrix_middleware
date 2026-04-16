@@ -113,7 +113,7 @@ async function pollInvoices() {
       try {
         const id = item.id || item.ID;
         const isNew = !cache[key];
-        await processInvoice(id, !isNew, type);
+        await processInvoice(id, false, type);
         newCache[key] = hash;
         processed++;
         await sleep(800);

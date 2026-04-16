@@ -56,7 +56,7 @@ async function getSalesVouchers(fromDate = null) {
   let cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
   while (cursor <= endDate) {
     const chunkStart = new Date(cursor);
-    // Monthly chunks — Sales Register respects date filters better than Day Book
+    // Monthly chunks — Day Book contains actual voucher details
     const chunkEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
     chunks.push({
       from: fmt(chunkStart),
@@ -79,7 +79,7 @@ async function getSalesVouchers(fromDate = null) {
           <BODY>
             <EXPORTDATA>
               <REQUESTDESC>
-                <REPORTNAME>Sales Register</REPORTNAME>
+                <REPORTNAME>Day Book</REPORTNAME>
                 <STATICVARIABLES>
                   <SVCURRENTCOMPANY>${companyName}</SVCURRENTCOMPANY>
                   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
@@ -484,24 +484,36 @@ async function processTallyInvoices() {
         }
 
         // Find matching deal in Bitrix24 pipeline for this voucher
+        // Strategy: Find deal by party name only, check if amount matches
         let dealId = null;
         try {
           const { getTallyPipelineCategoryId } = require('../services/pipelineService');
           const categoryId = await getTallyPipelineCategoryId();
           if (categoryId) {
+            // First: Search for existing deal by party name only
             const dealSearch = await callBitrix('crm.deal.list', {
               filter: {
-                '%TITLE': `${voucher.partyName} - ${voucher.voucherNumber}`,
+                '%TITLE': voucher.partyName,
                 CATEGORY_ID: categoryId,
+                '=OPPORTUNITY': voucher.amount,
               },
-              select: ['ID', 'TITLE'],
+              select: ['ID', 'TITLE', 'OPPORTUNITY'],
             });
             const deals = dealSearch.result || [];
             if (deals.length > 0) {
               dealId = deals[0].ID;
-              logger.info('[TallyInvoice] Matched deal for invoice', {
+              logger.info('[TallyInvoice] Matched deal by party+amount for invoice', {
                 voucherNumber: voucher.voucherNumber,
+                partyName: voucher.partyName,
                 dealId,
+                amount: voucher.amount,
+              });
+            } else {
+              // No matching deal - create new deal with this invoice amount
+              logger.info('[TallyInvoice] No matching deal — will create new deal', {
+                voucherNumber: voucher.voucherNumber,
+                partyName: voucher.partyName,
+                amount: voucher.amount,
               });
             }
           }
@@ -536,11 +548,44 @@ async function processTallyInvoices() {
             logger.info('[TallyInvoice] Product rows built', {
               voucherNumber: voucher.voucherNumber,
               count: productRows.length,
+              tallyItems: voucher.items.map(i => `${i.stockItemName} x${i.qty} @${i.rate}`),
+              rows: productRows.map(r => ({ name: r.PRODUCT_NAME, productId: r.PRODUCT_ID, price: r.PRICE, qty: r.QUANTITY })),
             });
           } catch (rowErr) {
             logger.warn('[TallyInvoice] Product row build failed — amount-only invoice', {
               voucherNumber: voucher.voucherNumber,
               message: rowErr.message,
+            });
+          }
+        }
+
+        // Create new deal if no matching deal found
+        if (!dealId && partyIds.COMPANY_ID) {
+          try {
+            const { getTallyPipelineCategoryId } = require('../services/pipelineService');
+            const categoryId = await getTallyPipelineCategoryId();
+            if (categoryId) {
+              const newDeal = await callBitrix('crm.deal.add', {
+                fields: {
+                  TITLE: `${voucher.partyName} - ${voucher.voucherNumber}`,
+                  OPPORTUNITY: voucher.amount,
+                  CURRENCY_ID: 'INR',
+                  COMPANY_ID: partyIds.COMPANY_ID,
+                  CATEGORY_ID: categoryId,
+                  CLOSEDATE: voucher.date,
+                },
+              });
+              dealId = newDeal.result;
+              logger.info('[TallyInvoice] Created new deal for invoice', {
+                voucherNumber: voucher.voucherNumber,
+                dealId,
+                amount: voucher.amount,
+              });
+            }
+          } catch (createErr) {
+            logger.warn('[TallyInvoice] Deal creation failed — invoice will be unlinked', {
+              voucherNumber: voucher.voucherNumber,
+              message: createErr.message,
             });
           }
         }

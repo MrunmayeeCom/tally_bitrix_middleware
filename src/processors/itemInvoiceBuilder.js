@@ -78,7 +78,7 @@ async function getSalesVouchersWithItems() {
           <BODY>
             <EXPORTDATA>
               <REQUESTDESC>
-                <REPORTNAME>Sales Register</REPORTNAME>
+                <REPORTNAME>Day Book</REPORTNAME>
                 <STATICVARIABLES>
                   <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
                   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
@@ -486,7 +486,73 @@ async function processItemInvoices() {
         // Build product rows from Tally line items
         const productRows = buildProductRows(voucher.items, bitrixProducts);
 
-        // Step 1 — Create the Smart Invoice in Bitrix24
+        // Step 0 — Find or create Deal first (Smart Invoice products work better when linked to deals)
+        let dealId = null;
+        try {
+          const { getTallyPipelineCategoryId } = require('../services/pipelineService');
+          const categoryId = await getTallyPipelineCategoryId();
+          if (categoryId) {
+            // Search for existing deal even if no company/contact exists - use party name directly
+            const dealSearch = await callBitrix('crm.deal.list', {
+              filter: {
+                '%TITLE': voucher.partyName,
+                CATEGORY_ID: categoryId,
+                '=OPPORTUNITY': voucher.amount,
+              },
+              select: ['ID', 'TITLE', 'OPPORTUNITY'],
+            });
+            const deals = dealSearch.result || [];
+            if (deals.length > 0) {
+              dealId = deals[0].ID;
+              logger.info('[ItemInvoice] Matched existing deal by party+amount', {
+                voucherNumber: voucher.voucherNumber,
+                dealId,
+                amount: voucher.amount,
+              });
+            } else {
+              logger.info('[ItemInvoice] No matching deal — will create new deal', {
+                voucherNumber: voucher.voucherNumber,
+                partyName: voucher.partyName,
+                amount: voucher.amount,
+              });
+            }
+          }
+        } catch (dealErr) {
+          logger.warn('[ItemInvoice] Deal lookup failed', { message: dealErr.message });
+        }
+
+        // Step 1 — Create new deal if no matching deal found (even without company/contact)
+        if (!dealId) {
+          try {
+            const { getTallyPipelineCategoryId } = require('../services/pipelineService');
+            const categoryId = await getTallyPipelineCategoryId();
+            if (categoryId) {
+              const newDeal = await callBitrix('crm.deal.add', {
+                fields: {
+                  TITLE: `${voucher.partyName} - ${voucher.voucherNumber}`,
+                  OPPORTUNITY: voucher.amount,
+                  CURRENCY_ID: 'INR',
+                  COMPANY_ID: partyIds.companyId,
+                  CONTACT_ID: partyIds.contactId,
+                  CATEGORY_ID: categoryId,
+                  CLOSEDATE: voucher.date,
+                },
+              });
+              dealId = newDeal.result;
+              logger.info('[ItemInvoice] Created new deal for invoice', {
+                voucherNumber: voucher.voucherNumber,
+                dealId,
+                amount: voucher.amount,
+              });
+            }
+          } catch (createErr) {
+            logger.warn('[ItemInvoice] Deal creation failed — invoice will be unlinked', {
+              message: createErr.message,
+            });
+          }
+        }
+
+        // Step 2 — Create the Smart Invoice in Bitrix24
         // Only fields confirmed valid for crm.item.add (entityTypeId 31)
         // accountNumber and begindate cause 400 on some Bitrix24 versions
         const invoiceFields = {
@@ -494,6 +560,7 @@ async function processItemInvoices() {
           opportunity: voucher.amount,
           currencyId:  'INR',
           closeDate:   voucher.date,
+          parentId3:    dealId, // Link to deal
           ...partyIds,
         };
 
@@ -515,7 +582,26 @@ async function processItemInvoices() {
           continue;
         }
 
-        // Step 2 — Attach product rows to the invoice
+        // Step 3 — Attach product rows to the deal first (invoice may inherit)
+        if (productRows.length > 0 && dealId) {
+          try {
+            await callBitrix('crm.deal.productrow.set', {
+              ownerId:     Number(dealId),
+              productRows,
+            });
+            logger.info('[ItemInvoice] Product rows attached to deal', {
+              dealId,
+              count: productRows.length,
+            });
+          } catch (dealRowErr) {
+            logger.warn('[ItemInvoice] Product row attach to deal failed', {
+              dealId,
+              message: dealRowErr.message,
+            });
+          }
+        }
+
+        // Step 4 — Attach product rows to the invoice
         logger.info('[ItemInvoice] Product rows to attach', {
           invoiceId,
           count: productRows.length,
