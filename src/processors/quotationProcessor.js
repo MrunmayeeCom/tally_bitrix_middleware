@@ -267,6 +267,28 @@ async function _processQuotation({ entityId, isUpdate = false }) {
     recentlyCreated.set(entityKey, { createdAt: Date.now(), voucherNumber: voucher.voucherNumber });
     setTimeout(() => recentlyCreated.delete(entityKey), 30000);
 
+    // Step: Link this quotation to its parent Deal (shows in estimates section of the deal)
+    try {
+      const dealId = quotation.parentId || quotation.parentId2 || quotation.DEAL_ID || null;
+      if (dealId && entityId) {
+        const { callBitrix } = require('../connectors/bitrixConnector');
+        await callBitrix('crm.item.update', {
+          entityTypeId: 7,  // Quotations
+          id:           Number(entityId),
+          fields:       { parentId: Number(dealId) },
+        });
+        logger.info('Quotation linked to Deal in Bitrix24', {
+          entityId,
+          dealId,
+          voucherNumber: voucher.voucherNumber,
+        });
+      } else {
+        logger.info('Quotation has no parent Deal — skipping Deal link', { entityId });
+      }
+    } catch (dealLinkErr) {
+      logger.warn('Quotation Deal link failed — non-fatal', { entityId, message: dealLinkErr.message });
+    }
+
     logger.info('Quotation processor completed — created', {
       entityId,
       voucherNumber: voucher.voucherNumber,

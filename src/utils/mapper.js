@@ -49,8 +49,7 @@ function mapInvoiceToVoucher(invoice) {
   // fall back to Bitrix id if not present
   const voucherNumber = invoice.accountNumber || invoice.ACCOUNT_NUMBER || String(id);
 
-  // partyName: try all known locations; if contactId/companyId > 0
-  // those IDs are available for an enrichment call if needed
+  // partyName: try all known locations; CLIENT_TITLE comes directly from Smart Invoice receipt column
   const partyName =
     invoice.CLIENT_TITLE  ||
     invoice.clientTitle   ||

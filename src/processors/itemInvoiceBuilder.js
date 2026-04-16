@@ -316,32 +316,31 @@ function buildProductRows(tallyItems, bitrixProducts) {
       ? item.rate
       : bitrixProduct ? (parseFloat(bitrixProduct.PRICE) || 0) : 0;
 
+    if (!bitrixProduct) {
+      logger.warn('[ItemInvoice] Line item not found in Bitrix24 catalog — skipping item (PRODUCT_ID required)', {
+        name: item.stockItemName,
+        qty:  item.qty,
+        rate: item.rate,
+      });
+      continue;
+    }
+
     const row = {
+      PRODUCT_ID:   bitrixProduct.ID,
       PRODUCT_NAME: item.stockItemName,
       PRICE:        price,
       QUANTITY:     item.qty,
       DISCOUNT_TYPE_ID: 1,
       DISCOUNT:     0,
-      // TAX_RATE:     0,
       CURRENCY_ID:  'INR',
       SORT:         rows.length + 100,
     };
 
-    // Link to existing Bitrix24 product if found in catalog
-    // This connects the invoice row to the inventory item
-    if (bitrixProduct) {
-      row.PRODUCT_ID = bitrixProduct.ID;
-      logger.info('[ItemInvoice] Matched line item to Bitrix24 product', {
-        name:      item.stockItemName,
-        productId: bitrixProduct.ID,
-        price,
-      });
-    } else {
-      // Product not in catalog yet — will create as a standalone row
-      logger.warn('[ItemInvoice] Line item not found in Bitrix24 catalog — adding as standalone row', {
-        name: item.stockItemName,
-      });
-    }
+    logger.info('[ItemInvoice] Matched line item to Bitrix24 product', {
+      name:      item.stockItemName,
+      productId: bitrixProduct.ID,
+      price,
+    });
 
     rows.push(row);
   }
@@ -372,6 +371,10 @@ async function processItemInvoices() {
 
     logger.info(`[ItemInvoice] ${vouchers.length} vouchers from Tally | ` +
       `${bitrixProducts.length} products in Bitrix24 catalog`);
+
+    if (bitrixProducts.length === 0) {
+      logger.warn('[ItemInvoice] No products in Bitrix24 catalog — run inventory sync first to enable item-based invoice sync', {});
+    }
 
     let cache    = loadCache();
     const newCache = {};
@@ -607,6 +610,13 @@ async function processItemInvoices() {
           count: productRows.length,
           rows: productRows.map(r => `${r.PRODUCT_NAME} × ${r.QUANTITY} @ ${r.PRICE}`).join(', '),
         });
+
+        if (productRows.length === 0 && voucher.items && voucher.items.length > 0) {
+          logger.warn('[ItemInvoice] No product rows built — items exist in Tally but none matched Bitrix24 catalog. Run inventory sync first.', {
+            invoiceId,
+            tallyItems: voucher.items.map(i => i.stockItemName).join(', '),
+          });
+        }
         if (productRows.length > 0) {
           try {
             let rowSetResult;
