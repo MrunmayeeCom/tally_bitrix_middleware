@@ -326,14 +326,9 @@ function buildProductRows(tallyItems, bitrixProducts) {
     }
 
     const row = {
-      PRODUCT_ID:   bitrixProduct.ID,
-      PRODUCT_NAME: item.stockItemName,
-      PRICE:        price,
-      QUANTITY:     item.qty,
-      DISCOUNT_TYPE_ID: 1,
-      DISCOUNT:     0,
-      CURRENCY_ID:  'INR',
-      SORT:         rows.length + 100,
+      PRODUCT_ID:   Number(bitrixProduct.ID),
+      PRICE:        Number(price),
+      QUANTITY:     Number(item.qty),
     };
 
     logger.info('[ItemInvoice] Matched line item to Bitrix24 product', {
@@ -587,9 +582,11 @@ async function processItemInvoices() {
 
         // Step 3 — Attach product rows to the deal first (invoice may inherit)
         if (productRows.length > 0 && dealId) {
+          logger.info('ATTACHING PRODUCT ROWS TO DEAL', { dealId, productRows });
+          await sleep(500); // give Bitrix24 time to finalize newly created deal
           try {
-            await callBitrix('crm.deal.productrow.set', {
-              ownerId:     Number(dealId),
+            await callBitrix('crm.deal.productrows.set', {
+              id: Number(dealId),
               productRows,
             });
             logger.info('[ItemInvoice] Product rows attached to deal', {
@@ -618,11 +615,12 @@ async function processItemInvoices() {
           });
         }
         if (productRows.length > 0) {
+          logger.info('ATTACHING PRODUCT ROWS TO INVOICE', { invoiceId, productRows });
           try {
             let rowSetResult;
             try {
               rowSetResult = await callBitrix('crm.item.productrow.set', {
-                ownerType: 'SI',
+                ownerType: 31,
                 ownerId:   Number(invoiceId),
                 productRows,
               });
@@ -637,7 +635,7 @@ async function processItemInvoices() {
           // Verify rows actually saved — Bitrix24 sometimes returns 200 but saves nothing
           try {
             const verify = await callBitrix('crm.item.productrow.list', {
-              ownerType: 'SI',
+              ownerType: 31,
               ownerId:   Number(invoiceId),
             });
             const savedRows = verify.result?.productRows || [];

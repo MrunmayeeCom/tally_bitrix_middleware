@@ -69,7 +69,7 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
         const { callBitrix: _callBitrix } = require('../connectors/bitrixConnector');
         let rowData = { result: [] };
         try {
-          rowData = await _callBitrix('crm.productrow.list', {
+          rowData = await _callBitrix('crm.productrows.list', {
             filter: { OWNER_ID: Number(entityId), OWNER_TYPE: 'SI' },
           });
           logger.info('[InvoiceProcessor] productrow fetch succeeded', { entityId, count: (rowData.result || []).length });

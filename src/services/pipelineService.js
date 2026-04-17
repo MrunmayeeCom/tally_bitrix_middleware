@@ -7,7 +7,9 @@ const PIPELINE_STAGES = [
   { NAME: 'Follow Up'        },
   { NAME: 'Overdue'          },
   { NAME: 'Payment Received' },
-  { NAME: 'Closed'           }
+  { NAME: 'Closed'           },
+  { NAME: 'Deal Won'         }
+
 ];
 
 // In-memory store — survives for lifetime of the process

@@ -223,7 +223,9 @@ async function findDealByBillRef(partyName, billRef) {
 }
 
 // Update deal payment status in Bitrix24
-async function updateDealPaymentStatus(dealId, receipt, isFullyPaid) {
+async function updateDealPaymentStatus(deal, receipt, isFullyPaid) {
+  const dealId = deal.ID;
+  const dealAmount = parseFloat(deal.OPPORTUNITY) || 0;
   try {
     const categoryId = await getTallyPipelineCategoryId();
     const stagesData = await callBitrix('crm.dealcategory.stage.list', { id: categoryId });
@@ -243,8 +245,8 @@ async function updateDealPaymentStatus(dealId, receipt, isFullyPaid) {
     };
 
     // Move to correct stage
-    if (isFullyPaid && stageMap['payment received']) {
-      fields.STAGE_ID = stageMap['payment received'];
+    if (isFullyPaid && stageMap['deal won']) {
+      fields.STAGE_ID = stageMap['deal won'];
     } else if (!isFullyPaid && stageMap['follow up']) {
       fields.STAGE_ID = stageMap['follow up'];
     }
@@ -304,7 +306,7 @@ async function processPayments() {
               // Find company in Bitrix
               const company = await findCompanyByName(receipt.partyName);
               if (company) {
-                const categoryId = 542;
+                const categoryId = await getTallyPipelineCategoryId();
                 const dealTitle = ref.billName 
                   ? `${receipt.partyName} - ${ref.billName}`
                   : `${receipt.partyName} - Receipt ${receipt.voucherNumber}`;
@@ -354,7 +356,7 @@ async function processPayments() {
           const dealAmount    = parseFloat(deal.OPPORTUNITY) || 0;
           const isFullyPaid   = ref.amount >= dealAmount * 0.99; // 1% tolerance
 
-          await updateDealPaymentStatus(deal.ID, receipt, isFullyPaid);
+          await updateDealPaymentStatus(deal, receipt, isFullyPaid);
 
           // If fully paid — mark deal WON
           if (isFullyPaid) {
