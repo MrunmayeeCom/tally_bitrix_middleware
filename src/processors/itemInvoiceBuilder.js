@@ -326,9 +326,11 @@ function buildProductRows(tallyItems, bitrixProducts) {
     }
 
     const row = {
-      PRODUCT_ID:   Number(bitrixProduct.ID),
-      PRICE:        Number(price),
-      QUANTITY:     Number(item.qty),
+      productId:   Number(bitrixProduct.ID),
+      price:       Number(price),
+      quantity:    Number(item.qty),
+      productName: item.stockItemName,
+      currencyId:  'INR',
     };
 
     logger.info('[ItemInvoice] Matched line item to Bitrix24 product', {
@@ -620,14 +622,14 @@ async function processItemInvoices() {
             let rowSetResult;
             try {
               rowSetResult = await callBitrix('crm.item.productrow.set', {
-                ownerType: 31,
+                ownerType: 'SI',
                 ownerId:   Number(invoiceId),
                 productRows,
               });
             } catch (e1) {
               logger.warn('[ItemInvoice] productrow.set with ownerType SI failed — retrying with ownerTypeId 31', { message: e1.message });
               rowSetResult = await callBitrix('crm.item.productrow.set', {
-                ownerTypeId: 31,
+                ownerTypeId: 'SI',
                 ownerId:     Number(invoiceId),
                 productRows,
               });
@@ -648,7 +650,7 @@ async function processItemInvoices() {
               logger.info('[ItemInvoice] Product rows confirmed saved', {
                 invoiceId,
                 rows:     savedRows.length,
-                products: productRows.map(r => `${r.PRODUCT_NAME} × ${r.QUANTITY}`).join(', '),
+                products: productRows.map(r => `${r.productName} × ${r.quantity}`).join(', '),
               });
             }
           } catch (verifyErr) {
@@ -656,7 +658,7 @@ async function processItemInvoices() {
             logger.info('[ItemInvoice] Product rows attached (verify check skipped)', {
               invoiceId,
               rows:     productRows.length,
-              products: productRows.map(r => `${r.PRODUCT_NAME} × ${r.QUANTITY}`).join(', '),
+              products: productRows.map(r => `${r.productName} × ${r.quantity}`).join(', '),
             });
           }
           } catch (rowErr) {
