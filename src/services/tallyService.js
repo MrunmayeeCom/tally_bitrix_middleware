@@ -179,7 +179,8 @@ async function createVoucher(voucher) {
   logger.info('Creating voucher in Tally', { voucherNumber: voucher.voucherNumber });
 
   const hasInventory = voucher.productRows && voucher.productRows.length > 0;
-  const objView      = hasInventory ? 'Invoice Voucher View' : 'Accounting Voucher View';
+  const objView      = 'Accounting Voucher View';
+  const salesLedger  = process.env.TALLY_SALES_LEDGER || 'Sales';
   const totalAmount  = parseFloat(voucher.amount); // gross/brutto total (party ledger amount)
 
   // For the Sales ledger entry: use net (ex-tax) amount if inventory mode, else gross
@@ -236,7 +237,7 @@ async function createVoucher(voucher) {
                 <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
                 <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
                 <PERSISTEDVIEW>${objView}</PERSISTEDVIEW>
-                <ISINVOICE>${hasInventory ? 'Yes' : 'No'}</ISINVOICE>
+                <ISINVOICE>No</ISINVOICE>
 
                 <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
                 <BASICBUYERNAME>${escapeXml(voucher.partyName)}</BASICBUYERNAME>
@@ -258,13 +259,13 @@ async function createVoucher(voucher) {
                   </BILLALLOCATIONS.LIST>
                 </ALLLEDGERENTRIES.LIST>
 
-                <!-- Sales ledger: negative in invoice view = credit -->
+                <!-- Sales ledger: credit side in accounting voucher view = positive -->
                 <ALLLEDGERENTRIES.LIST>
-                  <LEDGERNAME>Sales</LEDGERNAME>
+                  <LEDGERNAME>${salesLedger}</LEDGERNAME>
                   <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
                   <ISPARTYLEDGER>No</ISPARTYLEDGER>
                   <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>
-                  <AMOUNT>-${netAmount.toFixed(2)}</AMOUNT>
+                  <AMOUNT>${netAmount.toFixed(2)}</AMOUNT>
                 </ALLLEDGERENTRIES.LIST>
 
                 ${inventoryXml}
@@ -506,7 +507,17 @@ async function getLedgerByName(ledgerName) {
 
   try {
     const response = await sendToTally(xml);
-    const ledgers  = parseLedgersXml(response);
+    // Use a group-agnostic parse — parseLedgersXml filters only Sundry Debtors
+    const nameAttrMatches = [...(response || '').matchAll(/<LEDGER\b[^>]*NAME="([^"]+)"/gi)];
+    const nameTagMatches  = [...(response || '').matchAll(/<NAME>(.*?)<\/NAME>/gi)];
+    const allNames = [
+      ...nameAttrMatches.map(m => m[1].trim()),
+      ...nameTagMatches.map(m => m[1].trim()),
+    ].filter(Boolean);
+    const found = allNames.find(n => n.toLowerCase() === ledgerName.toLowerCase());
+    if (found) return { ledgerName: found };
+    // Fallback to filtered parse for Sundry Debtors
+    const ledgers = parseLedgersXml(response);
     return ledgers.find(l => l.ledgerName.toLowerCase() === ledgerName.toLowerCase()) || null;
   } catch (err) {
     logger.warn('Single ledger fetch failed', { ledgerName, message: err.message });
@@ -917,34 +928,73 @@ async function getVoucherTypes() {
 
 async function ensureTallyDefaults() {
   logger.info('Ensuring Tally default masters exist');
-  const xml = `
+
+  // Step 1: Fetch all ledger names under Sales Accounts to find the correct sales ledger name
+  const fetchSalesXml = `
     <ENVELOPE>
-      <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
+      <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
       <BODY>
-        <IMPORTDATA>
+        <EXPORTDATA>
           <REQUESTDESC>
-            <REPORTNAME>All Masters</REPORTNAME>
+            <REPORTNAME>List of Accounts</REPORTNAME>
             <STATICVARIABLES>
               <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
-              <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
+              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+              <GROUPNAME>Sales Accounts</GROUPNAME>
             </STATICVARIABLES>
           </REQUESTDESC>
-          <REQUESTDATA>
-            <TALLYMESSAGE xmlns:UDF="TallyUDF">
-              <LEDGER NAME="Sales" ACTION="Create">
-                <NAME>Sales</NAME>
-                <PARENT>Sales Accounts</PARENT>
-              </LEDGER>
-            </TALLYMESSAGE>
-          </REQUESTDATA>
-        </IMPORTDATA>
+        </EXPORTDATA>
       </BODY>
     </ENVELOPE>`.trim();
+
   try {
-    const response = await sendToTally(xml);
-    logger.info('Tally defaults ensured', { response: (response || '').substring(0, 200) });
+    const salesResp = await sendToTally(fetchSalesXml);
+    // Parse NAME from both attribute and child tag forms
+    const nameMatches1 = [...(salesResp || '').matchAll(/<LEDGER\b[^>]*NAME="([^"]+)"/gi)];
+    const nameMatches2 = [...(salesResp || '').matchAll(/<NAME>(.*?)<\/NAME>/gi)];
+    const salesLedgers = [
+      ...nameMatches1.map(m => m[1].trim()),
+      ...nameMatches2.map(m => m[1].trim()),
+    ].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i); // unique
+    logger.info('Sales Account ledgers found in Tally', { salesLedgers, rawLength: (salesResp||'').length });
+
+    // Pick the first one and store it for use in vouchers
+    if (salesLedgers.length > 0) {
+      process.env.TALLY_SALES_LEDGER = salesLedgers[0];
+      logger.info('Using sales ledger for vouchers', { ledger: salesLedgers[0] });
+    } else {
+      // Fallback: create "Sales" ledger
+      logger.warn('No Sales Account ledgers found — creating default "Sales" ledger');
+      const createXml = `
+        <ENVELOPE>
+          <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
+          <BODY>
+            <IMPORTDATA>
+              <REQUESTDESC>
+                <REPORTNAME>All Masters</REPORTNAME>
+                <STATICVARIABLES>
+                  <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+                  <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
+                </STATICVARIABLES>
+              </REQUESTDESC>
+              <REQUESTDATA>
+                <TALLYMESSAGE xmlns:UDF="TallyUDF">
+                  <LEDGER NAME="Sales" ACTION="Create">
+                    <NAME>Sales</NAME>
+                    <PARENT>Sales Accounts</PARENT>
+                  </LEDGER>
+                </TALLYMESSAGE>
+              </REQUESTDATA>
+            </IMPORTDATA>
+          </BODY>
+        </ENVELOPE>`.trim();
+      const createResp = await sendToTally(createXml);
+      process.env.TALLY_SALES_LEDGER = 'Sales';
+      logger.info('Sales ledger created', { response: (createResp || '').substring(0, 200) });
+    }
   } catch (e) {
     logger.warn('Could not ensure Tally defaults', { message: e.message });
+    process.env.TALLY_SALES_LEDGER = 'Sales';
   }
 }
 

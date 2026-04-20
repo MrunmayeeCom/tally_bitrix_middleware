@@ -69,14 +69,40 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
         const { callBitrix: _callBitrix } = require('../connectors/bitrixConnector');
         let rowData = { result: [] };
         try {
-          rowData = await _callBitrix('crm.productrows.list', {
-            filter: { OWNER_ID: Number(entityId), OWNER_TYPE: 'SI' },
+          // Try crm.item.productrow.list first
+          const rd = await _callBitrix('crm.item.productrow.list', {
+            ownerType: 'SI',
+            ownerId: Number(entityId),
           });
-          logger.info('[InvoiceProcessor] productrow fetch succeeded', { entityId, count: (rowData.result || []).length });
-        } catch (e) {
-          logger.info('[InvoiceProcessor] productrow fetch failed', { entityId, message: e.message });
+          rowData = rd;
+          logger.info('[InvoiceProcessor] productrow fetch succeeded via productrow.list', { entityId, count: (rowData.result?.productRows?.length || 0) });
+        } catch (e1) {
+          try {
+            // Fallback: crm.deal.productrows.get style via crm.item.get with products select
+            const rd2 = await _callBitrix('crm.item.get', {
+              entityTypeId: 31,
+              id: Number(entityId),
+              select: ['id', 'opportunity', 'taxValue', 'products'],
+            });
+            const products = rd2.result?.item?.products || [];
+            if (products.length > 0) {
+              rowData = { result: products.map(p => ({
+                PRODUCT_NAME: p.productName || p.name || '',
+                PRICE:        p.price || p.priceExclusive || 0,
+                PRICE_EXCLUSIVE: p.priceExclusive || p.price || 0,
+                QUANTITY:     p.quantity || 1,
+                DISCOUNT:     p.discount || 0,
+                CURRENCY_ID:  'INR',
+              })) };
+              logger.info('[InvoiceProcessor] productrow fetch succeeded via crm.item.get products', { entityId, count: products.length });
+            } else {
+              logger.info('[InvoiceProcessor] productrow fetch skipped (API unavailable on this plan)', { entityId });
+            }
+          } catch (e2) {
+            logger.info('[InvoiceProcessor] productrow fetch skipped (API unavailable on this plan)', { entityId });
+          }
         }
-        const rawRows = Array.isArray(rowData.result) ? rowData.result : [];
+        const rawRows = Array.isArray(rowData.result?.productRows) ? rowData.result.productRows : (Array.isArray(rowData.result) ? rowData.result : []);
         productRows = rawRows.map(r => ({
           PRODUCT_NAME:    r.PRODUCT_NAME || r.productName || '',
           PRICE:           r.PRICE        || r.price       || 0,
@@ -248,9 +274,9 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     //
     // We skip this if the invoice already has rows — no need to overwrite something
     // the user explicitly set.
-    if (invoiceType === 'smart' && voucher.productRows && voucher.productRows.length > 0) {
-      await _attachProductRowsIfMissing(entityId, invoice, voucher.amount);
-    }
+    // if (invoiceType === 'smart' && voucher.productRows && voucher.productRows.length > 0) {
+    //   await _attachProductRowsIfMissing(entityId, invoice, voucher.amount);
+    // }
 
 
     logger.info('Invoice processor completed', {
