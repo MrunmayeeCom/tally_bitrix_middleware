@@ -228,8 +228,14 @@ async function closePaidDeals(currentVoucherNumbers) {
     const paidStageId = stageMap['payment received'];
 
     for (const deal of deals) {
-      // Skip already closed/won deals
-      if (deal.STAGE_ID === 'WON' || deal.STAGE_ID === paidStageId) continue;
+      // Skip already closed/won/paid deals — never downgrade a won deal
+      const stageNameLower = Object.entries(stageMap).find(([, v]) => v === deal.STAGE_ID)?.[0] || '';
+      const isProtectedStage = deal.STAGE_ID === 'WON'
+        || deal.STAGE_ID === paidStageId
+        || stageNameLower.includes('won')
+        || stageNameLower.includes('payment received')
+        || stageNameLower.includes('closed');
+      if (isProtectedStage) continue;
 
       // Check if this deal's voucher is still outstanding
       const titleParts = (deal.TITLE || '').split(' - ');
@@ -507,11 +513,16 @@ async function processOutstanding() {
                 || currentStage.includes('won')
                 || currentStage.includes('payment received');
 
-              if (isPaid) {
+              const isManuallyMoved = currentStage.includes('follow up')
+                || currentStage.includes('followup')
+                || currentStage.includes('overdue')
+                || currentStage.includes('closed');
+
+              if (isPaid || isManuallyMoved) {
                 delete dealFields.STAGE_ID;
-                delete dealFields.UF_PAYMENT_STATUS;
-                logger.info('Deal already paid — updating amounts only, stage preserved', {
-                  dealId: existingDealId, stage: current.STAGE_ID,
+                if (isPaid) delete dealFields.UF_PAYMENT_STATUS;
+                logger.info('Deal stage preserved — not overwriting with sync', {
+                  dealId: existingDealId, stage: current.STAGE_ID, isPaid, isManuallyMoved,
                 });
               }
             } catch (stageErr) {

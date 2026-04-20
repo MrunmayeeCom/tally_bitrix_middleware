@@ -146,6 +146,80 @@ async function matchReceiptsToOutstanding() {
           outstanding: m.outstanding,
           status:      m.isFullyPaid ? 'Paid' : 'Partial',
         });
+
+        // Find and update the linked Smart Invoice for this voucher/deal
+        try {
+          // Search by voucher number first
+          let invoiceId = null;
+          try {
+            const invSearch = await callBitrix('crm.item.list', {
+              entityTypeId: 31,
+              filter: { 'UF_TALLY_VOUCHER_NO': m.receipt.billRefs?.[0]?.billName || '' },
+              select: ['id'],
+            });
+            if ((invSearch.result?.items?.length ?? 0) > 0) {
+              invoiceId = invSearch.result.items[0].id;
+            }
+          } catch (_) {}
+
+          // Fallback: search by deal link (parentId2)
+          if (!invoiceId) {
+            try {
+              const invByDeal = await callBitrix('crm.item.list', {
+                entityTypeId: 31,
+                filter: { 'parentId2': m.deal.id },
+                select: ['id', 'title'],
+              });
+              if ((invByDeal.result?.items?.length ?? 0) > 0) {
+                invoiceId = invByDeal.result.items[0].id;
+              }
+            } catch (_) {}
+          }
+
+          // Fallback: search by title matching party - billref
+          if (!invoiceId && m.receipt.billRefs?.length > 0) {
+            try {
+              const titleSearch = await callBitrix('crm.item.list', {
+                entityTypeId: 31,
+                filter: { '=title': `${m.receipt.partyName} - ${m.receipt.billRefs[0].billName}` },
+                select: ['id'],
+              });
+              if ((titleSearch.result?.items?.length ?? 0) > 0) {
+                invoiceId = titleSearch.result.items[0].id;
+              }
+            } catch (_) {}
+          }
+
+          if (invoiceId) {
+            await callBitrix('crm.item.update', {
+              entityTypeId: 31,
+              id:           Number(invoiceId),
+              fields: {
+                UF_PAYMENT_STATUS:  m.isFullyPaid ? 'Paid' : 'Partial',
+                UF_PAYMENT_AMOUNT:  m.receipt.amount,
+                UF_PAYMENT_DATE:    m.receipt.date,
+                UF_RECEIPT_NUMBER:  m.receipt.voucherNumber,
+                UF_OUTSTANDING:     m.outstanding,
+              },
+            });
+            logger.info('[ReceiptMatcher] Invoice payment status updated', {
+              invoiceId,
+              dealId:    m.deal.id,
+              status:    m.isFullyPaid ? 'Paid' : 'Partial',
+              amount:    m.receipt.amount,
+            });
+          } else {
+            logger.info('[ReceiptMatcher] No linked invoice found for deal — skipping invoice update', {
+              dealId: m.deal.id,
+              partyName: m.receipt.partyName,
+            });
+          }
+        } catch (invErr) {
+          logger.warn('[ReceiptMatcher] Invoice update failed — non-fatal', {
+            dealId: m.deal.id, message: invErr.message,
+          });
+        }
+
         // If fully paid — move deal to Won
         if (m.isFullyPaid) {
           await callBitrix('crm.deal.update', {

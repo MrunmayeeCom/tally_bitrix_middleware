@@ -390,7 +390,7 @@ async function pushVoucherToBitrix(voucher, partyIds, dealId = null, productRows
     ...partyIds,
     UF_TALLY_VOUCHER_NO: voucher.voucherNumber,
     UF_TALLY_SYNCED:     'Y',
-    ...(dealId ? { parentId2: dealId } : {}),
+    ...(dealId ? { parentId2: Number(dealId) } : {}),
   };
 
   const data = await callBitrix('crm.item.add', {
@@ -484,33 +484,83 @@ async function processTallyInvoices() {
         }
 
         // Find matching deal in Bitrix24 pipeline for this voucher
-        // Strategy: Find deal by party name only, check if amount matches
         let dealId = null;
         try {
           const { getTallyPipelineCategoryId } = require('../services/pipelineService');
           const categoryId = await getTallyPipelineCategoryId();
           if (categoryId) {
-            // First: Search for existing deal by party name only
-            const dealSearch = await callBitrix('crm.deal.list', {
-              filter: {
-                '%TITLE': voucher.partyName,
-                CATEGORY_ID: categoryId,
-                '=OPPORTUNITY': voucher.amount,
-              },
+            // Try 1: exact title match "PartyName - VoucherNumber" — most reliable
+            const exactTitle = `${voucher.partyName} - ${voucher.voucherNumber}`;
+            const exactSearch = await callBitrix('crm.deal.list', {
+              filter: { '=TITLE': exactTitle, CATEGORY_ID: categoryId },
               select: ['ID', 'TITLE', 'OPPORTUNITY'],
             });
-            const deals = dealSearch.result || [];
-            if (deals.length > 0) {
-              dealId = deals[0].ID;
-              logger.info('[TallyInvoice] Matched deal by party+amount for invoice', {
-                voucherNumber: voucher.voucherNumber,
-                partyName: voucher.partyName,
-                dealId,
-                amount: voucher.amount,
+            const exactDeals = exactSearch.result || [];
+            if (exactDeals.length > 0) {
+              dealId = exactDeals[0].ID;
+              logger.info('[TallyInvoice] Matched deal by exact title', {
+                voucherNumber: voucher.voucherNumber, dealId,
               });
-            } else {
-              // No matching deal - create new deal with this invoice amount
-              logger.info('[TallyInvoice] No matching deal — will create new deal', {
+            }
+
+            // Try 2: search by UF_INVOICE_NUMBER custom field
+            if (!dealId) {
+              try {
+                const ufSearch = await callBitrix('crm.deal.list', {
+                  filter: { 'UF_INVOICE_NUMBER': voucher.voucherNumber, CATEGORY_ID: categoryId },
+                  select: ['ID', 'TITLE', 'OPPORTUNITY'],
+                });
+                const ufDeals = ufSearch.result || [];
+                if (ufDeals.length > 0) {
+                  dealId = ufDeals[0].ID;
+                  logger.info('[TallyInvoice] Matched deal by UF_INVOICE_NUMBER', {
+                    voucherNumber: voucher.voucherNumber, dealId,
+                  });
+                }
+              } catch (_) {}
+            }
+
+            // Try 3: party name + amount match as fallback
+            if (!dealId) {
+              const dealSearch = await callBitrix('crm.deal.list', {
+                filter: {
+                  '%TITLE': voucher.partyName,
+                  CATEGORY_ID: categoryId,
+                  '=OPPORTUNITY': voucher.amount,
+                },
+                select: ['ID', 'TITLE', 'OPPORTUNITY'],
+              });
+              const deals = (dealSearch.result || []).filter(d =>
+                (d.TITLE || '').toLowerCase().includes(voucher.partyName.toLowerCase())
+              );
+              if (deals.length > 0) {
+                dealId = deals[0].ID;
+                logger.info('[TallyInvoice] Matched deal by party+amount', {
+                  voucherNumber: voucher.voucherNumber, dealId, amount: voucher.amount,
+                });
+              }
+            }
+
+            // Try 4: party name only — pick most recent deal for this party
+            if (!dealId) {
+              const partySearch = await callBitrix('crm.deal.list', {
+                filter: { '%TITLE': voucher.partyName, CATEGORY_ID: categoryId },
+                select: ['ID', 'TITLE', 'OPPORTUNITY'],
+                order: { ID: 'DESC' },
+              });
+              const partyDeals = (partySearch.result || []).filter(d =>
+                (d.TITLE || '').toLowerCase().startsWith(voucher.partyName.toLowerCase())
+              );
+              if (partyDeals.length > 0) {
+                dealId = partyDeals[0].ID;
+                logger.info('[TallyInvoice] Matched deal by party name (latest)', {
+                  voucherNumber: voucher.voucherNumber, dealId,
+                });
+              }
+            }
+
+            if (!dealId) {
+              logger.info('[TallyInvoice] No matching deal found — will create new deal', {
                 voucherNumber: voucher.voucherNumber,
                 partyName: voucher.partyName,
                 amount: voucher.amount,
@@ -560,7 +610,7 @@ async function processTallyInvoices() {
         }
 
         // Create new deal if no matching deal found
-        if (!dealId && partyIds.COMPANY_ID) {
+        if (!dealId && (partyIds.COMPANY_ID || partyIds.CONTACT_ID)) {
           try {
             const { getTallyPipelineCategoryId } = require('../services/pipelineService');
             const categoryId = await getTallyPipelineCategoryId();

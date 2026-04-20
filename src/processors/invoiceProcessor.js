@@ -76,7 +76,15 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
         } catch (e) {
           logger.info('[InvoiceProcessor] productrow fetch failed', { entityId, message: e.message });
         }
-        productRows = Array.isArray(rowData.result) ? rowData.result : [];
+        const rawRows = Array.isArray(rowData.result) ? rowData.result : [];
+        productRows = rawRows.map(r => ({
+          PRODUCT_NAME:    r.PRODUCT_NAME || r.productName || '',
+          PRICE:           r.PRICE        || r.price       || 0,
+          PRICE_EXCLUSIVE: r.PRICE        || r.price       || 0,
+          QUANTITY:        r.QUANTITY     || r.quantity     || 1,
+          DISCOUNT:        r.DISCOUNT     || r.discount     || 0,
+          CURRENCY_ID:     r.CURRENCY_ID  || r.currencyId  || 'INR',
+        }));
         if (productRows.length > 0) {
           logger.info('Product rows fetched from Bitrix24 invoice', {
             entityId, count: productRows.length,

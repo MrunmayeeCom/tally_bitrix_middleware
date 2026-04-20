@@ -45,6 +45,7 @@ async function processDueDates() {
     const overdueStageId  = findStage('overdue');
     const followUpStageId = findStage('follow up') || findStage('followup');
     const newBillStageId  = findStage('new bill') || findStage('newbill');
+    const paidStageId     = findStage('payment received') || findStage('deal won');
 
     if (!overdueStageId) {
       logger.warn('Overdue stage not found in pipeline — check stage names');
@@ -75,8 +76,8 @@ async function processDueDates() {
         const diffDays = Math.floor((closeDate - today) / (1000 * 60 * 60 * 24));
         const currentStage = deal.STAGE_ID;
 
-        // Already closed/won — skip
-        if (currentStage === 'WON' || currentStage === 'LOSE') continue;
+        // Already closed/won or payment received — skip all stage changes
+        if (currentStage === 'WON' || currentStage === 'LOSE' || currentStage === paidStageId) continue;
 
         // 1 — Move to Overdue if past due date and not already overdue
         if (diffDays < 0 && currentStage !== overdueStageId) {
