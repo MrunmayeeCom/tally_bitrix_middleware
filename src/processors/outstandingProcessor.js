@@ -509,22 +509,23 @@ async function processOutstanding() {
               const currentStage   = (current.STAGE_ID        || '').toLowerCase();
               const currentPayment = (current.UF_PAYMENT_STATUS || '').toLowerCase();
 
-              const isPaid = currentPayment === 'paid'
-                || currentStage.includes('won')
-                || currentStage.includes('payment received');
+    const isPaid = currentPayment === 'paid'
+      || currentStage.includes('won')
+      || currentStage.includes('payment received')
+      || currentStage.includes('closed');
 
-              const isManuallyMoved = currentStage.includes('follow up')
-                || currentStage.includes('followup')
-                || currentStage.includes('overdue')
-                || currentStage.includes('closed');
+    const isManuallyMoved = currentStage.includes('follow up')
+      || currentStage.includes('followup')
+      || currentStage.includes('overdue')
+      || currentStage.includes('new bill');
 
-              if (isPaid || isManuallyMoved) {
-                delete dealFields.STAGE_ID;
-                if (isPaid) delete dealFields.UF_PAYMENT_STATUS;
-                logger.info('Deal stage preserved — not overwriting with sync', {
-                  dealId: existingDealId, stage: current.STAGE_ID, isPaid, isManuallyMoved,
-                });
-              }
+    if (isPaid || isManuallyMoved) {
+      delete dealFields.STAGE_ID;
+      if (isPaid) delete dealFields.UF_PAYMENT_STATUS;
+      logger.info('Deal stage preserved — not overwriting with sync', {
+        dealId: existingDealId, stage: current.STAGE_ID, isPaid, isManuallyMoved,
+      });
+    }
             } catch (stageErr) {
               logger.warn('Could not fetch current deal stage — proceeding with full update', {
                 dealId: existingDealId, message: stageErr.message,

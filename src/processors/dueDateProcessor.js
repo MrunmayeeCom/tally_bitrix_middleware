@@ -79,6 +79,13 @@ async function processDueDates() {
         // Already closed/won or payment received — skip all stage changes
         if (currentStage === 'WON' || currentStage === 'LOSE' || currentStage === paidStageId) continue;
 
+        // Skip deals that were manually moved by user — don't auto-move them
+        const currentStageLower = (stageMap[Object.keys(stageMap).find(k => stageMap[k] === currentStage)] || '').toLowerCase();
+        if (currentStageLower.includes('follow up') || currentStageLower.includes('followup') || currentStageLower.includes('overdue')) {
+          logger.info('Deal manually moved — skipping due date automation', { dealId: deal.ID, title: deal.TITLE, currentStage: currentStageLower });
+          continue;
+        }
+
         // 1 — Move to Overdue if past due date and not already overdue
         if (diffDays < 0 && currentStage !== overdueStageId) {
           await updateDeal(deal.ID, { STAGE_ID: overdueStageId });

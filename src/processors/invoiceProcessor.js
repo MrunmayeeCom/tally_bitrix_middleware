@@ -2,17 +2,6 @@ const { getInvoice } = require('../services/bitrixService');
 const { mapInvoiceToVoucher } = require('../utils/mapper');
 const { createVoucher } = require('../services/tallyService');
 const logger = require('../utils/logger');
-const tallyConfig = require('../config/tallyConfig');
-
-function escapeXml(str) {
-  if (str == null) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
 const fs = require('fs');
 const path = require('path');
 
@@ -69,48 +58,14 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
         const { callBitrix: _callBitrix } = require('../connectors/bitrixConnector');
         let rowData = { result: [] };
         try {
-          // Try crm.item.productrow.list first
-          const rd = await _callBitrix('crm.item.productrow.list', {
-            ownerType: 'SI',
-            ownerId: Number(entityId),
+          rowData = await _callBitrix('crm.productrow.list', {
+            filter: { OWNER_ID: Number(entityId), OWNER_TYPE: 'SI' },
           });
-          rowData = rd;
-          logger.info('[InvoiceProcessor] productrow fetch succeeded via productrow.list', { entityId, count: (rowData.result?.productRows?.length || 0) });
-        } catch (e1) {
-          try {
-            // Fallback: crm.deal.productrows.get style via crm.item.get with products select
-            const rd2 = await _callBitrix('crm.item.get', {
-              entityTypeId: 31,
-              id: Number(entityId),
-              select: ['id', 'opportunity', 'taxValue', 'products'],
-            });
-            const products = rd2.result?.item?.products || [];
-            if (products.length > 0) {
-              rowData = { result: products.map(p => ({
-                PRODUCT_NAME: p.productName || p.name || '',
-                PRICE:        p.price || p.priceExclusive || 0,
-                PRICE_EXCLUSIVE: p.priceExclusive || p.price || 0,
-                QUANTITY:     p.quantity || 1,
-                DISCOUNT:     p.discount || 0,
-                CURRENCY_ID:  'INR',
-              })) };
-              logger.info('[InvoiceProcessor] productrow fetch succeeded via crm.item.get products', { entityId, count: products.length });
-            } else {
-              logger.info('[InvoiceProcessor] productrow fetch skipped (API unavailable on this plan)', { entityId });
-            }
-          } catch (e2) {
-            logger.info('[InvoiceProcessor] productrow fetch skipped (API unavailable on this plan)', { entityId });
-          }
+          logger.info('[InvoiceProcessor] productrow fetch succeeded', { entityId, count: (rowData.result || []).length });
+        } catch (e) {
+          logger.info('[InvoiceProcessor] productrow fetch failed', { entityId, message: e.message });
         }
-        const rawRows = Array.isArray(rowData.result?.productRows) ? rowData.result.productRows : (Array.isArray(rowData.result) ? rowData.result : []);
-        productRows = rawRows.map(r => ({
-          PRODUCT_NAME:    r.PRODUCT_NAME || r.productName || '',
-          PRICE:           r.PRICE        || r.price       || 0,
-          PRICE_EXCLUSIVE: r.PRICE        || r.price       || 0,
-          QUANTITY:        r.QUANTITY     || r.quantity     || 1,
-          DISCOUNT:        r.DISCOUNT     || r.discount     || 0,
-          CURRENCY_ID:     r.CURRENCY_ID  || r.currencyId  || 'INR',
-        }));
+        productRows = Array.isArray(rowData.result) ? rowData.result : [];
         if (productRows.length > 0) {
           logger.info('Product rows fetched from Bitrix24 invoice', {
             entityId, count: productRows.length,
@@ -175,11 +130,10 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     // Step 4a: Ensure all stock items in product rows exist in Tally before creating voucher
     if (voucher.productRows && voucher.productRows.length > 0) {
       const { sendToTally: _stt } = require('../connectors/tallyConnector');
-      const _esc = (s) => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
       for (const row of voucher.productRows) {
         const itemName = row.PRODUCT_NAME || row.productName || '';
         if (!itemName) continue;
-        const escName = _esc(itemName);
+        const escName = escapeXml(itemName);
         const ensureXml = `
 <ENVELOPE>
   <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
@@ -197,7 +151,6 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
           <STOCKITEM NAME="${escName}" Action="Create">
             <NAME>${escName}</NAME>
             <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>
-            <BASEUNIT>Nos</BASEUNIT>
           </STOCKITEM>
         </TALLYMESSAGE>
       </REQUESTDATA>
@@ -240,28 +193,6 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
       logger.warn('Invoice MASTERID cache failed', { message: cacheErr.message });
     }
 
-    // Step 5b: Link this Bitrix24 invoice to its parent Deal
-    try {
-      const dealId = invoice.parentId2 || invoice.DEAL_ID || null;
-      if (dealId && entityId) {
-        const { callBitrix } = require('../connectors/bitrixConnector');
-        await callBitrix('crm.item.update', {
-          entityTypeId: 31,
-          id:           Number(entityId),
-          fields:       { parentId2: Number(dealId) },
-        });
-        logger.info('Invoice linked to Deal in Bitrix24', {
-          entityId,
-          dealId,
-          voucherNumber: voucher.voucherNumber,
-        });
-      } else {
-        logger.info('Invoice has no parent Deal — skipping Deal link', { entityId });
-      }
-    } catch (dealLinkErr) {
-      logger.warn('Deal link failed — non-fatal', { entityId, message: dealLinkErr.message });
-    }
-
     // Step 6: Attach product rows from inventory catalog back to the Bitrix24 invoice.
     //
     // This is the Feature 7 addition. When a new Smart Invoice is created in Bitrix24
@@ -274,9 +205,9 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     //
     // We skip this if the invoice already has rows — no need to overwrite something
     // the user explicitly set.
-    // if (invoiceType === 'smart' && voucher.productRows && voucher.productRows.length > 0) {
-    //   await _attachProductRowsIfMissing(entityId, invoice, voucher.amount);
-    // }
+    if (invoiceType === 'smart' && voucher.productRows && voucher.productRows.length > 0) {
+      await _attachProductRowsIfMissing(entityId, invoice, voucher.amount);
+    }
 
 
     logger.info('Invoice processor completed', {

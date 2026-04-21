@@ -178,44 +178,6 @@ function parseLedgersXml(xml) {
 async function createVoucher(voucher) {
   logger.info('Creating voucher in Tally', { voucherNumber: voucher.voucherNumber });
 
-  const hasInventory = voucher.productRows && voucher.productRows.length > 0;
-  const objView      = 'Accounting Voucher View';
-  const salesLedger  = process.env.TALLY_SALES_LEDGER || 'Sales';
-  const totalAmount  = parseFloat(voucher.amount); // gross/brutto total (party ledger amount)
-
-  // For the Sales ledger entry: use net (ex-tax) amount if inventory mode, else gross
-  // In invoice view Tally derives tax separately, so Sales ledger = sum of PRICE_EXCLUSIVE
-  const netAmount = hasInventory
-    ? voucher.productRows.reduce((sum, row) => {
-        const exclusive = parseFloat(row.PRICE_EXCLUSIVE || row.priceExclusive || row.PRICE || row.price || 0);
-        const qty       = parseFloat(row.QUANTITY || row.quantity || 1);
-        return sum + exclusive * qty;
-      }, 0)
-    : totalAmount;
-
-  const inventoryXml = hasInventory
-    ? voucher.productRows.map(row => {
-        const name      = escapeXml(row.PRODUCT_NAME || row.productName || '');
-        const exclusive = parseFloat(row.PRICE_EXCLUSIVE || row.priceExclusive || row.PRICE || row.price || 0);
-        const qty       = parseFloat(row.QUANTITY || row.quantity || 1);
-        const amount    = (exclusive * qty).toFixed(2);
-        return `
-                <ALLINVENTORYENTRIES.LIST>
-                  <STOCKITEMNAME>${name}</STOCKITEMNAME>
-                  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                  <RATE>${exclusive} Nos</RATE>
-                  <AMOUNT>-${amount}</AMOUNT>
-                  <ACTUALQTY>${qty} Nos</ACTUALQTY>
-                  <BILLEDQTY>${qty} Nos</BILLEDQTY>
-                  <ACCOUNTINGALLOCATIONS.LIST>
-                    <LEDGERNAME>Sales</LEDGERNAME>
-                    <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                    <AMOUNT>-${amount}</AMOUNT>
-                  </ACCOUNTINGALLOCATIONS.LIST>
-                </ALLINVENTORYENTRIES.LIST>`;
-      }).join('\n')
-    : '';
-
   const xml = `
     <ENVELOPE>
       <HEADER>
@@ -231,44 +193,62 @@ async function createVoucher(voucher) {
           </REQUESTDESC>
           <REQUESTDATA>
             <TALLYMESSAGE xmlns:UDF="TallyUDF">
-              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="${objView}">
+              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="${(voucher.productRows && voucher.productRows.length > 0) ? 'Invoice Voucher View' : 'Accounting Voucher View'}">
                 <DATE>${voucher.date.replace(/-/g, '')}</DATE>
                 <VOUCHERTYPENAME>${voucher.voucherType}</VOUCHERTYPENAME>
                 <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
                 <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
-                <PERSISTEDVIEW>${objView}</PERSISTEDVIEW>
-                <ISINVOICE>No</ISINVOICE>
-
+                <PERSISTEDVIEW>${(voucher.productRows && voucher.productRows.length > 0) ? 'Invoice Voucher View' : 'Accounting Voucher View'}</PERSISTEDVIEW>
+                <ISINVOICE>${(voucher.productRows && voucher.productRows.length > 0) ? 'Yes' : 'No'}</ISINVOICE>
                 <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
-                <BASICBUYERNAME>${escapeXml(voucher.partyName)}</BASICBUYERNAME>
-                <BASICBASEPARTYNAME>${escapeXml(voucher.partyName)}</BASICBASEPARTYNAME>
-
                 <NARRATION>${escapeXml(voucher.narration)}</NARRATION>
-
-                <!-- Party receivable: negative = debit in both view modes -->
                 <ALLLEDGERENTRIES.LIST>
                   <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
                   <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
                   <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
                   <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
-                  <AMOUNT>-${totalAmount.toFixed(2)}</AMOUNT>
+                  <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
                   <BILLALLOCATIONS.LIST>
                     <NAME>BX-${voucher.voucherNumber}</NAME>
                     <BILLTYPE>New Ref</BILLTYPE>
-                    <AMOUNT>-${totalAmount.toFixed(2)}</AMOUNT>
+                    <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
                   </BILLALLOCATIONS.LIST>
                 </ALLLEDGERENTRIES.LIST>
-
-                <!-- Sales ledger: credit side in accounting voucher view = positive -->
-                <ALLLEDGERENTRIES.LIST>
-                  <LEDGERNAME>${salesLedger}</LEDGERNAME>
+                ${(voucher.productRows && voucher.productRows.length > 0)
+                  ? voucher.productRows.map(row => {
+                      const name = row.PRODUCT_NAME || row.productName || '';
+                      const price = parseFloat(row.PRICE || row.price || 0);
+                      const qty = parseFloat(row.QUANTITY || row.quantity || 1);
+                      const amount = (price * qty).toFixed(2);
+                      return `
+                <ALLINVENTORYENTRIES.LIST>
+                  <STOCKITEMNAME>${escapeXml(name)}</STOCKITEMNAME>
                   <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                  <ISPARTYLEDGER>No</ISPARTYLEDGER>
-                  <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>
-                  <AMOUNT>${netAmount.toFixed(2)}</AMOUNT>
-                </ALLLEDGERENTRIES.LIST>
-
-                ${inventoryXml}
+                  <RATE>${price}/Nos</RATE>
+                  <AMOUNT>${amount}</AMOUNT>
+                  <ACTUALQTY>${qty} Nos</ACTUALQTY>
+                  <BILLEDQTY>${qty} Nos</BILLEDQTY>
+                  <BATCHALLOCATIONS.LIST>
+                    <GODOWNNAME>Main Location</GODOWNNAME>
+                    <BATCHNAME>Primary Batch</BATCHNAME>
+                    <DESTINATIONGODOWNNAME>Main Location</DESTINATIONGODOWNNAME>
+                    <AMOUNT>${amount}</AMOUNT>
+                    <ACTUALQTY>${qty} Nos</ACTUALQTY>
+                    <BILLEDQTY>${qty} Nos</BILLEDQTY>
+                  </BATCHALLOCATIONS.LIST>
+                  <ACCOUNTINGALLOCATIONS.LIST>
+                    <LEDGERNAME>Sales</LEDGERNAME>
+                    <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                    <AMOUNT>${amount}</AMOUNT>
+                  </ACCOUNTINGALLOCATIONS.LIST>
+                </ALLINVENTORYENTRIES.LIST>`;
+                    }).join('\n')
+                  : `
+                <ALLLEDGERENTRIES.LIST>
+                  <LEDGERNAME>Sales</LEDGERNAME>
+                  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                  <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
+                </ALLLEDGERENTRIES.LIST>`}
               </VOUCHER>
             </TALLYMESSAGE>
           </REQUESTDATA>
@@ -305,29 +285,6 @@ async function createVoucher(voucher) {
     if (voucher.voucherType === 'Sales Order') {
       logger.warn('Sales Order rejected by Tally — retrying as Sales Invoice', { voucherNumber: voucher.voucherNumber });
       return createVoucher({ ...voucher, voucherType: 'Sales' });
-    }
-    // Exception with no LINEERROR almost always means the party ledger doesn't exist in Tally.
-    // Auto-create it under Sundry Debtors and retry once.
-    if (voucher.partyName && exceptions > 0 && errors === 0) {
-      logger.warn('Tally exception — party ledger likely missing, auto-creating and retrying', {
-        voucherNumber: voucher.voucherNumber,
-        partyName: voucher.partyName,
-      });
-      try {
-        await createLedger({ ledgerName: voucher.partyName, groupName: 'Sundry Debtors', openingBalance: 0 });
-        logger.info('Party ledger auto-created — retrying voucher', { partyName: voucher.partyName });
-        // Retry once — do NOT recurse again if it fails
-        const retryResponse = await sendToTally(xml);
-        const retryCreated    = parseInt((retryResponse || '').match(/<CREATED>(\d+)<\/CREATED>/i)?.[1] ?? '0');
-        const retryExceptions = parseInt((retryResponse || '').match(/<EXCEPTIONS>(\d+)<\/EXCEPTIONS>/i)?.[1] ?? '0');
-        if (retryCreated > 0) {
-          logger.info('Voucher created successfully after ledger auto-create', { voucherNumber: voucher.voucherNumber });
-          return retryResponse;
-        }
-        logger.error('Retry after ledger auto-create still failed', { voucherNumber: voucher.voucherNumber, retryExceptions });
-      } catch (ledgerErr) {
-        logger.warn('Ledger auto-create failed', { partyName: voucher.partyName, message: ledgerErr.message });
-      }
     }
     logger.error('Tally voucher create failed', { voucherNumber: voucher.voucherNumber, created, exceptions, errors });
     throw new Error(`Tally voucher create failed (created=${created}, exceptions=${exceptions}, errors=${errors})`);
@@ -507,17 +464,7 @@ async function getLedgerByName(ledgerName) {
 
   try {
     const response = await sendToTally(xml);
-    // Use a group-agnostic parse — parseLedgersXml filters only Sundry Debtors
-    const nameAttrMatches = [...(response || '').matchAll(/<LEDGER\b[^>]*NAME="([^"]+)"/gi)];
-    const nameTagMatches  = [...(response || '').matchAll(/<NAME>(.*?)<\/NAME>/gi)];
-    const allNames = [
-      ...nameAttrMatches.map(m => m[1].trim()),
-      ...nameTagMatches.map(m => m[1].trim()),
-    ].filter(Boolean);
-    const found = allNames.find(n => n.toLowerCase() === ledgerName.toLowerCase());
-    if (found) return { ledgerName: found };
-    // Fallback to filtered parse for Sundry Debtors
-    const ledgers = parseLedgersXml(response);
+    const ledgers  = parseLedgersXml(response);
     return ledgers.find(l => l.ledgerName.toLowerCase() === ledgerName.toLowerCase()) || null;
   } catch (err) {
     logger.warn('Single ledger fetch failed', { ledgerName, message: err.message });
@@ -928,73 +875,34 @@ async function getVoucherTypes() {
 
 async function ensureTallyDefaults() {
   logger.info('Ensuring Tally default masters exist');
-
-  // Step 1: Fetch all ledger names under Sales Accounts to find the correct sales ledger name
-  const fetchSalesXml = `
+  const xml = `
     <ENVELOPE>
-      <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
+      <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
       <BODY>
-        <EXPORTDATA>
+        <IMPORTDATA>
           <REQUESTDESC>
-            <REPORTNAME>List of Accounts</REPORTNAME>
+            <REPORTNAME>All Masters</REPORTNAME>
             <STATICVARIABLES>
               <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
-              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-              <GROUPNAME>Sales Accounts</GROUPNAME>
+              <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
             </STATICVARIABLES>
           </REQUESTDESC>
-        </EXPORTDATA>
+          <REQUESTDATA>
+            <TALLYMESSAGE xmlns:UDF="TallyUDF">
+              <LEDGER NAME="Sales" ACTION="Create">
+                <NAME>Sales</NAME>
+                <PARENT>Sales Accounts</PARENT>
+              </LEDGER>
+            </TALLYMESSAGE>
+          </REQUESTDATA>
+        </IMPORTDATA>
       </BODY>
     </ENVELOPE>`.trim();
-
   try {
-    const salesResp = await sendToTally(fetchSalesXml);
-    // Parse NAME from both attribute and child tag forms
-    const nameMatches1 = [...(salesResp || '').matchAll(/<LEDGER\b[^>]*NAME="([^"]+)"/gi)];
-    const nameMatches2 = [...(salesResp || '').matchAll(/<NAME>(.*?)<\/NAME>/gi)];
-    const salesLedgers = [
-      ...nameMatches1.map(m => m[1].trim()),
-      ...nameMatches2.map(m => m[1].trim()),
-    ].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i); // unique
-    logger.info('Sales Account ledgers found in Tally', { salesLedgers, rawLength: (salesResp||'').length });
-
-    // Pick the first one and store it for use in vouchers
-    if (salesLedgers.length > 0) {
-      process.env.TALLY_SALES_LEDGER = salesLedgers[0];
-      logger.info('Using sales ledger for vouchers', { ledger: salesLedgers[0] });
-    } else {
-      // Fallback: create "Sales" ledger
-      logger.warn('No Sales Account ledgers found — creating default "Sales" ledger');
-      const createXml = `
-        <ENVELOPE>
-          <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
-          <BODY>
-            <IMPORTDATA>
-              <REQUESTDESC>
-                <REPORTNAME>All Masters</REPORTNAME>
-                <STATICVARIABLES>
-                  <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
-                  <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
-                </STATICVARIABLES>
-              </REQUESTDESC>
-              <REQUESTDATA>
-                <TALLYMESSAGE xmlns:UDF="TallyUDF">
-                  <LEDGER NAME="Sales" ACTION="Create">
-                    <NAME>Sales</NAME>
-                    <PARENT>Sales Accounts</PARENT>
-                  </LEDGER>
-                </TALLYMESSAGE>
-              </REQUESTDATA>
-            </IMPORTDATA>
-          </BODY>
-        </ENVELOPE>`.trim();
-      const createResp = await sendToTally(createXml);
-      process.env.TALLY_SALES_LEDGER = 'Sales';
-      logger.info('Sales ledger created', { response: (createResp || '').substring(0, 200) });
-    }
+    const response = await sendToTally(xml);
+    logger.info('Tally defaults ensured', { response: (response || '').substring(0, 200) });
   } catch (e) {
     logger.warn('Could not ensure Tally defaults', { message: e.message });
-    process.env.TALLY_SALES_LEDGER = 'Sales';
   }
 }
 

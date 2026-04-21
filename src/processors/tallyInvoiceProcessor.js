@@ -344,6 +344,13 @@ async function findBitrixParty(partyName) {
 // This is the secondary dedup guard — the local file cache is the primary guard,
 // but if the cache is wiped we need this to avoid creating duplicates.
 async function invoiceExistsInBitrix(voucherNumber, partyName = '') {
+  // Skip BX- prefixed vouchers — these were created by Bitrix→Tally sync
+  // and should never be pushed back from Tally→Bitrix
+  if (voucherNumber.startsWith('BX-')) {
+    logger.info('[TallyInvoice] Skipping BX- prefixed voucher — already from Bitrix24', { voucherNumber });
+    return true;
+  }
+
   // Check 1: by UF_ custom field (fast, may 400 if field not created)
   try {
     const res = await callBitrix('crm.item.list', {
@@ -451,6 +458,14 @@ async function processTallyInvoices() {
         // Primary guard — skip if already in local cache
         if (cache[cacheKey]) {
           skipped++;
+          logger.info('[TallyInvoice] Skipped — already in local cache', { voucherNumber: voucher.voucherNumber });
+          continue;
+        }
+
+        // Guard: skip BX- prefixed vouchers at source — don't push Bitrix-originated invoices back
+        if (voucher.voucherNumber.startsWith('BX-')) {
+          skipped++;
+          logger.info('[TallyInvoice] Skipped — BX- prefix (Bitrix originated)', { voucherNumber: voucher.voucherNumber });
           continue;
         }
 
@@ -459,13 +474,15 @@ async function processTallyInvoices() {
         // call for the common case where everything is already cached).
         const alreadyExists = await invoiceExistsInBitrix(voucher.voucherNumber, voucher.partyName);
         if (alreadyExists) {
-          logger.info('[TallyInvoice] Invoice already in Bitrix24 — updating cache entry', {
+          logger.info('[TallyInvoice] Invoice already in Bitrix24 (secondary dedup) — skipping', {
             voucherNumber: voucher.voucherNumber,
           });
           newCache[cacheKey] = { bitrixId: null, syncedAt: new Date().toISOString(), source: 'dedup-check' };
           skipped++;
           continue;
         }
+
+        logger.info('[TallyInvoice] New invoice — proceeding to create in Bitrix24', { voucherNumber: voucher.voucherNumber });
 
         await sleep(300); // space out Bitrix API calls
 

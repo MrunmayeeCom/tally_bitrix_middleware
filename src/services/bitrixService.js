@@ -171,40 +171,28 @@ async function getInvoice(id, invoiceType = 'smart') {
   } else {
     const data = await callBitrix('crm.item.get', { 
       entityTypeId: 31,
-      id,
-      select: ['id', 'title', 'opportunity', 'currencyId', 'closeDate', 'createdTime', 'companyId', 'contactId', 'CLIENT_TITLE', 'CLIENT_NAME', 'CLIENT_CONTACT']
+      id 
     });
     item = data.result?.item || data.result || data;
 
-    logger.info('[getInvoice] Raw invoice fields', {
-      id:            item.id,
-      title:         item.title,
-      clientTitle:   item.clientTitle,
-      CLIENT_TITLE:  item.CLIENT_TITLE,
-      CLIENT_NAME:   item.CLIENT_NAME,
-      companyId:     item.companyId,
-      contactId:     item.contactId,
-      opportunity:   item.opportunity,
-    });
-
     if (!item.clientTitle && !item.CLIENT_TITLE) {
-      if (item.companyId > 0) {
-        try {
-          const companyData = await callBitrix('crm.company.get', { id: item.companyId });
-          const co = companyData.result || companyData;
-          item.clientTitle = co.TITLE || '';
-          logger.info('Invoice company enriched from companyId', { companyId: item.companyId, name: item.clientTitle });
-        } catch (e) {
-          logger.warn('Could not enrich invoice company from companyId', { companyId: item.companyId, message: e.message });
-        }
-      } else if (item.contactId > 0) {
+      if (item.contactId > 0) {
         try {
           const contactData = await callBitrix('crm.contact.get', { id: item.contactId });
           const c = contactData.result || contactData;
           item.clientTitle = `${c.NAME || ''} ${c.LAST_NAME || ''}`.trim();
-          logger.info('Invoice contact enriched from contactId', { contactId: item.contactId, name: item.clientTitle });
+          logger.info('Invoice contact enriched', { contactId: item.contactId, name: item.clientTitle });
         } catch (e) {
-          logger.warn('Could not enrich invoice contact from contactId', { contactId: item.contactId, message: e.message });
+          logger.warn('Could not enrich invoice contact', { contactId: item.contactId });
+        }
+      } else if (item.companyId > 0) {
+        try {
+          const companyData = await callBitrix('crm.company.get', { id: item.companyId });
+          const co = companyData.result || companyData;
+          item.clientTitle = co.TITLE || '';
+          logger.info('Invoice company enriched', { companyId: item.companyId, name: item.clientTitle });
+        } catch (e) {
+          logger.warn('Could not enrich invoice company', { companyId: item.companyId });
         }
       }
     }
@@ -218,41 +206,29 @@ async function getQuote(id) {
   logger.info('Fetching quote:', id);
   const data = await callBitrix('crm.item.get', {
     entityTypeId: 7,
-    id,
-    select: ['id', 'title', 'opportunity', 'currencyId', 'closeDate', 'createdTime', 'companyId', 'contactId', 'CLIENT_TITLE', 'parentId', 'parentId2', 'DEAL_ID']
+    id
   });
   const item = data.result?.item || data.result || data;
 
-  logger.info('[getQuote] Raw quote fields', {
-    id:            item.id,
-    title:         item.title,
-    clientTitle:   item.clientTitle,
-    CLIENT_TITLE:  item.CLIENT_TITLE,
-    companyId:     item.companyId,
-    contactId:     item.contactId,
-    parentId:      item.parentId,
-    opportunity:   item.opportunity,
-  });
-
-  // Enrich clientTitle — prioritize company (receipt column), then contact
+  // Enrich clientTitle — same pattern as invoice
   if (!item.clientTitle && !item.CLIENT_TITLE) {
-    if (item.companyId > 0) {
-      try {
-        const companyData = await callBitrix('crm.company.get', { id: item.companyId });
-        const co = companyData.result || companyData;
-        item.clientTitle = co.TITLE || '';
-        logger.info('Quote company enriched from companyId', { companyId: item.companyId, name: item.clientTitle });
-      } catch (e) {
-        logger.warn('Could not enrich quote company from companyId', { companyId: item.companyId, message: e.message });
-      }
-    } else if (item.contactId > 0) {
+    if (item.contactId > 0) {
       try {
         const contactData = await callBitrix('crm.contact.get', { id: item.contactId });
         const c = contactData.result || contactData;
         item.clientTitle = `${c.NAME || ''} ${c.LAST_NAME || ''}`.trim();
-        logger.info('Quote contact enriched from contactId', { contactId: item.contactId, name: item.clientTitle });
+        logger.info('Quote contact enriched', { contactId: item.contactId, name: item.clientTitle });
       } catch (e) {
-        logger.warn('Could not enrich quote contact from contactId', { contactId: item.contactId, message: e.message });
+        logger.warn('Could not enrich quote contact', { contactId: item.contactId });
+      }
+    } else if (item.companyId > 0) {
+      try {
+        const companyData = await callBitrix('crm.company.get', { id: item.companyId });
+        const co = companyData.result || companyData;
+        item.clientTitle = co.TITLE || '';
+        logger.info('Quote company enriched', { companyId: item.companyId, name: item.clientTitle });
+      } catch (e) {
+        logger.warn('Could not enrich quote company', { companyId: item.companyId });
       }
     }
   }
