@@ -202,11 +202,11 @@ async function matchReceiptsToOutstanding() {
                 UF_OUTSTANDING:     m.outstanding,
               },
             });
-            logger.info('[ReceiptMatcher] Invoice payment status updated', {
+            
+            logger.info('[ReceiptMatcher] Receipt attached to invoice', {
               invoiceId,
-              dealId:    m.deal.id,
-              status:    m.isFullyPaid ? 'Paid' : 'Partial',
-              amount:    m.receipt.amount,
+              receiptNumber: m.receipt.voucherNumber,
+              amount: m.receipt.amount,
             });
           } else {
             logger.info('[ReceiptMatcher] No linked invoice found for deal — skipping invoice update', {

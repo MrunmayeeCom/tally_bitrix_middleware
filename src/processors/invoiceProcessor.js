@@ -224,6 +224,8 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     // the user explicitly set.
     if (invoiceType === 'smart' && voucher.productRows && voucher.productRows.length > 0) {
       await _attachProductRowsIfMissing(entityId, invoice, voucher.amount);
+      // Also attach to linked deal if exists
+      await _attachToLinkedDeal(entityId, invoice, voucher.productRows);
     }
 
 
@@ -343,6 +345,90 @@ async function _attachProductRowsIfMissing(entityId, invoice, totalAmount) {
     logger.warn('[InvoiceProcessor] Product row attach failed — non-fatal', {
       entityId,
       message: err.message,
+    });
+  }
+}
+
+// Attach product rows to the deal linked to this invoice
+async function _attachToLinkedDeal(entityId, invoice, productRows) {
+  try {
+    const { callBitrix } = require('../connectors/bitrixConnector');
+    
+    // Try to find linked deal via custom field on invoice
+    let dealId = null;
+    
+    // Method 1: Check invoice UF fields for deal reference
+    const invoiceData = await callBitrix('crm.item.get', { 
+      entityTypeId: 31, 
+      id: Number(entityId) 
+    });
+    const invoiceItem = invoiceData.result?.item || invoiceData.result;
+    
+    // Check common UF fields that might link to deal
+    const dealFieldCandidates = ['ufCrmDealid', 'ufDealId', 'UF_DEAL_ID', 'DEAL_ID'];
+    for (const field of dealFieldCandidates) {
+      if (invoiceItem[field]) {
+        dealId = invoiceItem[field];
+        break;
+      }
+    }
+    
+    // Method 2: If invoice has contact/company, find matching open deals
+    if (!dealId) {
+      const contactId = invoiceItem.contactId || invoice.contactId;
+      const companyId = invoiceItem.companyId || invoice.companyId;
+      
+      if (contactId || companyId) {
+        const filter = {};
+        if (contactId) filter.CONTACT_ID = contactId;
+        if (companyId) filter.COMPANY_ID = companyId;
+        filter.STAGE_ID = ['NEW', 'PREPARATION', 'PREPAYMENT'];
+        
+        const dealsRes = await callBitrix('crm.deal.list', {
+          filter,
+          select: ['ID', 'TITLE', 'CONTACT_ID', 'COMPANY_ID', 'STAGE_ID'],
+          order: { ID: 'DESC' },
+          start: 0
+        });
+        
+        const deals = dealsRes.result || [];
+        if (deals.length > 0) {
+          dealId = deals[0].ID;
+        }
+      }
+    }
+    
+    if (!dealId) {
+      logger.info('[InvoiceProcessor] No linked deal found for invoice', { entityId });
+      return;
+    }
+    
+    // Attach product rows to deal
+    const rows = productRows.map(row => ({
+      PRODUCT_ID: row.PRODUCT_ID || row.productId,
+      PRODUCT_NAME: row.PRODUCT_NAME || row.productName,
+      PRICE: row.PRICE || row.price,
+      QUANTITY: row.QUANTITY || row.quantity || 1,
+      DISCOUNT: 0,
+      CURRENCY_ID: 'INR',
+    }));
+    
+    await callBitrix('crm.productrow.set', {
+      ownerType: 'D',
+      ownerId: Number(dealId),
+      productRows: rows,
+    });
+    
+    logger.info('[InvoiceProcessor] Product rows attached to linked deal', {
+      entityId,
+      dealId,
+      productCount: rows.length
+    });
+    
+  } catch (err) {
+    logger.warn('[InvoiceProcessor] Failed to attach to deal — non-fatal', {
+      entityId,
+      message: err.message
     });
   }
 }
