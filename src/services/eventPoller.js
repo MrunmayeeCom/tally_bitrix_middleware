@@ -98,6 +98,8 @@ async function processEvent(event) {
   }
 }
 
+let _processingEntities = new Set();
+
 async function pollOnce() {
   if (_isPolling) return;
   _isPolling = true;
@@ -113,15 +115,24 @@ async function pollOnce() {
 
     logger.info(`[Poller] Received ${events.length} pending events | clientId: ${getClientId()}`);
 
-    // Sort ADD before UPDATE for the same entity — prevents UPDATE arriving
-    // before the voucher exists in Tally when both are fetched in the same poll batch
+    // Filter out events for entities currently being processed (from previous poll cycles)
+    const filteredEvents = events.filter(event => {
+      const entityId = event.payload?.entityId || event.entityId;
+      if (_processingEntities.has(entityId)) {
+        logger.info(`[Poller] Skipping entity being processed in previous cycle`, { entityId, eventId: event.eventId });
+        return false;
+      }
+      return true;
+    });
+
     // Also deduplicate by entityId within the same poll cycle
     const seenEntities = new Set();
     const uniqueEvents = [];
-    for (const event of events) {
+    for (const event of filteredEvents) {
       const entityId = event.payload?.entityId || event.entityId;
       if (!seenEntities.has(entityId)) {
         seenEntities.add(entityId);
+        _processingEntities.add(entityId); // Mark as being processed
         uniqueEvents.push(event);
       } else {
         logger.info(`[Poller] Skipping duplicate entity in same poll cycle`, { entityId, eventId: event.eventId });
@@ -141,6 +152,9 @@ async function pollOnce() {
         confirmedIds.push(event.eventId);
       } catch (err) {
         logger.warn(`[Poller] Skipping confirmation for failed event: ${event.eventId}`, { error: err.message });
+      } finally {
+        const entityId = event.payload?.entityId || event.entityId;
+        _processingEntities.delete(entityId); // Remove from in-progress set on success or failure
       }
     }
 

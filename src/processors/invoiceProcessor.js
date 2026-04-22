@@ -102,16 +102,16 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     if (!isUpdate) {
       const dedupKey = `invoice_${voucher.voucherNumber}`;
       
-      // Single unified check — covers both 'already done' and 'in-progress' states
+      // REFRESH from file before checking — must see if other process wrote dedup
+      _invoiceDedupCache = loadInvoiceDedup();
+      
       if (_invoiceDedupCache[dedupKey]) {
-        logger.warn('Duplicate invoice blocked by dedup', { entityId, voucherNumber: voucher.voucherNumber, existingEntry: _invoiceDedupCache[dedupKey] });
+        logger.warn('Duplicate invoice blocked by dedup', { entityId, voucherNumber: voucher.voucherNumber });
         return { success: true, voucher, skipped: true };
       }
       
-      // Atomic in-memory lock — set BEFORE any await to block parallel calls in same process
       _invoiceDedupCache[dedupKey] = Date.now();
       saveInvoiceDedup(_invoiceDedupCache);
-      logger.info('Dedup lock acquired', { entityId, voucherNumber: voucher.voucherNumber });
     }
 
     // Step 3b: Ensure party ledger exists in Tally
