@@ -175,8 +175,51 @@ function parseLedgersXml(xml) {
 }
 
 // Create Voucher in Tally (Sales Order / Sales Invoice)
+function _renderInventory(voucher) {
+  if (!voucher.productRows || voucher.productRows.length === 0) return '';
+  return voucher.productRows.map(row => {
+    const name = row.PRODUCT_NAME || row.productName || '';
+    const price = parseFloat(row.PRICE || row.price || 0);
+    const qty = parseFloat(row.QUANTITY || row.quantity || 1);
+    const amount = (price * qty).toFixed(2);
+    return `
+                <ALLINVENTORYENTRIES.LIST>
+                  <STOCKITEMNAME>${escapeXml(name)}</STOCKITEMNAME>
+                  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                  <RATE>${price}/Nos</RATE>
+                  <AMOUNT>${amount}</AMOUNT>
+                  <ACTUALQTY>${qty} Nos</ACTUALQTY>
+                  <BILLEDQTY>${qty} Nos</BILLEDQTY>
+                  <ACCOUNTINGALLOCATIONS.LIST>
+                    <LEDGERNAME>Sales</LEDGERNAME>
+                    <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                    <AMOUNT>${amount}</AMOUNT>
+                  </ACCOUNTINGALLOCATIONS.LIST>
+                </ALLINVENTORYENTRIES.LIST>`;
+  }).join('');
+}
+
 async function createVoucher(voucher) {
-  logger.info('Creating voucher in Tally', { voucherNumber: voucher.voucherNumber });
+  const hasInventory = voucher.productRows && voucher.productRows.length > 0;
+  logger.info('Creating voucher in Tally', { 
+    voucherNumber: voucher.voucherNumber,
+    partyName: voucher.partyName,
+    amount: voucher.amount,
+    hasInventory,
+    itemCount: hasInventory ? voucher.productRows.length : 0,
+    items: hasInventory ? voucher.productRows.map(r => r.PRODUCT_NAME || r.productName || '').join(', ') : ''
+  });
+
+  // Render inventory entries for logging (no XML escaping)
+  const invEntries = hasInventory 
+    ? voucher.productRows.map((row, i) => {
+        const name = row.PRODUCT_NAME || row.productName || '';
+        const price = parseFloat(row.PRICE || row.price || 0);
+        const qty = parseFloat(row.QUANTITY || row.quantity || 1);
+        return `[${i+1}] ${name} × ${qty} @ ${price}`;
+      }).join(' | ')
+    : '(none)';
+  logger.info('Inventory entries being synced', { voucherNumber: voucher.voucherNumber, entries: invEntries });
 
   const xml = `
     <ENVELOPE>
@@ -193,16 +236,19 @@ async function createVoucher(voucher) {
           </REQUESTDESC>
           <REQUESTDATA>
             <TALLYMESSAGE xmlns:UDF="TallyUDF">
-              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="${(voucher.productRows && voucher.productRows.length > 0) ? 'Invoice Voucher View' : 'Accounting Voucher View'}">
+              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="${hasInventory ? 'Invoice Voucher View' : 'Accounting Voucher View'}">
                 <DATE>${voucher.date.replace(/-/g, '')}</DATE>
                 <VOUCHERTYPENAME>${voucher.voucherType}</VOUCHERTYPENAME>
                 <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
                 <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
-                <PERSISTEDVIEW>${(voucher.productRows && voucher.productRows.length > 0) ? 'Invoice Voucher View' : 'Accounting Voucher View'}</PERSISTEDVIEW>
-                <ISINVOICE>${(voucher.productRows && voucher.productRows.length > 0) ? 'Yes' : 'No'}</ISINVOICE>
+                <PERSISTEDVIEW>${hasInventory ? 'Invoice Voucher View' : 'Accounting Voucher View'}</PERSISTEDVIEW>
+                <ISINVOICE>${hasInventory ? 'Yes' : 'No'}</ISINVOICE>
                 <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
+                <BASICBASEPARTYNAME>${escapeXml(voucher.partyName)}</BASICBASEPARTYNAME>
+                <BASICBUYERNAME>${escapeXml(voucher.partyName)}</BASICBUYERNAME>
                 <NARRATION>${escapeXml(voucher.narration)}</NARRATION>
-                <ALLLEDGERENTRIES.LIST>
+                ${ _renderInventory(voucher) }
+                <LEDGERENTRIES.LIST>
                   <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
                   <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
                   <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
@@ -213,42 +259,12 @@ async function createVoucher(voucher) {
                     <BILLTYPE>New Ref</BILLTYPE>
                     <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
                   </BILLALLOCATIONS.LIST>
-                </ALLLEDGERENTRIES.LIST>
-                ${(voucher.productRows && voucher.productRows.length > 0)
-                  ? voucher.productRows.map(row => {
-                      const name = row.PRODUCT_NAME || row.productName || '';
-                      const price = parseFloat(row.PRICE || row.price || 0);
-                      const qty = parseFloat(row.QUANTITY || row.quantity || 1);
-                      const amount = (price * qty).toFixed(2);
-                      return `
-                <ALLINVENTORYENTRIES.LIST>
-                  <STOCKITEMNAME>${escapeXml(name)}</STOCKITEMNAME>
-                  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                  <RATE>${price}/Nos</RATE>
-                  <AMOUNT>${amount}</AMOUNT>
-                  <ACTUALQTY>${qty} Nos</ACTUALQTY>
-                  <BILLEDQTY>${qty} Nos</BILLEDQTY>
-                  <BATCHALLOCATIONS.LIST>
-                    <GODOWNNAME>Main Location</GODOWNNAME>
-                    <BATCHNAME>Primary Batch</BATCHNAME>
-                    <DESTINATIONGODOWNNAME>Main Location</DESTINATIONGODOWNNAME>
-                    <AMOUNT>${amount}</AMOUNT>
-                    <ACTUALQTY>${qty} Nos</ACTUALQTY>
-                    <BILLEDQTY>${qty} Nos</BILLEDQTY>
-                  </BATCHALLOCATIONS.LIST>
-                  <ACCOUNTINGALLOCATIONS.LIST>
-                    <LEDGERNAME>Sales</LEDGERNAME>
-                    <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                    <AMOUNT>${amount}</AMOUNT>
-                  </ACCOUNTINGALLOCATIONS.LIST>
-                </ALLINVENTORYENTRIES.LIST>`;
-                    }).join('\n')
-                  : `
-                <ALLLEDGERENTRIES.LIST>
+                </LEDGERENTRIES.LIST>
+                ${!hasInventory ? `<LEDGERENTRIES.LIST>
                   <LEDGERNAME>Sales</LEDGERNAME>
                   <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
                   <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
-                </ALLLEDGERENTRIES.LIST>`}
+                </LEDGERENTRIES.LIST>` : ''}
               </VOUCHER>
             </TALLYMESSAGE>
           </REQUESTDATA>
@@ -274,7 +290,17 @@ async function createVoucher(voucher) {
   // Log full response when EXCEPTIONS > 0 but no LINEERROR — helps diagnose silent failures
   const exceptions = parseInt((response || '').match(/<EXCEPTIONS>(\d+)<\/EXCEPTIONS>/i)?.[1] ?? '0');
   if (exceptions > 0) {
-    logger.error('Tally voucher exception (no LINEERROR) — full response:', (response || '').substring(0, 500));
+    // Try to extract any error info from response
+    const tallyErr = response.match(/<TALLYERROR>(.*?)<\/TALLYERROR>/i)?.[1] 
+      || response.match(/<REMOTEERROR>(.*?)<\/REMOTEERROR>/i)?.[1]
+      || response.match(/<ERROR>(.*?)<\/ERROR>/i)?.[1]
+      || 'unknown';
+    logger.error('Tally voucher exception — response:', { 
+      voucherNumber: voucher.voucherNumber, 
+      exceptions, 
+      tallyError: tallyErr,
+      fullResponse: (response || '').substring(0, 1000)
+    });
   }
 
   const created    = parseInt((response || '').match(/<CREATED>(\d+)<\/CREATED>/i)?.[1] ?? '0');
@@ -282,9 +308,15 @@ async function createVoucher(voucher) {
   const altered    = parseInt((response || '').match(/<ALTERED>(\d+)<\/ALTERED>/i)?.[1] ?? '0');
 
   if (exceptions > 0 || errors > 0) {
+    // Retry: Sales Order → Sales (voucher type fallback)
     if (voucher.voucherType === 'Sales Order') {
       logger.warn('Sales Order rejected by Tally — retrying as Sales Invoice', { voucherNumber: voucher.voucherNumber });
       return createVoucher({ ...voucher, voucherType: 'Sales' });
+    }
+    // Retry: inventory rejected — strip inventory and create as pure accounting invoice
+    if (hasInventory) {
+      logger.warn('Inventory entries rejected — retrying without inventory', { voucherNumber: voucher.voucherNumber });
+      return createVoucher({ ...voucher, productRows: [] });
     }
     logger.error('Tally voucher create failed', { voucherNumber: voucher.voucherNumber, created, exceptions, errors });
     throw new Error(`Tally voucher create failed (created=${created}, exceptions=${exceptions}, errors=${errors})`);
@@ -599,28 +631,6 @@ async function alterVoucher(voucher) {
 
   // ── Step 4: Recreate with updated values ──────────────────────────────────
   return _createAndCache(voucher, voucherTypeName, masterId);
-}
-
-async function _createAndCache(voucher, voucherTypeName, oldMasterId) {
-  const resp = await createVoucher(voucher);
-  try {
-    const { storeMasterId } = require('../utils/voucherCache');
-    const midMatch = (resp || '').match(/<LASTVCHID>\s*([1-9]\d*)\s*<\/LASTVCHID>/i);
-    const newMid   = midMatch?.[1] || null;
-    if (newMid && voucher.entityId) {
-      storeMasterId(voucher.entityId, newMid, `BX-${voucher.voucherNumber}`, voucherTypeName, {
-        version:   1,
-        amount:    voucher.amount,
-        partyName: voucher.partyName,
-      });
-      logger.info('Cache updated after create', {
-        voucherNumber: voucher.voucherNumber, oldMasterId, newMasterId: newMid,
-      });
-    }
-  } catch (e) {
-    logger.warn('Cache update failed — non-fatal', { message: e.message });
-  }
-  return resp;
 }
 
 // Shared helper: create voucher and store new MASTERID in cache

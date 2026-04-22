@@ -115,7 +115,20 @@ async function pollOnce() {
 
     // Sort ADD before UPDATE for the same entity — prevents UPDATE arriving
     // before the voucher exists in Tally when both are fetched in the same poll batch
-    const sorted = [...events].sort((a, b) => {
+    // Also deduplicate by entityId within the same poll cycle
+    const seenEntities = new Set();
+    const uniqueEvents = [];
+    for (const event of events) {
+      const entityId = event.payload?.entityId || event.entityId;
+      if (!seenEntities.has(entityId)) {
+        seenEntities.add(entityId);
+        uniqueEvents.push(event);
+      } else {
+        logger.info(`[Poller] Skipping duplicate entity in same poll cycle`, { entityId, eventId: event.eventId });
+      }
+    }
+
+    const sorted = [...uniqueEvents].sort((a, b) => {
       const isAddA = a.eventType && a.eventType.endsWith('ADD') ? 0 : 1;
       const isAddB = b.eventType && b.eventType.endsWith('ADD') ? 0 : 1;
       return isAddA - isAddB;
@@ -123,11 +136,17 @@ async function pollOnce() {
 
     const confirmedIds = [];
     for (const event of sorted) {
-      await processEvent(event);
-      confirmedIds.push(event.eventId);
+      try {
+        await processEvent(event);
+        confirmedIds.push(event.eventId);
+      } catch (err) {
+        logger.warn(`[Poller] Skipping confirmation for failed event: ${event.eventId}`, { error: err.message });
+      }
     }
 
-    await confirmEvents(confirmedIds);
+    if (confirmedIds.length > 0) {
+      await confirmEvents(confirmedIds);
+    }
 
   } catch (err) {
     logger.warn(`[Poller] Poll cycle error: ${err.message}`);

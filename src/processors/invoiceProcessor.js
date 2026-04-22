@@ -4,6 +4,11 @@ const { createVoucher } = require('../services/tallyService');
 const logger = require('../utils/logger');
 const fs = require('fs');
 const path = require('path');
+const tallyConfig = require('../config/tallyConfig');
+
+function escapeXml(str) {
+  return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
 
 const INVOICE_DEDUP_PATH = path.join(__dirname, '../../logs/invoice-dedup-cache.json');
 
@@ -40,6 +45,13 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
 
     // Step 1b: Ensure the party ledger exists in Tally before pushing the voucher
     const partyName = invoice.clientTitle || invoice.CLIENT_TITLE || '';
+    logger.info('Party name being used for invoice', { 
+      entityId, 
+      partyName, 
+      clientTitle: invoice.clientTitle, 
+      CLIENT_TITLE: invoice.CLIENT_TITLE,
+      companyId: invoice.companyId 
+    });
     if (!partyName) {
       logger.warn('Invoice skipped — no contact or company linked in Bitrix24', {
         entityId,
@@ -86,17 +98,20 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     });
 
     // Step 3: Dedup check — FIRST thing before ANY async work
-    // Moving this before ledger lookup eliminates the ~150ms Tally race window
+    // IMMEDIATE file write to block concurrent requests from Render duplicate events
     if (!isUpdate) {
       const dedupKey = `invoice_${voucher.voucherNumber}`;
-      _invoiceDedupCache = loadInvoiceDedup();
+      
+      // Single unified check — covers both 'already done' and 'in-progress' states
       if (_invoiceDedupCache[dedupKey]) {
-        logger.warn('Duplicate invoice webhook (persistent dedup) — skipping', {
-          voucherNumber: voucher.voucherNumber,
-          firstSeenAt: new Date(_invoiceDedupCache[dedupKey]).toISOString()
-        });
+        logger.warn('Duplicate invoice blocked by dedup', { entityId, voucherNumber: voucher.voucherNumber, existingEntry: _invoiceDedupCache[dedupKey] });
         return { success: true, voucher, skipped: true };
       }
+      
+      // Atomic in-memory lock — set BEFORE any await to block parallel calls in same process
+      _invoiceDedupCache[dedupKey] = Date.now();
+      saveInvoiceDedup(_invoiceDedupCache);
+      logger.info('Dedup lock acquired', { entityId, voucherNumber: voucher.voucherNumber });
     }
 
     // Step 3b: Ensure party ledger exists in Tally
@@ -150,7 +165,8 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
           <STOCKITEM NAME="${escName}" Action="Create">
             <NAME>${escName}</NAME>
-            <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>
+            <GSTTYPEOFSUPPLY>Goods</GSTTYPEOFSUPPLY>
+            <BASEUNITS>Nos</BASEUNITS>
           </STOCKITEM>
         </TALLYMESSAGE>
       </REQUESTDATA>
@@ -167,14 +183,15 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     }
 
     // Step 4: Create voucher in Tally (new invoices only)
+    // Use simple voucher (without inventory) for reliability - inventory causes exceptions
     const result = await createVoucher(voucher);
 
-    // Write dedup key only after confirmed success — prevents failed invoices from being permanently blocked
+    // Clear in-memory flag and write persistent dedup on success
     if (!isUpdate) {
       const dedupKey = `invoice_${voucher.voucherNumber}`;
-      _invoiceDedupCache = loadInvoiceDedup();
       _invoiceDedupCache[dedupKey] = Date.now();
       saveInvoiceDedup(_invoiceDedupCache);
+      logger.info('Invoice dedup cached after success', { entityId, voucherNumber: voucher.voucherNumber });
     }
 
     // Step 5: Store the created voucher reference for reverse sync
@@ -219,6 +236,13 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     return { success: true, voucher };
 
   } catch (error) {
+    // Clear dedup on failure so it can be retried
+    // Guard: voucher may be undefined if error occurred before mapping
+    if (!isUpdate && typeof voucher !== 'undefined' && voucher?.voucherNumber) {
+      const dedupKey = `invoice_${voucher.voucherNumber}`;
+      delete _invoiceDedupCache[dedupKey];
+      saveInvoiceDedup(_invoiceDedupCache);
+    }
     logger.error('Invoice processor failed', {
       entityId,
       message: error.message
@@ -240,11 +264,24 @@ async function _attachProductRowsIfMissing(entityId, invoice, totalAmount) {
 
     const { callBitrix } = require('../connectors/bitrixConnector');
 
-    // Check whether this invoice already has product rows
-    // Skip the productrow.list existence check entirely — it 400s on this Bitrix24 instance.
-    // The set call is idempotent so calling it when rows already exist just overwrites them,
-    // which is acceptable for catalog-attach enrichment.
-    logger.info('[InvoiceProcessor] Skipping productrow.list check — proceeding directly to attach', { entityId });
+    // Check whether this invoice already has product rows - DON'T overwrite manually entered products
+    let existingRows = [];
+    try {
+      const rowRes = await callBitrix('crm.productrow.list', {
+        filter: { OWNER_ID: Number(entityId), OWNER_TYPE: 'SI' },
+      });
+      existingRows = rowRes.result || [];
+    } catch (e) {
+      logger.info('[InvoiceProcessor] Could not check existing rows', { entityId, message: e.message });
+    }
+
+    if (existingRows.length > 0) {
+      logger.info('[InvoiceProcessor] Invoice already has product rows — skipping attach', { 
+        entityId, 
+        count: existingRows.length 
+      });
+      return;
+    }
 
     // Fetch the Bitrix24 product catalog (populated by inventory sync)
     const { fetchAllBitrixProducts } = require('../processors/inventoryProcessor');
