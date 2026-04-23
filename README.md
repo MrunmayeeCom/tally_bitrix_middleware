@@ -66,12 +66,3 @@ Tally Outstanding Bills
         ↓
    Bitrix24 Deals
 ```
-
-## Switching from Mock to Real Tally
-
-In `src/services/tallyService.js`:
-```js
-const MOCK_MODE = false; // Change this to false
-```
-
-Then uncomment the real connector code in each function.

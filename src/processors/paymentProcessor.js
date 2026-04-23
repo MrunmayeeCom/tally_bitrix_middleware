@@ -238,10 +238,10 @@ async function updateDealPaymentStatus(deal, receipt, isFullyPaid) {
 
     const fields = {
       UF_PAYMENT_STATUS:   isFullyPaid ? 'Paid' : 'Partial',
-      UF_PAYMENT_DATE:     receipt.date,
-      UF_PAYMENT_AMOUNT:   receipt.amount,
+      UF_PAYMENT_DATE:    receipt.date,
+      UF_PAYMENT_AMOUNT:  receipt.amount,
       UF_RECEIPT_NUMBER:   receipt.voucherNumber,
-      UF_OUTSTANDING:      Math.max(0, dealAmount - receipt.amount),
+      UF_OUTSTANDING:     Math.max(0, dealAmount - receipt.amount),
     };
 
     // Move to correct stage
@@ -252,12 +252,128 @@ async function updateDealPaymentStatus(deal, receipt, isFullyPaid) {
     }
 
     await callBitrix('crm.deal.update', { id: dealId, fields });
+    
+    // Also update linked Smart Invoice
+    await updateLinkedInvoice(dealId, receipt, isFullyPaid);
+    
     logger.info('Deal payment status updated', {
       dealId, status: fields.UF_PAYMENT_STATUS, stage: fields.STAGE_ID,
     });
   } catch (e) {
     logger.error('Failed to update deal payment status', { dealId, message: e.message });
     throw e;
+  }
+}
+
+// Update Smart Invoice linked to this deal
+async function updateLinkedInvoice(dealId, receipt, isFullyPaid) {
+  try {
+    // Find invoice linked to this deal via parentId2
+    const invoiceSearch = await callBitrix('crm.item.list', {
+      entityTypeId: 31,
+      filter: { 'parentId2': Number(dealId) },
+      select: ['id', 'title', 'stageId'],
+    });
+    
+    const invoices = invoiceSearch.result?.items || [];
+    if (invoices.length === 0) {
+      logger.info('No linked invoice found for deal', { dealId });
+      return;
+    }
+    
+    // Update each linked invoice
+    for (const invoice of invoices) {
+      const invoiceId = invoice.id;
+      const dealAmount = parseFloat(invoice.opportunity) || parseFloat(invoice.OPPORTUNITY) || 0;
+      
+      // Update invoice with payment fields
+      const invoiceFields = {
+        UF_PAYMENT_STATUS:   isFullyPaid ? 'Paid' : 'Partial',
+        UF_PAYMENT_AMOUNT:  receipt.amount,
+        UF_PAYMENT_DATE:    receipt.date,
+        UF_RECEIPT_NUMBER:  receipt.voucherNumber,
+        UF_OUTSTANDING:     Math.max(0, dealAmount - receipt.amount),
+      };
+      
+      await callBitrix('crm.item.update', {
+        entityTypeId: 31,
+        id: invoiceId,
+        fields: invoiceFields,
+      });
+      
+      logger.info('Linked invoice updated with payment info', {
+        invoiceId,
+        dealId,
+        status: isFullyPaid ? 'Paid' : 'Partial',
+        receiptNumber: receipt.voucherNumber,
+      });
+}
+  
+  } catch (e) {
+    logger.warn('Failed to update linked invoice', { dealId, message: e.message });
+  }
+}
+
+// Move linked Smart Invoice to Won/Completed stage
+async function moveInvoiceToWonStage(dealId) {
+  try {
+    // Find invoice linked to this deal
+    const invoiceSearch = await callBitrix('crm.item.list', {
+      entityTypeId: 31,
+      filter: { 'parentId2': Number(dealId) },
+      select: ['id', 'title', 'stageId'],
+    });
+    
+    const invoices = invoiceSearch.result?.items || [];
+    if (invoices.length === 0) {
+      logger.info('No linked invoice found for deal WON', { dealId });
+      return;
+    }
+    
+    // Get the Won stage ID for Smart Invoices
+    const categoryId = await getTallyPipelineCategoryId();
+    if (!categoryId) return;
+    
+    const stagesData = await callBitrix('crm.item.fields', {
+      entityTypeId: 31,
+    });
+    const stageField = stagesData.result?.fields?.stageId;
+    const stageOptions = stageField?.settings?.options || [];
+    
+    // Find 'Successfully Completed' or 'Won' stage
+    let wonStageId = null;
+    for (const stage of stageOptions) {
+      const name = (stage.name || '').toLowerCase();
+      if (name.includes('successfully') || name.includes('won') || name.includes('completed')) {
+        wonStageId = stage.statusId;
+        break;
+      }
+    }
+    
+    // If no custom stage found, try default WON stage
+    if (!wonStageId) {
+      wonStageId = 'SUCCESSFULLY_COMPLETED';
+    }
+    
+    // Update each linked invoice
+    for (const invoice of invoices) {
+      await callBitrix('crm.item.update', {
+        entityTypeId: 31,
+        id: invoice.id,
+        fields: {
+          stageId: wonStageId,
+          UF_PAYMENT_STATUS: 'Paid',
+        },
+      });
+      
+      logger.info('Linked invoice moved to Won stage', {
+        invoiceId: invoice.id,
+        dealId,
+        stageId: wonStageId,
+      });
+    }
+  } catch (e) {
+    logger.warn('Failed to move linked invoice to Won stage', { dealId, message: e.message });
   }
 }
 
@@ -364,6 +480,10 @@ async function processPayments() {
               id:     deal.ID,
               fields: { STAGE_ID: 'WON' },
             });
+            
+            // Also move linked invoice to Won/Completed stage
+            await moveInvoiceToWonStage(deal.ID);
+            
             logger.info('Deal marked WON — full payment received', {
               dealId: deal.ID, title: deal.TITLE, amount: ref.amount,
             });

@@ -166,6 +166,28 @@ function parseSalesVouchersWithItems(xml) {
     const voucherNumber = get('VOUCHERNUMBER') || '';
     if (voucherNumber.startsWith('BX-')) continue;
 
+    // CRITICAL FIX: Also skip if this voucher was synced FROM Bitrix24
+    // Check voucher-masterid-cache.json for reverse lookup
+    // invoiceProcessor stores "BX-{number}" but Tally internal number is just "{number}"
+    try {
+      const voucherCachePath = path.join(__dirname, '../../logs/voucher-masterid-cache.json');
+      if (fs.existsSync(voucherCachePath)) {
+        const voucherCache = JSON.parse(fs.readFileSync(voucherCachePath, 'utf8'));
+        const cacheValues = Object.values(voucherCache);
+        // Check if this Tally voucher number matches any "BX-{number}" in cache
+        // e.g., Tally has "3481", cache has "BX-3481"
+        const isBitrixOrigin = cacheValues.some(entry => {
+          const cachedVn = entry.voucherNumber || '';
+          return cachedVn === `BX-${voucherNumber}` || cachedVn === `BX-${parseInt(voucherNumber)}`;
+        });
+        if (isBitrixOrigin) {
+          continue; // Skip - this voucher was originally synced from Bitrix
+        }
+      }
+    } catch (cacheErr) {
+      // Non-fatal - continue processing
+    }
+
     const partyName = get('PARTYLEDGERNAME')
       || get('BASICBUYERNAME')
       || get('BASICBILLLEDGERNAME')
@@ -399,30 +421,32 @@ async function processItemInvoices() {
           const entry = cache[cacheKey];
           if (entry.failed) {
             // Before waiting for tombstone to expire, check if invoice already exists
-            // This clears stuck tombstones caused by productrow.set failures
+            // Check by UF_TALLY_VOUCHER_NO first (most reliable)
+            let existingId = null;
             try {
-              const existCheck = await callBitrix('crm.item.list', {
+              const fieldCheck = await callBitrix('crm.item.list', {
                 entityTypeId: 31,
-                filter: { '=title': `${voucher.partyName} - ${voucher.voucherNumber}` },
+                filter: { 'UF_TALLY_VOUCHER_NO': voucher.voucherNumber },
                 select: ['id'],
               });
-              if ((existCheck.result?.items?.length ?? 0) > 0) {
-                const existingId = existCheck.result.items[0].id;
-                logger.info('[ItemInvoice] Tombstoned voucher already exists in Bitrix24 — clearing tombstone', {
-                  voucherNumber: voucher.voucherNumber,
-                  invoiceId: existingId,
-                });
-                newCache[cacheKey] = {
-                  invoiceId:     existingId,
-                  syncedAt:      new Date().toISOString(),
-                  source:        'tombstone-cleared',
-                  partyName:     voucher.partyName,
-                  voucherNumber: voucher.voucherNumber,
-                };
-                skipped++;
-                continue;
+              if ((fieldCheck.result?.items?.length ?? 0) > 0) {
+                existingId = fieldCheck.result.items[0].id;
               }
             } catch (_) {}
+
+            // Fallback: check by title
+            if (!existingId) {
+              try {
+                const existCheck = await callBitrix('crm.item.list', {
+                  entityTypeId: 31,
+                  filter: { '=title': `${voucher.partyName} - ${voucher.voucherNumber}` },
+                  select: ['id'],
+                });
+                if ((existCheck.result?.items?.length ?? 0) > 0) {
+                  existingId = existCheck.result.items[0].id;
+                }
+              } catch (_) {}
+            }
 
             const ageMs = Date.now() - (entry.failedAt || 0);
             if (ageMs < 60 * 60 * 1000) {
@@ -451,36 +475,159 @@ async function processItemInvoices() {
         }
 
         // Check if this invoice already exists in Bitrix24 before creating
-        // Handles tombstone-retry case where invoice was created but productrow.set failed
+        // Check 1: by UF_TALLY_VOUCHER_NO (most reliable - stores Tally voucher number)
+        let existingId = null;
+        const expectedTitle = `${voucher.partyName} - ${voucher.voucherNumber}`;
+        
         try {
-          const existCheck = await callBitrix('crm.item.list', {
+          const fieldCheck = await callBitrix('crm.item.list', {
             entityTypeId: 31,
-            filter: { '=title': `${voucher.partyName} - ${voucher.voucherNumber}` },
-            select: ['id'],
+            filter: { UF_TALLY_VOUCHER_NO: voucher.voucherNumber },
+            select: ['id', 'title'],
           });
-          if ((existCheck.result?.items?.length ?? 0) > 0) {
-            const existingId = existCheck.result.items[0].id;
-            logger.info('[ItemInvoice] Invoice already exists in Bitrix24 — marking as synced', {
+          if ((fieldCheck.result?.items?.length ?? 0) > 0) {
+            existingId = fieldCheck.result.items[0].id;
+            logger.info('[ItemInvoice] Invoice found by UF_TALLY_VOUCHER_NO dedup', {
               voucherNumber: voucher.voucherNumber,
               invoiceId: existingId,
             });
-            newCache[cacheKey] = {
-              invoiceId:     existingId,
-              syncedAt:      new Date().toISOString(),
-              source:        'dedup-check',
-              partyName:     voucher.partyName,
-              voucherNumber: voucher.voucherNumber,
-            };
-            saveCache(newCache); // write immediately so next run skips via cache, not Bitrix API
-            skipped++;
-            continue;
           }
-        } catch (_) {
-          // Check failed — proceed with create, dedup cache will prevent future duplicates
+        } catch (e) {
+          // Field may not exist or filter syntax issue - log and continue to title check
+          logger.warn('[ItemInvoice] UF_TALLY_VOUCHER_NO check failed', { 
+            voucherNumber: voucher.voucherNumber, 
+            error: e.message 
+          });
         }
 
-        // Find the party in Bitrix24
-        const partyIds = await findBitrixParty(voucher.partyName);
+        // Check 2: by exact title match (fallback)
+        if (!existingId) {
+          try {
+            const existCheck = await callBitrix('crm.item.list', {
+              entityTypeId: 31,
+              filter: { title: expectedTitle },
+              select: ['id', 'title'],
+            });
+            if ((existCheck.result?.items?.length ?? 0) > 0) {
+              existingId = existCheck.result.items[0].id;
+              logger.info('[ItemInvoice] Invoice found by title dedup', {
+                voucherNumber: voucher.voucherNumber,
+                invoiceId: existingId,
+                title: existCheck.result.items[0].title,
+              });
+            }
+          } catch (_) {}
+        }
+
+        // Check 3: by company name + amount (if title doesn't match)
+        // This finds invoices like "Invoice #7032" when looking for "Zaveri Textiles - 3515"
+        if (!existingId) {
+          const partyIds = await findBitrixParty(voucher.partyName);
+          if (partyIds.companyId) {
+            try {
+              const companyCheck = await callBitrix('crm.item.list', {
+                entityTypeId: 31,
+                filter: { 
+                  '=COMPANY_ID': partyIds.companyId,
+                  '=OPPORTUNITY': voucher.amount,
+                },
+                select: ['id', 'title', 'COMPANY_ID'],
+              });
+              if ((companyCheck.result?.items?.length ?? 0) > 0) {
+                existingId = companyCheck.result.items[0].id;
+                logger.info('[ItemInvoice] Invoice found by company+amount dedup', {
+                  voucherNumber: voucher.voucherNumber,
+                  invoiceId: existingId,
+                  companyId: partyIds.companyId,
+                  title: companyCheck.result.items[0].title,
+                });
+              }
+            } catch (_) {}
+          }
+        }
+
+        // Check 3: by company name + amount (if title doesn't match)
+        // This finds invoices like "Invoice #7032" when looking for "Zaveri Textiles - 3515"
+        let partyIds = null;
+        if (!existingId) {
+          partyIds = await findBitrixParty(voucher.partyName);
+          if (partyIds.companyId) {
+            try {
+              // Search invoices by company first, then filter by amount in code (filter syntax causes 400 errors)
+              const companyInvoices = await callBitrix('crm.item.list', {
+                entityTypeId: 31,
+                filter: { COMPANY_ID: partyIds.companyId },
+                select: ['id', 'title', 'COMPANY_ID', 'OPPORTUNITY'],
+                order: { id: 'DESC' },
+              });
+              if ((companyInvoices.result?.items?.length ?? 0) > 0) {
+                for (const inv of companyInvoices.result.items) {
+                  // Match amount exactly - API returns lowercase field names
+                  const invAmount = parseFloat(inv.opportunity || inv.OPPORTUNITY || 0);
+                  if (invAmount === parseFloat(voucher.amount)) {
+                    existingId = inv.id;
+                    logger.info('[ItemInvoice] Invoice found by company+amount dedup', {
+                      voucherNumber: voucher.voucherNumber,
+                      invoiceId: existingId,
+                      companyId: partyIds.companyId,
+                      title: inv.title,
+                      amount: invAmount,
+                    });
+                    break;
+                  }
+                }
+              }
+            } catch (_) {}
+          }
+        }
+
+        // If found, update and skip creating new
+        if (existingId) {
+          try {
+            const updateCheck = await callBitrix('crm.item.get', {
+              entityTypeId: 31,
+              id: existingId,
+            });
+            const existingFields = updateCheck.result;
+            if (!existingFields.UF_TALLY_VOUCHER_NO) {
+              logger.info('[ItemInvoice] Updating existing invoice with UF_TALLY_VOUCHER_NO', {
+                voucherNumber: voucher.voucherNumber,
+                invoiceId: existingId,
+              });
+              await callBitrix('crm.item.update', {
+                entityTypeId: 31,
+                id: existingId,
+                fields: {
+                  title: expectedTitle,
+                  UF_TALLY_VOUCHER_NO: voucher.voucherNumber,
+                  UF_TALLY_SYNCED: 'Y',
+                },
+              });
+            }
+          } catch (updateErr) {
+            logger.warn('[ItemInvoice] Failed to update invoice with UF_TALLY_VOUCHER_NO', {
+              voucherNumber: voucher.voucherNumber,
+              invoiceId: existingId,
+              error: updateErr.message,
+            });
+          }
+          
+          newCache[cacheKey] = {
+            invoiceId:     existingId,
+            syncedAt:      new Date().toISOString(),
+            source:        'dedup-check',
+            partyName:     voucher.partyName,
+            voucherNumber: voucher.voucherNumber,
+          };
+          saveCache(newCache);
+          skipped++;
+          continue;
+        }
+
+        // Find the party in Bitrix24 (if not already found above)
+        if (!partyIds) {
+          partyIds = await findBitrixParty(voucher.partyName);
+        }
         await sleep(300); // avoid rate limiting
 
         // Build product rows from Tally line items
@@ -560,9 +707,37 @@ async function processItemInvoices() {
           opportunity: voucher.amount,
           currencyId:  'INR',
           closeDate:   voucher.date,
-          parentId3:    dealId, // Link to deal
+          parentId2:   dealId, // Link to deal (parentId2 for Deal, parentId3 for Quote)
+          UF_TALLY_VOUCHER_NO: voucher.voucherNumber,
+          UF_TALLY_SYNCED:     'Y',
           ...partyIds,
         };
+
+        // FINAL CHECK: Verify invoice doesn't exist in Bitrix right before creating
+        // This catches race conditions where tallyInvoiceProcessor created it moments ago
+        const finalCheck = await callBitrix('crm.item.list', {
+          entityTypeId: 31,
+          filter: { 'title': expectedTitle },
+          select: ['id', 'title'],
+        });
+        if ((finalCheck.result?.items?.length ?? 0) > 0) {
+          const alreadyId = finalCheck.result.items[0].id;
+          logger.info('[ItemInvoice] Invoice created by tallyInvoiceProcessor just now — skipping', {
+            voucherNumber: voucher.voucherNumber,
+            invoiceId: alreadyId,
+            title: finalCheck.result.items[0].title,
+          });
+          newCache[cacheKey] = {
+            invoiceId:     alreadyId,
+            syncedAt:      new Date().toISOString(),
+            source:        'final-check',
+            partyName:     voucher.partyName,
+            voucherNumber: voucher.voucherNumber,
+          };
+          saveCache(newCache);
+          skipped++;
+          continue;
+        }
 
         const invoiceData = await callBitrix('crm.item.add', {
           entityTypeId: 31, // Smart Invoice

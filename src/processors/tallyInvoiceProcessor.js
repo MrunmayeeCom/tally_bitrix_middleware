@@ -344,52 +344,85 @@ async function findBitrixParty(partyName) {
 // This is the secondary dedup guard — the local file cache is the primary guard,
 // but if the cache is wiped we need this to avoid creating duplicates.
 async function invoiceExistsInBitrix(voucherNumber, partyName = '') {
-  // Skip BX- prefixed vouchers — these were created by Bitrix→Tally sync
-  // and should never be pushed back from Tally→Bitrix
-  if (voucherNumber.startsWith('BX-')) {
-    logger.info('[TallyInvoice] Skipping BX- prefixed voucher — already from Bitrix24', { voucherNumber });
-    return true;
-  }
-
-  // Check 1: by UF_ custom field (fast, may 400 if field not created)
   try {
-    const res = await callBitrix('crm.item.list', {
-      entityTypeId: 31,
-      filter: { '=UF_TALLY_VOUCHER_NO': voucherNumber },
-      select: ['id'],
-    });
-    if ((res.result?.items?.length ?? 0) > 0) return true;
-  } catch (_) {
-    // UF_ field not available — fall through to title check
-  }
+    const { callBitrix } = require('../connectors/bitrixConnector');
 
-  // Check 2: by exact title (always available, no custom field needed)
-  if (partyName) {
+    // Check 1: by UF_TALLY_VOUCHER_NO custom field (most reliable)
     try {
-      const res = await callBitrix('crm.item.list', {
+      const fieldSearch = await callBitrix('crm.item.list', {
         entityTypeId: 31,
-        filter: { '=title': `${partyName} - ${voucherNumber}` },
-        select: ['id'],
+        filter: { 'UF_TALLY_VOUCHER_NO': voucherNumber },
+        select: ['id', 'title'],
       });
-      if ((res.result?.items?.length ?? 0) > 0) return true;
-    } catch (e) {
-      logger.warn('[TallyInvoice] Title dedup check failed — blocking push to be safe', {
-        voucherNumber,
-        message: e.message,
-      });
-      // Both checks failed — return true to BLOCK the push
-      // safer to skip one invoice than to create 100 duplicates
-      return true;
-    }
-  }
+      if ((fieldSearch.result?.items?.length ?? 0) > 0) {
+        logger.info('[TallyInvoice] Invoice found by UF_TALLY_VOUCHER_NO', {
+          voucherNumber,
+          invoiceId: fieldSearch.result.items[0].id,
+        });
+        return fieldSearch.result.items[0].id;
+      }
+    } catch (_) {}
 
-  return false;
+    // Check 2: by exact title fallback
+    if (partyName) {
+      try {
+        const res = await callBitrix('crm.item.list', {
+          entityTypeId: 31,
+          filter: { '=title': `${partyName} - ${voucherNumber}` },
+          select: ['id'],
+        });
+        if ((res.result?.items?.length ?? 0) > 0) {
+          logger.info('[TallyInvoice] Invoice found by title dedup', {
+            voucherNumber,
+            invoiceId: res.result.items[0].id,
+          });
+          return res.result.items[0].id;
+        }
+      } catch (e) {
+        logger.warn('[TallyInvoice] Title dedup check failed', {
+          voucherNumber,
+          message: e.message,
+        });
+        return true; // Block push on error (safe default)
+      }
+    }
+
+    return false;
+  } catch (e) {
+    logger.warn('[TallyInvoice] invoiceExistsInBitrix error — blocking push', {
+      voucherNumber,
+      message: e.message,
+    });
+    return true; // Block on any error
+  }
 }
 
 // Push a Tally sales voucher into Bitrix24 as a Smart Invoice
 async function pushVoucherToBitrix(voucher, partyIds, dealId = null, productRows = []) {
+  const expectedTitle = `${voucher.partyName} - ${voucher.voucherNumber}`;
+
+  // FINAL CHECK: Verify invoice doesn't exist in Bitrix right before creating
+  // This catches race conditions where itemInvoiceBuilder created it moments ago
+  try {
+    const { callBitrix: _callBitrix } = require('../connectors/bitrixConnector');
+    const finalCheck = await _callBitrix('crm.item.list', {
+      entityTypeId: 31,
+      filter: { 'title': expectedTitle },
+      select: ['id', 'title'],
+    });
+    if ((finalCheck.result?.items?.length ?? 0) > 0) {
+      const existingId = finalCheck.result.items[0].id;
+      logger.info('[TallyInvoice] Invoice already exists (created by itemInvoiceBuilder) — skipping', {
+        voucherNumber: voucher.voucherNumber,
+        invoiceId: existingId,
+        title: finalCheck.result.items[0].title,
+      });
+      return existingId;
+    }
+  } catch (_) {}
+
   const fields = {
-    title:        `${voucher.partyName} - ${voucher.voucherNumber}`,
+    title:        expectedTitle,
     opportunity:  voucher.amount,
     currencyId:   'INR',
     createdTime:  voucher.date,

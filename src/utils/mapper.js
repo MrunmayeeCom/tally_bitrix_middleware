@@ -41,7 +41,7 @@ function mapInvoiceToVoucher(invoice) {
 
   const id           = isCamel ? invoice.id           : invoice.ID;
   const dateRaw      = isCamel ? invoice.createdTime   : invoice.DATE_CREATE;
-  const closeDateRaw = isCamel ? invoice.closeDate     : invoice.CLOSEDATE;
+const closeDateRaw = isCamel ? (invoice.closeDate || invoice.closeDateRaw) : invoice.CLOSEDATE;
   const amount       = isCamel ? invoice.opportunity   : invoice.OPPORTUNITY;
   const currency     = isCamel ? invoice.currencyId    : invoice.CURRENCY_ID;
 

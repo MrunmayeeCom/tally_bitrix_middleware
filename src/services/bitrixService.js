@@ -202,13 +202,19 @@ async function getInvoice(id, invoiceType = 'smart') {
 }
 
 // ── Quotes (entityTypeId 7) ────────────────────────────────────────────
-async function getQuote(id) {
-  logger.info('Fetching quote:', id);
+async function getQuote(id, entityTypeId = '7') {
+  const etid = entityTypeId || '7';
+  logger.info('Fetching quote:', id, 'entityTypeId:', etid);
   const data = await callBitrix('crm.item.get', {
-    entityTypeId: 7,
+    entityTypeId: parseInt(etid),
     id
   });
   const item = data.result?.item || data.result || data;
+
+  // Extract closeDate (valid till) for quotations
+  if (item) {
+    item.closeDateRaw = item.closedate || item.closeDate || item.CLOSEDATE || '';
+  }
 
   // Enrich clientTitle — same pattern as invoice
   if (!item.clientTitle && !item.CLIENT_TITLE) {
@@ -231,6 +237,76 @@ async function getQuote(id) {
         logger.warn('Could not enrich quote company', { companyId: item.companyId });
       }
     }
+  }
+
+  // Fetch product rows for the quotation using same approach as invoiceProcessor
+  // Try multiple approaches to get product rows (different for Quote vs Smart Quote/Estimates)
+  try {
+    let rowsData = { result: [] };
+    let foundRows = false;
+    const numericEntityTypeId = parseInt(etid);
+    
+    // Map entityTypeId to OWNER_TYPE suffix
+    const ownerTypeMap = {
+      7: 'Q',      // Regular Quote
+    };
+    const ownerTypeSuffix = ownerTypeMap[numericEntityTypeId] || 'Q';
+    
+    // For regular Quote (entityTypeId 7): use crm.productrow.list FIRST - more reliable
+    if (numericEntityTypeId === 7) {
+      try {
+        rowsData = await callBitrix('crm.productrow.list', {
+          filter: { OWNER_ID: Number(id), OWNER_TYPE: ownerTypeSuffix }
+        });
+        if ((rowsData.result || []).length > 0) foundRows = true;
+      } catch (_) {}
+    }
+    
+    // Try crm.item.productrow.get with dynamic entityTypeId (works for Smart items)
+    // ONLY use this for non-7 entity types (Smart Quotes/Estimates)
+    if (!foundRows && numericEntityTypeId !== 7) {
+      try {
+        rowsData = await callBitrix('crm.item.productrow.get', {
+          entityTypeId: numericEntityTypeId,
+          id: Number(id)
+        });
+        // Handle both array and single object response formats
+        if (rowsData.result) {
+          if (Array.isArray(rowsData.result)) {
+            foundRows = true;
+          } else if (rowsData.result.productRow) {
+            // Single productRow object - convert to array
+            rowsData.result = [rowsData.result.productRow];
+            foundRows = true;
+          } else if (typeof rowsData.result === 'object') {
+            // Already an object, wrap in array
+            rowsData.result = [rowsData.result];
+            foundRows = true;
+          }
+        }
+      } catch (_) {}
+    }
+    
+    // Try crm.productrow.list with OWNER_TYPE RQ for Smart Quotes/Estimates
+    if (!foundRows) {
+      try {
+        rowsData = await callBitrix('crm.productrow.list', {
+          filter: { OWNER_ID: Number(id), OWNER_TYPE: 'RQ' }
+        });
+        if ((rowsData.result || []).length > 0) foundRows = true;
+      } catch (_) {}
+    }
+    
+    item.productRows = Array.isArray(rowsData.result) ? rowsData.result : [];
+    logger.info('Quote product rows fetched', { 
+      id, 
+      entityTypeId: etid,
+      rowCount: item.productRows.length,
+      rows: item.productRows.map(r => `${r.PRODUCT_NAME || r.productName || 'unnamed'} × ${r.QUANTITY || r.quantity || 1} @ ${r.PRICE || r.price || 0}`)
+    });
+  } catch (e) {
+    logger.warn('Could not fetch quote product rows', { id, message: e.message });
+    item.productRows = [];
   }
 
   return item;

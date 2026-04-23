@@ -220,12 +220,18 @@ async function matchReceiptsToOutstanding() {
           });
         }
 
-        // If fully paid — move deal to Won
+        // If fully paid — move deal to Won and also move invoice to Won stage
         if (m.isFullyPaid) {
           await callBitrix('crm.deal.update', {
             id:     m.deal.id,
             fields: { STAGE_ID: 'WON' },
           });
+          
+          // Also move linked invoice to Won stage
+          if (invoiceId) {
+            await moveInvoiceToWonStage(invoiceId);
+          }
+          
           logger.info('[ReceiptMatcher] Deal marked WON — fully paid', { dealId: m.deal.id });
         }
       } catch (e) {
@@ -265,6 +271,52 @@ async function matchReceiptsToOutstanding() {
 
 function getLastMatchResult() {
   return loadCache();
+}
+
+// Move Smart Invoice to Won/Completed stage
+async function moveInvoiceToWonStage(invoiceId) {
+  try {
+    // Get the Won stage ID for Smart Invoices
+    const stagesData = await callBitrix('crm.item.fields', {
+      entityTypeId: 31,
+    });
+    const stageField = stagesData.result?.fields?.stageId;
+    const stageOptions = stageField?.settings?.options || [];
+    
+    // Find 'Successfully Completed' or 'Won' stage
+    let wonStageId = null;
+    for (const stage of stageOptions) {
+      const name = (stage.name || '').toLowerCase();
+      if (name.includes('successfully') || name.includes('won') || name.includes('completed')) {
+        wonStageId = stage.statusId;
+        break;
+      }
+    }
+    
+    // If no custom stage found, try default WON stage
+    if (!wonStageId) {
+      wonStageId = 'SUCCESSFULLY_COMPLETED';
+    }
+    
+    await callBitrix('crm.item.update', {
+      entityTypeId: 31,
+      id: invoiceId,
+      fields: {
+        stageId: wonStageId,
+        UF_PAYMENT_STATUS: 'Paid',
+      },
+    });
+    
+    logger.info('[ReceiptMatcher] Invoice moved to Won stage', {
+      invoiceId,
+      stageId: wonStageId,
+    });
+  } catch (e) {
+    logger.warn('[ReceiptMatcher] Failed to move invoice to Won stage', {
+      invoiceId,
+      message: e.message
+    });
+  }
 }
 
 module.exports = { matchReceiptsToOutstanding, getLastMatchResult };

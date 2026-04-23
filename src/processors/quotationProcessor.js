@@ -1,8 +1,31 @@
 const { getQuote } = require('../services/bitrixService');
 const { mapInvoiceToVoucher } = require('../utils/mapper');
-const { createVoucher, alterVoucher } = require('../services/tallyService');
+const { createVoucher, alterVoucher, verifyStockItemsExist } = require('../services/tallyService');
 const { storeMasterId, getMasterId } = require('../utils/voucherCache');
 const logger = require('../utils/logger');
+const fs = require('fs');
+const path = require('path');
+
+// File-based dedup cache — persists across server restarts
+const QUOTATION_DEDUP_CACHE = path.join(__dirname, '../../logs/quotation-dedup-cache.json');
+let _quotationDedupCache = {};
+
+function loadQuotationDedup() {
+  try {
+    if (fs.existsSync(QUOTATION_DEDUP_CACHE)) {
+      return JSON.parse(fs.readFileSync(QUOTATION_DEDUP_CACHE, 'utf8'));
+    }
+  } catch {}
+  return {};
+}
+
+function saveQuotationDedup(data) {
+  try {
+    fs.writeFileSync(QUOTATION_DEDUP_CACHE, JSON.stringify(data, null, 2));
+  } catch (e) {
+    logger.warn('Quotation dedup cache save failed: ' + e.message);
+  }
+}
 
 // In-memory dedup set — prevents duplicate vouchers if webhook fires twice within 60s
 const quotationDedup = new Set();
@@ -17,7 +40,7 @@ const inFlight = new Map();
 // Module-level dedup window: entityId → timestamp of last completed process
 const recentlyProcessed = new Map();
 
-async function processQuotation({ entityId, isUpdate = false }) {
+async function processQuotation({ entityId, isUpdate = false, entityTypeId = '7' }) {
   const entityKey = String(entityId);
 
   // Hard dedup: if another instance is actively running for this entity, wait then drop
@@ -42,7 +65,7 @@ async function processQuotation({ entityId, isUpdate = false }) {
   inFlight.set(entityKey, inflightPromise);
 
   try {
-    return await _processQuotation({ entityId, isUpdate });
+    return await _processQuotation({ entityId, isUpdate, entityTypeId });
   } finally {
     recentlyProcessed.set(entityKey, Date.now());
     setTimeout(() => recentlyProcessed.delete(entityKey), 5000);
@@ -51,11 +74,11 @@ async function processQuotation({ entityId, isUpdate = false }) {
   }
 }
 
-async function _processQuotation({ entityId, isUpdate = false }) {
+async function _processQuotation({ entityId, isUpdate = false, entityTypeId = '7' }) {
   try {
-    logger.info(`Processing quotation — ${isUpdate ? 'UPDATE' : 'CREATE'}`, { entityId });
+    logger.info(`Processing quotation — ${isUpdate ? 'UPDATE' : 'CREATE'}`, { entityId, entityTypeId });
 
-    const quotation = await getQuote(entityId);
+    const quotation = await getQuote(entityId, entityTypeId);
     if (!quotation) throw new Error(`Quotation not found: ${entityId}`);
 
     const partyName = quotation.clientTitle || quotation.CLIENT_TITLE || '';
@@ -79,13 +102,9 @@ async function _processQuotation({ entityId, isUpdate = false }) {
     // Auto-detect voucher type
     let TALLY_SALES_ORDER_TYPE = process.env.TALLY_QUOTATION_VOUCHER_TYPE || '';
     if (!TALLY_SALES_ORDER_TYPE) {
-      const { getVoucherTypes } = require('../services/tallyService');
-      const availableTypes = await getVoucherTypes();
-      const preferred = ['Sales Order', 'Sales Orders', 'Sales Invoice', 'Sales'];
-      TALLY_SALES_ORDER_TYPE = preferred.find(t =>
-        availableTypes.some(a => a.toLowerCase() === t.toLowerCase())
-      ) || 'Sales Order';
-      logger.info('Auto-detected Tally voucher type', { selected: TALLY_SALES_ORDER_TYPE, availableTypes });
+      // Use Sales Order as default - user requires this voucher type
+      TALLY_SALES_ORDER_TYPE = 'Sales Order';
+      logger.info('Using Sales Order voucher type for quotations', { selected: TALLY_SALES_ORDER_TYPE });
     }
 
     const voucher = {
@@ -99,7 +118,32 @@ async function _processQuotation({ entityId, isUpdate = false }) {
       partyName:     voucher.partyName,
       amount:        voucher.amount,
       voucherType:   TALLY_SALES_ORDER_TYPE,
+      productRowsCount: (quotation.productRows || []).length,
+      productRows: (quotation.productRows || []).map(r => r.PRODUCT_NAME || r.productName || 'unnamed'),
     });
+
+    // Verify stock items exist in Tally - fallback to amount-only if missing
+    const productNames = (quotation.productRows || []).map(r => r.PRODUCT_NAME || r.productName || '').filter(Boolean);
+    let finalProductRows = voucher.productRows || [];
+    
+    if (productNames.length > 0) {
+      try {
+        const { valid, missing } = await verifyStockItemsExist(productNames);
+        if (missing.length > 0) {
+          logger.warn('Stock items not found in Tally - falling back to amount-only voucher', {
+            entityId,
+            missingStockItems: missing,
+            validStockItems: valid,
+          });
+          finalProductRows = []; // Fallback: no inventory, amount-only
+        }
+      } catch (e) {
+        logger.warn('Stock item verification failed - proceeding with product rows', { message: e.message });
+      }
+    }
+
+    // Override productRows in voucher (either empty due to missing stock items, or original)
+    voucher.productRows = finalProductRows;
 
     // ── UPDATE path ───────────────────────────────────────────────────────────
     if (isUpdate) {
@@ -220,12 +264,22 @@ async function _processQuotation({ entityId, isUpdate = false }) {
     }
         // ── CREATE path ───────────────────────────────────────────────────────────
 
-    // Dedup within current session
-    const dedupKey = `quotation_${voucher.voucherNumber}`;
-    if (quotationDedup.has(dedupKey)) {
-      logger.warn('Duplicate quotation webhook — skipping', { voucherNumber: voucher.voucherNumber });
+    // File-based dedup check — prevents duplicates even after server restart
+    const dedupKey = `quotation_${entityId}`;
+    _quotationDedupCache = loadQuotationDedup();
+    
+    if (_quotationDedupCache[dedupKey]) {
+      logger.warn('Duplicate quotation blocked by file dedup', { entityId, voucherNumber: voucher.voucherNumber });
       return { success: true, voucher, skipped: true };
     }
+    
+    // Also check in-memory dedup
+    if (quotationDedup.has(dedupKey)) {
+      logger.warn('Duplicate quotation webhook — skipping', { entityId, voucherNumber: voucher.voucherNumber });
+      return { success: true, voucher, skipped: true };
+    }
+    
+    // Mark as being processed
     quotationDedup.add(dedupKey);
     setTimeout(() => quotationDedup.delete(dedupKey), 60000);
 
@@ -267,18 +321,24 @@ async function _processQuotation({ entityId, isUpdate = false }) {
     recentlyCreated.set(entityKey, { createdAt: Date.now(), voucherNumber: voucher.voucherNumber });
     setTimeout(() => recentlyCreated.delete(entityKey), 30000);
 
+    // Save to file dedup cache after successful creation
+    _quotationDedupCache[dedupKey] = Date.now();
+    saveQuotationDedup(_quotationDedupCache);
+
     // Step: Link this quotation to its parent Deal (shows in estimates section of the deal)
     try {
       const dealId = quotation.parentId || quotation.parentId2 || quotation.DEAL_ID || null;
+      const currentEntityTypeId = typeof entityTypeId !== 'undefined' ? entityTypeId : '7';
       if (dealId && entityId) {
         const { callBitrix } = require('../connectors/bitrixConnector');
         await callBitrix('crm.item.update', {
-          entityTypeId: 7,  // Quotations
+          entityTypeId: parseInt(currentEntityTypeId),
           id:           Number(entityId),
           fields:       { parentId: Number(dealId) },
         });
         logger.info('Quotation linked to Deal in Bitrix24', {
           entityId,
+          entityTypeId: currentEntityTypeId,
           dealId,
           voucherNumber: voucher.voucherNumber,
         });

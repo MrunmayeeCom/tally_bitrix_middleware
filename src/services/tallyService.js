@@ -247,6 +247,7 @@ async function createVoucher(voucher) {
                 <BASICBASEPARTYNAME>${escapeXml(voucher.partyName)}</BASICBASEPARTYNAME>
                 <BASICBUYERNAME>${escapeXml(voucher.partyName)}</BASICBUYERNAME>
                 <NARRATION>${escapeXml(voucher.narration)}</NARRATION>
+                ${voucher.dueDate ? `<DUEDATE>${voucher.dueDate.replace(/-/g, '')}</DUEDATE>` : ''}
                 ${ _renderInventory(voucher) }
                 <LEDGERENTRIES.LIST>
                   <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
@@ -308,9 +309,28 @@ async function createVoucher(voucher) {
   const altered    = parseInt((response || '').match(/<ALTERED>(\d+)<\/ALTERED>/i)?.[1] ?? '0');
 
   if (exceptions > 0 || errors > 0) {
-    // Retry: Sales Order → Sales (voucher type fallback)
+    // Extract detailed error from Tally response
+    const tallyErr = response.match(/<TALLYERROR>(.*?)<\/TALLYERROR>/i)?.[1] 
+      || response.match(/<REMOTEERROR>(.*?)<\/REMOTEERROR>/i)?.[1]
+      || response.match(/<LINEERROR>(.*?)<\/LINEERROR>/i)?.[1]
+      || response.match(/<ERROR>(.*?)<\/ERROR>/i)?.[1]
+      || 'unknown';
+    logger.error('Tally voucher exception — response:', { 
+      voucherNumber: voucher.voucherNumber, 
+      exceptions, 
+      tallyError: tallyErr,
+      voucherType: voucher.voucherType,
+      fullResponse: (response || '').substring(0, 1000)
+    });
+    
+    // Retry: Sales Order → Sales (working fallback)
     if (voucher.voucherType === 'Sales Order') {
-      logger.warn('Sales Order rejected by Tally — retrying as Sales Invoice', { voucherNumber: voucher.voucherNumber });
+      logger.warn('Sales Order rejected by Tally — retrying as Sales', { voucherNumber: voucher.voucherNumber, error: tallyErr });
+      return createVoucher({ ...voucher, voucherType: 'Sales' });
+    }
+    // Retry: Sales Invoice → Sales
+    if (voucher.voucherType === 'Sales Invoice') {
+      logger.warn('Sales Invoice rejected — retrying as Sales', { voucherNumber: voucher.voucherNumber });
       return createVoucher({ ...voucher, voucherType: 'Sales' });
     }
     // Retry: inventory rejected — strip inventory and create as pure accounting invoice
@@ -916,6 +936,66 @@ async function ensureTallyDefaults() {
   }
 }
 
+async function verifyStockItemsExist(productNames) {
+  if (!productNames || productNames.length === 0) return { valid: [], missing: [] };
+  
+  const xml = `
+    <ENVELOPE>
+      <HEADER>
+        <TALLYREQUEST>Export Data</TALLYREQUEST>
+      </HEADER>
+      <BODY>
+        <EXPORTDATA>
+          <REQUESTDESC>
+            <REPORTNAME>List of Accounts</REPORTNAME>
+            <STATICVARIABLES>
+              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+              <AccountType>Stock Items</AccountType>
+            </STATICVARIABLES>
+          </REQUESTDESC>
+        </EXPORTDATA>
+      </BODY>
+    </ENVELOPE>
+  `.trim();
+
+  try {
+    const response = await sendToTally(xml);
+    const items = [];
+    const regex = /<STOCKITEM\b[^>]*>([\s\S]*?)<\/STOCKITEM>/gi;
+    let match;
+    while ((match = regex.exec(response)) !== null) {
+      const block = match[1];
+      const get = (tag) => {
+        const m = new RegExp(`<${tag}>(.*?)</${tag}>`, 'i').exec(block);
+        return m ? m[1].trim() : '';
+      };
+      const nameAttr = /NAME="([^"]+)"/i.exec(match[0]);
+      const name = get('NAME') || (nameAttr ? nameAttr[1].trim() : '');
+      if (name) items.push({ name, baseUnit: get('BASEUNITS') || '' });
+    }
+    const existingNames = new Set(items.map(i => i.name.toLowerCase()));
+    
+    const valid = [];
+    const missing = [];
+    
+    for (const name of productNames) {
+      const lowerName = (name || '').trim().toLowerCase();
+      if (existingNames.has(lowerName)) {
+        valid.push(name);
+      } else {
+        missing.push(name);
+      }
+    }
+    
+    logger.info('Stock item verification', { valid: valid.length, missing: missing.length, missingItems: missing });
+    return { valid, missing };
+  } catch (e) {
+    logger.warn('Stock item verification failed', { message: e.message });
+    return { valid: [], missing: productNames };
+  }
+}
+
 module.exports = {
   createLedger,
   alterLedger,
@@ -930,4 +1010,5 @@ module.exports = {
   ensureTallyDefaults,
   getVoucherTypes,
   findMasterId,
+  verifyStockItemsExist,
 };

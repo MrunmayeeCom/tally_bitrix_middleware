@@ -43,6 +43,25 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     const invoice = await getInvoice(entityId, invoiceType);
     if (!invoice) throw new Error(`Invoice not found: ${entityId}`);
 
+    // CRITICAL FIX: Skip invoices created by itemInvoiceBuilder (Tally → Bitrix sync)
+    // These have titles like "PartyName - Number" which would create a circular loop
+    // itemInvoiceBuilder creates Bitrix invoices, webhook fires, this tries to push back to Tally
+    const invoiceTitle = invoice.title || invoice.TITLE || '';
+    const titleParts = invoiceTitle.split(' - ');
+    if (titleParts.length >= 2) {
+      const potentialNumber = titleParts[titleParts.length - 1].trim();
+      // Check if title ends with a number (pattern from itemInvoiceBuilder)
+      if (/^\d+$/.test(potentialNumber)) {
+        // This invoice was likely created by itemInvoiceBuilder - skip it
+        logger.info('[InvoiceProcessor] Skipping itemInvoiceBuilder-created invoice to prevent circular sync', {
+          entityId,
+          title: invoiceTitle,
+          potentialNumber
+        });
+        return { success: true, skipped: true, reason: 'itemInvoiceBuilder-created invoice skipped' };
+      }
+    }
+
     // Step 1b: Ensure the party ledger exists in Tally before pushing the voucher
     const partyName = invoice.clientTitle || invoice.CLIENT_TITLE || '';
     logger.info('Party name being used for invoice', { 
