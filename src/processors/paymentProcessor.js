@@ -203,19 +203,98 @@ async function findCompanyByName(companyName) {
 async function findDealByBillRef(partyName, billRef) {
   try {
     const categoryId = await getTallyPipelineCategoryId();
-    const searchTitle = billRef
-      ? `${partyName} - ${billRef}`
-      : partyName;
-
-    const data = await callBitrix('crm.deal.list', {
+    
+    // PRIMARY: Use Smart Invoice lookup by accountNumber (BX-3481 → accountNumber: 3481)
+    if (billRef) {
+      const accountNumber = billRef.replace(/^BX-/i, '').trim();
+      if (/^\d+$/.test(accountNumber)) {
+        try {
+          // Search Smart Invoice by accountNumber field
+          const invoiceData = await callBitrix('crm.item.list', {
+            entityTypeId: 31,
+            filter: { 'accountNumber': accountNumber },
+            select: ['id', 'parentId2', 'title'],
+          });
+          const invoice = invoiceData.result?.items?.[0];
+          
+          if (invoice) {
+            // If parentId2 exists, use it directly
+            if (invoice.parentId2) {
+              const dealData = await callBitrix('crm.deal.get', {
+                id: parseInt(invoice.parentId2),
+              });
+              if (dealData.result) {
+                logger.info('[PaymentProcessor] Found deal via Smart Invoice parentId2', {
+                  accountNumber,
+                  dealId: dealData.result.ID,
+                  title: dealData.result.TITLE,
+                });
+                return dealData.result;
+              }
+            }
+            
+            // FALLBACK: parentId2 is null - extract voucher from invoice title and search deal
+            if (invoice.title) {
+              const titleParts = invoice.title.split(' - ');
+              const voucherNum = titleParts[titleParts.length - 1]?.trim();
+              if (voucherNum && categoryId) {
+                // Search for deal with exact title "partyName - voucherNum"
+                const dealSearchTitle = `${partyName} - ${voucherNum}`;
+                const dealSearch = await callBitrix('crm.deal.list', {
+                  filter: {
+                    'TITLE': dealSearchTitle,
+                    CATEGORY_ID: categoryId,
+                  },
+                  select: ['ID', 'TITLE', 'OPPORTUNITY', 'STAGE_ID'],
+                });
+                if (dealSearch.result?.length > 0) {
+                  logger.info('[PaymentProcessor] Found deal via invoice title fallback', {
+                    accountNumber,
+                    dealTitle: dealSearchTitle,
+                    dealId: dealSearch.result[0].ID,
+                  });
+                  return dealSearch.result[0];
+                }
+              }
+            }
+          }
+        } catch (e) {
+          logger.warn('[PaymentProcessor] Smart Invoice lookup failed', { accountNumber, error: e.message });
+        }
+      }
+    }
+    
+    // FALLBACK: Search by party name - only if exactly 1 open deal exists
+    const partialData = await callBitrix('crm.deal.list', {
       filter: {
-        '%TITLE': searchTitle,
+        '%TITLE': partyName,
         ...(categoryId ? { CATEGORY_ID: categoryId } : {}),
       },
       select: ['ID', 'TITLE', 'OPPORTUNITY', 'STAGE_ID', 'UF_PAYMENT_STATUS'],
+      order: { STAGE_ID: 'ASC' },
     });
-    const deals = data.result || [];
-    return deals[0] || null;
+    const partialDeals = partialData.result || [];
+    
+    // Filter to only open (non-WON) deals
+    const openDeals = partialDeals.filter(d => !d.STAGE_ID?.includes('WON'));
+    
+    if (openDeals.length === 1) {
+      logger.info('[PaymentProcessor] Found deal by party name (single open deal)', {
+        dealId: openDeals[0].ID,
+        title: openDeals[0].TITLE,
+      });
+      return openDeals[0];
+    } else if (openDeals.length > 1) {
+      logger.warn('[PaymentProcessor] Multiple open deals for party - cannot auto-match', {
+        partyName,
+        deals: openDeals.map(d => d.ID),
+      });
+      return null;
+    }
+    
+    // No open deals - return null (do not guess with WON deals)
+    logger.warn('[PaymentProcessor] No open deal found for party', { partyName });
+    return null;
   } catch (e) {
     logger.warn('Deal search failed', { partyName, billRef, message: e.message });
     return null;
@@ -223,18 +302,20 @@ async function findDealByBillRef(partyName, billRef) {
 }
 
 // Update deal payment status in Bitrix24
-async function updateDealPaymentStatus(deal, receipt, isFullyPaid) {
+async function updateDealPaymentStatus(deal, receipt, isFullyPaid, wonStageId) {
   const dealId = deal.ID;
   const dealAmount = parseFloat(deal.OPPORTUNITY) || 0;
   try {
     const categoryId = await getTallyPipelineCategoryId();
     const stagesData = await callBitrix('crm.dealcategory.stage.list', { id: categoryId });
-    const stages     = stagesData.result || [];
+    const stages = stagesData.result || [];
 
     const stageMap = {};
     stages.forEach(s => {
-      stageMap[(s.NAME || '').toLowerCase()] = s.STATUS_ID;
+      stageMap[(s.NAME || '').toLowerCase()] = s.STAGE_ID;
     });
+
+    const wonStage = wonStageId || stageMap['deal won'] || 'WON';
 
     const fields = {
       UF_PAYMENT_STATUS:   isFullyPaid ? 'Paid' : 'Partial',
@@ -245,8 +326,8 @@ async function updateDealPaymentStatus(deal, receipt, isFullyPaid) {
     };
 
     // Move to correct stage
-    if (isFullyPaid && stageMap['deal won']) {
-      fields.STAGE_ID = stageMap['deal won'];
+    if (isFullyPaid && wonStage) {
+      fields.STAGE_ID = wonStage;
     } else if (!isFullyPaid && stageMap['follow up']) {
       fields.STAGE_ID = stageMap['follow up'];
     }
@@ -377,6 +458,41 @@ async function moveInvoiceToWonStage(dealId) {
   }
 }
 
+// Attach receipt to deal documents/timeline
+async function attachReceiptToDeal(dealId, receipt) {
+  try {
+    // Create a timeline activity with receipt details
+    const description = `Payment Receipt Details:
+- Receipt No: ${receipt.voucherNumber}
+- Date: ${receipt.date}
+- Amount: ${receipt.amount}
+- Party: ${receipt.partyName}
+${receipt.billRefs.length > 0 ? `- Against Invoice: ${receipt.billRefs.map(r => r.billName).join(', ')}` : ''}`;
+
+    await callBitrix('crm.activity.add', {
+      fields: {
+        OWNER_TYPE_ID: 2, // Deal
+        OWNER_ID: Number(dealId),
+        TYPE_ID: 2, // Task/Activity
+        SUBJECT: `Receipt ${receipt.voucherNumber} - Payment Received`,
+        DESCRIPTION: description,
+        DESCRIPTION_TYPE: 3, // Text
+        PRIORITY: 3, // Normal
+        RESPONSIBLE_ID: 1,
+        COMPLETED: 'Y', // Mark as completed since it's a record of payment
+      },
+    });
+
+    logger.info('[PaymentProcessor] Receipt attached to deal timeline', {
+      dealId,
+      receiptNumber: receipt.voucherNumber,
+      amount: receipt.amount,
+    });
+  } catch (e) {
+    logger.warn('Failed to attach receipt to deal', { dealId, message: e.message });
+  }
+}
+
 // Main payment processor
 async function processPayments() {
   try {
@@ -388,6 +504,17 @@ async function processPayments() {
       logger.info('No receipts found in Tally');
       return { success: true, processed: 0, skipped: 0 };
     }
+
+    const categoryId = await getTallyPipelineCategoryId();
+    const statusData = await callBitrix('crm.status.list', {
+      filter: { ENTITY_ID: `DEAL_STAGE_${categoryId}` }
+    });
+    const stages = statusData.result || [];
+    const stageMap = {};
+    stages.forEach(s => {
+      stageMap[(s.NAME || s.name || '').toLowerCase()] = s.STATUS_ID || s.statusId;
+    });
+    const wonStageId = stageMap['deal won'] || 'WON';
 
     logger.info(`Processing ${receipts.length} receipts`);
 
@@ -407,60 +534,10 @@ async function processPayments() {
         for (const ref of refs) {
           let deal = await findDealByBillRef(receipt.partyName, ref.billName);
           
-          // If no deal found but we have receipt — create invoice in Tally, then deal in Bitrix
-          if (!deal && ref.amount > 0) {
-            try {
-              // First create invoice in Tally (if doesn't exist)
-              const invoiceName = ref.billName || `RX-${receipt.voucherNumber}`;
-              const invoiceCreated = await createInvoiceInTally(
-                receipt.partyName,
-                invoiceName,
-                ref.amount,
-                receipt.date
-              );
-              
-              // Find company in Bitrix
-              const company = await findCompanyByName(receipt.partyName);
-              if (company) {
-                const categoryId = await getTallyPipelineCategoryId();
-                const dealTitle = ref.billName 
-                  ? `${receipt.partyName} - ${ref.billName}`
-                  : `${receipt.partyName} - Receipt ${receipt.voucherNumber}`;
-                
-                const newDeal = await callBitrix('crm.deal.add', {
-                  fields: {
-                    TITLE: dealTitle,
-                    OPPORTUNITY: ref.amount,
-                    COMPANY_ID: company.ID,
-                    CATEGORY_ID: categoryId,
-                    STAGE_ID: 'WON',
-                    UF_PAYMENT_STATUS: 'Paid',
-                    UF_RECEIPT_NUMBER: receipt.voucherNumber,
-                    UF_PAYMENT_DATE: receipt.date,
-                    UF_PAYMENT_AMOUNT: ref.amount,
-                    UF_BILL_DATE: receipt.date,
-                    UF_INVOICE_NUMBER: ref.billName || `TALLY-${receipt.voucherNumber}`,
-                  }
-                });
-                
-                deal = { ID: newDeal.result, TITLE: dealTitle, OPPORTUNITY: ref.amount };
-                logger.info('Deal auto-created from Tally receipt', {
-                  dealId: deal.ID,
-                  partyName: receipt.partyName,
-                  amount: ref.amount,
-                  voucherNumber: receipt.voucherNumber,
-                });
-              }
-            } catch (createErr) {
-              logger.error('Failed to auto-create deal from receipt', {
-                partyName: receipt.partyName,
-                message: createErr.message,
-              });
-            }
-          }
-          
+          // No matching deal found - just skip (don't create new deals automatically)
+          // This prevents creating deals when an existing invoice/deal wasn't found
           if (!deal) {
-            logger.info('No matching deal found for receipt', {
+            logger.info('No matching deal found for receipt - skipping to avoid duplicate creation', {
               partyName: receipt.partyName,
               billRef:   ref.billName,
             });
@@ -472,13 +549,16 @@ async function processPayments() {
           const dealAmount    = parseFloat(deal.OPPORTUNITY) || 0;
           const isFullyPaid   = ref.amount >= dealAmount * 0.99; // 1% tolerance
 
-          await updateDealPaymentStatus(deal, receipt, isFullyPaid);
+          await updateDealPaymentStatus(deal, receipt, isFullyPaid, wonStageId);
+
+          // Attach receipt to deal timeline
+          await attachReceiptToDeal(deal.ID, receipt);
 
           // If fully paid — mark deal WON
           if (isFullyPaid) {
             await callBitrix('crm.deal.update', {
               id:     deal.ID,
-              fields: { STAGE_ID: 'WON' },
+              fields: { STAGE_ID: wonStageId },
             });
             
             // Also move linked invoice to Won/Completed stage
@@ -514,4 +594,4 @@ async function processPayments() {
   }
 }
 
-module.exports = { processPayments, getReceipts };
+module.exports = { processPayments, getReceipts, attachReceiptToDeal };

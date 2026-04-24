@@ -37,7 +37,7 @@ async function fetchPipelineDeals() {
       const data = await callBitrix('crm.deal.list', {
         filter: { CATEGORY_ID: categoryId },
         select: ['ID', 'TITLE', 'OPPORTUNITY', 'STAGE_ID',
-                 'UF_PAYMENT_STATUS', 'UF_OUTSTANDING', 'CLOSEDATE'],
+                 'UF_PAYMENT_STATUS', 'UF_OUTSTANDING', 'CLOSEDATE', 'UF_INVOICE_NUMBER'],
         start,
       });
       const page = data.result || [];
@@ -66,13 +66,30 @@ async function matchReceiptsToOutstanding() {
     const matched   = [];
     const unmatched = [];
 
-    // Build deal lookup by title parts
+    // Build deal lookup by title parts AND UF_INVOICE_NUMBER field
     const dealMap = {};
     for (const deal of deals) {
+      // Use UF_INVOICE_NUMBER if available
+      const invoiceNum = deal.UF_INVOICE_NUMBER;
+      if (invoiceNum) {
+        const key = String(invoiceNum).toLowerCase().trim();
+        dealMap[key] = deal;
+        // Also add without BX- prefix
+        const normKey = key.replace(/^bx-/i, '');
+        if (normKey !== key) dealMap[normKey] = deal;
+      }
+      
+      // Also use bill ref from title
       const parts      = (deal.TITLE || '').split(' - ');
-      const billRef    = parts[parts.length - 1]?.trim() || '';
+      let billRef      = parts[parts.length - 1]?.trim() || '';
+      const normalizedBillRef = billRef.replace(/^BX-/i, '');
       const partyPart  = parts.slice(0, -1).join(' - ').trim().toLowerCase();
-      if (billRef) dealMap[billRef.toLowerCase()] = deal;
+      if (billRef) {
+        if (!dealMap[billRef.toLowerCase()]) dealMap[billRef.toLowerCase()] = deal;
+        if (normalizedBillRef !== billRef && !dealMap[normalizedBillRef.toLowerCase()]) {
+          dealMap[normalizedBillRef.toLowerCase()] = deal;
+        }
+      }
       if (partyPart) {
         if (!dealMap[partyPart]) dealMap[partyPart] = deal;
       }
@@ -80,17 +97,110 @@ async function matchReceiptsToOutstanding() {
 
     for (const receipt of receipts) {
       let matchedDeal = null;
+      let matchReason = '';
+      const partyKey = receipt.partyName.toLowerCase();
+      const categoryId = await getTallyPipelineCategoryId();
 
-      // Try to match by bill reference first
+      // PRIMARY: Match using Smart Invoice by accountNumber (BX-3481 → accountNumber: 3481)
       for (const ref of receipt.billRefs) {
-        const key = ref.billName.toLowerCase();
-        if (dealMap[key]) { matchedDeal = dealMap[key]; break; }
+        const billRef = ref.billName.trim();
+        const accountNumber = billRef.replace(/^BX-/i, '');
+        if (!accountNumber || !/^\d+$/.test(accountNumber)) continue;
+        
+        try {
+          // Search Smart Invoice by accountNumber field
+          const invoiceData = await callBitrix('crm.item.list', {
+            entityTypeId: 31,
+            filter: { 'accountNumber': accountNumber },
+            select: ['id', 'parentId2', 'title'],
+          });
+          const invoice = invoiceData.result?.items?.[0];
+          
+          if (invoice) {
+            // If parentId2 exists, use it directly
+            if (invoice.parentId2) {
+              const dealData = await callBitrix('crm.deal.get', {
+                id: parseInt(invoice.parentId2),
+              });
+              if (dealData.result) {
+                matchedDeal = dealData.result;
+                matchReason = 'smartInvoice';
+                break;
+              }
+            }
+            
+            // FALLBACK: parentId2 is null - extract voucher from invoice title and search deal
+            if (invoice.title) {
+              const titleParts = invoice.title.split(' - ');
+              const voucherNum = titleParts[titleParts.length - 1]?.trim();
+              if (voucherNum && categoryId) {
+                const dealSearchTitle = `${receipt.partyName} - ${voucherNum}`;
+                const dealSearch = await callBitrix('crm.deal.list', {
+                  filter: {
+                    'TITLE': dealSearchTitle,
+                    CATEGORY_ID: categoryId,
+                  },
+                  select: ['ID', 'TITLE', 'OPPORTUNITY', 'STAGE_ID'],
+                });
+                if (dealSearch.result?.length > 0) {
+                  matchedDeal = dealSearch.result[0];
+                  matchReason = 'invoiceTitle';
+                  break;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Smart Invoice not found, continue to fallback
+        }
       }
 
-      // Fallback — match by party name
+      // FALLBACK: Match by bill reference in deal map
+      if (!matchedDeal) {
+        for (const ref of receipt.billRefs) {
+          let key = ref.billName.toLowerCase();
+          if (dealMap[key]) { 
+            matchedDeal = dealMap[key]; 
+            matchReason = 'billRef';
+            break; 
+          }
+          const normalizedKey = key.replace(/^bx-/i, '');
+          if (dealMap[normalizedKey]) { 
+            matchedDeal = dealMap[normalizedKey]; 
+            matchReason = 'billRef';
+            break; 
+          }
+        }
+      }
+
+      // FALLBACK 2: Match by party name + amount
       if (!matchedDeal) {
         const partyKey = receipt.partyName.toLowerCase();
-        matchedDeal    = dealMap[partyKey] || null;
+        const receiptAmt = receipt.amount || 0;
+        const dealsForParty = deals.filter(d => 
+          (d.TITLE || '').toLowerCase().startsWith(partyKey)
+        );
+        
+        const amountMatchedDeal = dealsForParty.find(d => {
+          const dealAmt = parseFloat(d.OPPORTUNITY) || 0;
+          if (dealAmt <= 0) return false;
+          const tolerance = dealAmt * 0.05;
+          return receiptAmt >= (dealAmt - tolerance);
+        });
+        
+        if (amountMatchedDeal) {
+          matchedDeal = amountMatchedDeal;
+          matchReason = 'party+amount';
+        } else if (dealsForParty.length === 1 && receiptAmt >= parseFloat(dealsForParty[0].OPPORTUNITY || 0)) {
+          matchedDeal = dealsForParty[0];
+          matchReason = 'party+amount';
+        } else if (dealsForParty.length > 1) {
+          logger.warn('[ReceiptMatcher] Multiple deals for party', {
+            partyName: receipt.partyName,
+            receiptAmount: receiptAmt,
+            deals: dealsForParty.map(d => d.ID)
+          });
+        }
       }
 
       if (matchedDeal) {
@@ -222,9 +332,20 @@ async function matchReceiptsToOutstanding() {
 
         // If fully paid — move deal to Won and also move invoice to Won stage
         if (m.isFullyPaid) {
+          const categoryId = await getTallyPipelineCategoryId();
+          const statusData = await callBitrix('crm.status.list', {
+            filter: { ENTITY_ID: `DEAL_STAGE_${categoryId}` }
+          });
+          const stages = statusData.result || [];
+          const stageMap = {};
+          stages.forEach(s => {
+            stageMap[(s.NAME || s.name || '').toLowerCase()] = s.STATUS_ID || s.statusId;
+          });
+          const wonStageId = stageMap['deal won'] || 'C542:WON';
+          
           await callBitrix('crm.deal.update', {
             id:     m.deal.id,
-            fields: { STAGE_ID: 'WON' },
+            fields: { STAGE_ID: wonStageId },
           });
           
           // Also move linked invoice to Won stage
@@ -233,6 +354,16 @@ async function matchReceiptsToOutstanding() {
           }
           
           logger.info('[ReceiptMatcher] Deal marked WON — fully paid', { dealId: m.deal.id });
+        }
+        
+        // Attach receipt to deal timeline
+        try {
+          await attachReceiptToDeal(m.deal.id, m.receipt);
+        } catch (attachErr) {
+          logger.warn('[ReceiptMatcher] Failed to attach receipt to deal', {
+            dealId: m.deal.id,
+            message: attachErr.message
+          });
         }
       } catch (e) {
         logger.warn('[ReceiptMatcher] Outstanding writeback failed', {
