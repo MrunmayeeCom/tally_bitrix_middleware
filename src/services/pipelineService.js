@@ -1,7 +1,7 @@
 const { callBitrix } = require('../connectors/bitrixConnector');
 const logger = require('../utils/logger');
 
-const PIPELINE_NAME  = 'Tally Outstanding test';
+const PIPELINE_NAME  = 'Tally Outstanding data';
 const PIPELINE_STAGES = [
   { NAME: 'New Bill'         },
   { NAME: 'Follow Up'        },
@@ -12,7 +12,6 @@ const PIPELINE_STAGES = [
 
 ];
 
-// In-memory store — survives for lifetime of the process
 let tallyPipelineCategoryId = null;
 
 async function getTallyPipelineCategoryId() {
@@ -33,8 +32,6 @@ async function setupPipeline() {
   try {
     logger.info('Checking Tally Outstanding pipeline in Bitrix24...');
 
-    // Step 1: Check if pipeline already exists (fetch all, not just first page)
-    // crm.category.list returns ALL categories in one call (ignores pagination)
     const data = await callBitrix('crm.category.list', { entityTypeId: 2 });
     const allCategories = data.result?.categories || data.result || [];
     logger.info(`Found ${allCategories.length} existing pipelines`);
@@ -55,7 +52,6 @@ async function setupPipeline() {
       return tallyPipelineCategoryId;
     }
 
-    // Step 2: Create pipeline
     logger.info('Creating Tally Outstanding pipeline...');
     const created = await callBitrix('crm.category.add', {
       entityTypeId: 2,
@@ -73,7 +69,6 @@ async function setupPipeline() {
     tallyPipelineCategoryId = categoryId;
     logger.info('Pipeline created', { categoryId });
 
-    // Step 3: Fetch auto-created stages and rename them to our custom names
     const entityId = `DEAL_STAGE_${categoryId}`;
 
     const statusData = await callBitrix('crm.status.list', {
@@ -107,24 +102,23 @@ async function setupPipeline() {
 
   } catch (error) {
     logger.error('Pipeline setup failed', { message: error.message });
-    // Non-fatal — server still starts, deals go to default pipeline
   }
 }
 
 async function setupDealCustomFields() {
   const fields = [
     { FIELD_NAME: 'UF_BILL_DATE',       USER_TYPE_ID: 'date',    LIST_COLUMN_LABEL: 'Bill Date'       },
-    { FIELD_NAME: 'UF_DUE_DATE',        USER_TYPE_ID: 'date',    LIST_COLUMN_LABEL: 'Due Date'        },
-    { FIELD_NAME: 'UF_BILL_AMOUNT',     USER_TYPE_ID: 'double',  LIST_COLUMN_LABEL: 'Bill Amount'     },
-    { FIELD_NAME: 'UF_OUTSTANDING',     USER_TYPE_ID: 'double',  LIST_COLUMN_LABEL: 'Outstanding'     },
-    { FIELD_NAME: 'UF_DAYS_PENDING',    USER_TYPE_ID: 'integer', LIST_COLUMN_LABEL: 'Days Pending'    },
-    { FIELD_NAME: 'UF_INVOICE_NUMBER',  USER_TYPE_ID: 'string',  LIST_COLUMN_LABEL: 'Invoice Number'  },
-    { FIELD_NAME: 'UF_INVOICE_DATE',    USER_TYPE_ID: 'date',    LIST_COLUMN_LABEL: 'Invoice Date'    },
-    { FIELD_NAME: 'UF_PAYMENT_STATUS',  USER_TYPE_ID: 'string',  LIST_COLUMN_LABEL: 'Payment Status'  },
-    { FIELD_NAME: 'UF_PAYMENT_DATE',    USER_TYPE_ID: 'date',    LIST_COLUMN_LABEL: 'Payment Date'    },
-    { FIELD_NAME: 'UF_PAYMENT_AMOUNT',  USER_TYPE_ID: 'double',  LIST_COLUMN_LABEL: 'Payment Amount'  },
-    { FIELD_NAME: 'UF_RECEIPT_NUMBER',  USER_TYPE_ID: 'string',  LIST_COLUMN_LABEL: 'Receipt Number'  },
-    { FIELD_NAME: 'UF_CLOSING_STOCK',   USER_TYPE_ID: 'string',  LIST_COLUMN_LABEL: 'Closing Stock'   },
+    { FIELD_NAME: 'UF_DUE_DATE',      USER_TYPE_ID: 'date',    LIST_COLUMN_LABEL: 'Due Date'        },
+    { FIELD_NAME: 'UF_BILL_AMOUNT',   USER_TYPE_ID: 'double',  LIST_COLUMN_LABEL: 'Bill Amount'     },
+    { FIELD_NAME: 'UF_OUTSTANDING',    USER_TYPE_ID: 'double',  LIST_COLUMN_LABEL: 'Outstanding'     },
+    { FIELD_NAME: 'UF_DAYS_PENDING',  USER_TYPE_ID: 'integer', LIST_COLUMN_LABEL: 'Days Pending'    },
+    { FIELD_NAME: 'UF_INVOICE_NUMBER',USER_TYPE_ID: 'string',  LIST_COLUMN_LABEL: 'Invoice Number'  },
+    { FIELD_NAME: 'UF_INVOICE_DATE',  USER_TYPE_ID: 'date',    LIST_COLUMN_LABEL: 'Invoice Date'    },
+    { FIELD_NAME: 'UF_PAYMENT_STATUS',USER_TYPE_ID:'string',  LIST_COLUMN_LABEL: 'Payment Status'  },
+    { FIELD_NAME: 'UF_PAYMENT_DATE',  USER_TYPE_ID: 'date',    LIST_COLUMN_LABEL: 'Payment Date'    },
+    { FIELD_NAME: 'UF_PAYMENT_AMOUNT',USER_TYPE_ID: 'double',  LIST_COLUMN_LABEL: 'Payment Amount'  },
+    { FIELD_NAME: 'UF_RECEIPT_NUMBER',USER_TYPE_ID: 'string',  LIST_COLUMN_LABEL: 'Receipt Number'  },
+    { FIELD_NAME: 'UF_CLOSING_STOCK', USER_TYPE_ID: 'string',  LIST_COLUMN_LABEL: 'Closing Stock'   },
   ];
 
   for (const field of fields) {
@@ -140,10 +134,17 @@ async function setupDealCustomFields() {
       });
       logger.info('Custom deal field created', { fieldName: field.FIELD_NAME });
     } catch (e) {
-      // Field likely already exists — not an error
       logger.info('Custom deal field already exists or skipped', { fieldName: field.FIELD_NAME, message: e.message });
     }
   }
 }
 
-module.exports = { setupPipeline, getTallyPipelineCategoryId };
+function findStage(stageName) {
+  if (!tallyPipelineCategoryId) return null;
+  const stages = PIPELINE_STAGES;
+  const match = stages.find(s => s.NAME.toLowerCase() === stageName.toLowerCase());
+  if (!match) return null;
+  return `${tallyPipelineCategoryId}_${stages.indexOf(match)}`;
+}
+
+module.exports = { setupPipeline, getTallyPipelineCategoryId, findStage };

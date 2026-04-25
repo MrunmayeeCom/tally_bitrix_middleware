@@ -285,10 +285,26 @@ async function findDealByBillRef(partyName, billRef) {
       });
       return openDeals[0];
     } else if (openDeals.length > 1) {
-      logger.warn('[PaymentProcessor] Multiple open deals for party - cannot auto-match', {
+      logger.warn('[PaymentProcessor] Multiple open deals for party - trying to match by voucher number', {
         partyName,
         deals: openDeals.map(d => d.ID),
       });
+      // Try to find deal by bill reference (voucher number from the receipt)
+      if (billRef) {
+        const voucherNum = billRef.replace(/^BX-/i, '').trim();
+        for (const d of openDeals) {
+          const dealTitle = d.TITLE || '';
+          if (dealTitle.includes(voucherNum) || dealTitle.includes(`-${voucherNum}`) || dealTitle.endsWith(voucherNum)) {
+            logger.info('[PaymentProcessor] Matched deal by voucher number from bill ref', {
+              partyName,
+              dealId: d.ID,
+              title: d.TITLE,
+              billRef,
+            });
+            return d;
+          }
+        }
+      }
       return null;
     }
     

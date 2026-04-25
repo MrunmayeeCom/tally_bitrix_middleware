@@ -37,9 +37,7 @@
       "requestedExecutionLevel": "requireAdministrator",
       "publisherName":           "Rajlaxmi Solutions Private Limited",
       "legalTrademarks":         "TallyBitrixSync is a trademark of Rajlaxmi Solutions Pvt Ltd",
-      "fileAssociations":        [],
-      "sign":                    null,
-      "signingHashAlgorithms":   null
+      "fileAssociations":        []
     },
 
     "nsis": {
@@ -49,7 +47,7 @@
       "uninstallerIcon":                    "assets/icon.ico",
       "installerHeaderIcon":                "assets/icon.ico",
       "createDesktopShortcut":              true,
-      "createStartMenuShortcut":            true,
+      "createStartMenuShortcut":          true,
       "shortcutName":                       "TallyBitrixSync"
     },
 

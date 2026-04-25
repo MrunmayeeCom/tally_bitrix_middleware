@@ -33,7 +33,7 @@ async function getSalesVouchers(fromDate = null) {
   const companyName = rawCompany;
 
   logger.info(`Fetching sales vouchers from Tally (quarterly chunks) | company: "${companyName}"`);
-  if (!companyName || companyName === 'Test Company') {
+  if (!companyName || companyName === 'Rajlaxmi Solutions Private Limited - (From 1-Apr-2016) - (from 1-Apr-2016)') {
     logger.warn('[TallyInvoice] Company name looks like default — make sure the correct company is set in Settings');
   }
 

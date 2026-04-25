@@ -246,7 +246,7 @@ async function getCompanyList() {
   logger.warn('[Tally] All report variants failed — TallyPrime Silver may restrict company list export');
   return {
     success: false,
-    error: 'TallyPrime could not export company list — please use "Add manually" option and type the exact company name as shown in Tally (e.g. "Averlon" or "Test Company")',
+    error: 'TallyPrime could not export company list — please use "Add manually" option and type the exact company name as shown in Tally (e.g. "Averlon" or "Rajlaxmi Solutions Private Limited - (From 1-Apr-2016) - (from 1-Apr-2016)")',
     companies: []
   };
 }

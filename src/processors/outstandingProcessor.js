@@ -16,6 +16,7 @@ let _userLimit = 0;
 const fs   = require('fs');
 const path = require('path');
 const DEAL_DEDUP_PATH = path.join(__dirname, '../../logs/deal-dedup-cache.json');
+const VOUCHER_STATE_PATH = path.join(__dirname, '../../logs/voucher-state-cache.json');
 
 function loadDealDedup() {
   try {
@@ -34,6 +35,41 @@ function saveDealDedup(data) {
   } catch (e) {
     logger.warn('[OutstandingSync] Deal dedup cache save failed', { message: e.message });
   }
+}
+
+function loadVoucherState() {
+  try {
+    if (fs.existsSync(VOUCHER_STATE_PATH)) {
+      return JSON.parse(fs.readFileSync(VOUCHER_STATE_PATH, 'utf8'));
+    }
+  } catch {}
+  return {};
+}
+
+function saveVoucherState(data) {
+  try {
+    const dir = path.dirname(VOUCHER_STATE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(VOUCHER_STATE_PATH, JSON.stringify(data, null, 2));
+  } catch (e) {
+    logger.warn('[OutstandingSync] Voucher state cache save failed', { message: e.message });
+  }
+}
+
+function hasVoucherChanged(oldState, newOutstanding) {
+  if (!oldState) return true;
+  const oldPending = parseFloat(oldState.pendingAmount) || 0;
+  const newPending = parseFloat(newOutstanding.pendingAmount) || 0;
+  const oldBill = parseFloat(oldState.billAmount) || 0;
+  const newBill = parseFloat(newOutstanding.billAmount) || 0;
+  const oldDate = oldState.billDate || '';
+  const newDate = newOutstanding.billDate || '';
+  const oldDue = oldState.dueDate || '';
+  const newDue = newOutstanding.dueDate || '';
+  if (Math.abs(oldPending - newPending) > 0.01 || Math.abs(oldBill - newBill) > 0.01 || oldDate !== newDate || oldDue !== newDue) {
+    return true;
+  }
+  return false;
 }
 
 // Process items in small parallel batches instead of one-by-one
@@ -60,13 +96,30 @@ async function findBitrixParty(partyName) {
     return partyCache.get(partyName);
   }
 
+  // Normalize party name - remove (Creditor), (Debtor), (Agent), etc. for cleaner matching
+  const normalizeName = (name) => {
+    if (!name) return '';
+    return name.replace(/\s*\([^)]*\)\s*/g, '').trim();
+  };
+  const cleanName = normalizeName(partyName);
+
   try {
-    // 1 — Search existing companies in Bitrix24
+    // 1 — Search existing companies in Bitrix24 (try both original and cleaned name)
     const companyData = await callBitrix('crm.company.list', {
       filter: { '%TITLE': partyName },
       select: ['ID', 'TITLE']
     });
-    const companies = companyData.result || [];
+    let companies = companyData.result || [];
+    
+    // If no match with original name, try cleaned name
+    if (companies.length === 0 && cleanName !== partyName) {
+      const cleanSearch = await callBitrix('crm.company.list', {
+        filter: { '%TITLE': cleanName },
+        select: ['ID', 'TITLE']
+      });
+      companies = cleanSearch.result || [];
+    }
+    
     if (companies.length > 0) {
       logger.info('Matched party to company', { partyName, companyId: companies[0].ID });
       const result = { COMPANY_ID: companies[0].ID };
@@ -74,12 +127,21 @@ async function findBitrixParty(partyName) {
       return result;
     }
 
-    // 2 — Search existing contacts in Bitrix24 (unregistered parties created as contacts)
-    const contactData = await callBitrix('crm.contact.list', {
+    // 2 — Search existing contacts in Bitrix24 (try both original and cleaned name)
+    let contactData = await callBitrix('crm.contact.list', {
       filter: { '%NAME': partyName },
       select: ['ID', 'NAME', 'LAST_NAME']
     });
-    const contacts = contactData.result || [];
+    let contacts = contactData.result || [];
+    
+    if (contacts.length === 0 && cleanName !== partyName) {
+      contactData = await callBitrix('crm.contact.list', {
+        filter: { '%NAME': cleanName },
+        select: ['ID', 'NAME', 'LAST_NAME']
+      });
+      contacts = contactData.result || [];
+    }
+    
     const matchedContact = contacts.find(c =>
       `${c.NAME || ''} ${c.LAST_NAME || ''}`.trim().toLowerCase() === partyName.toLowerCase()
     );
@@ -91,17 +153,36 @@ async function findBitrixParty(partyName) {
     }
 
     // 3 — Not found in Bitrix24 — fetch ledger from Tally for enrichment + GST classification
+    // Use cleaned name for Tally ledger lookup (without (Creditor), (Debtor), etc.)
+    const cleanName = normalizeName(partyName);
     const fields = {
       TITLE:    partyName,
       COMMENTS: 'Auto-created from Tally outstanding sync'
     };
 
     let ledger = null;
+    let ledgerNameFound = null;
+
+    // Try multiple name variations to find ledger in Tally
+    const nameVariations = [
+      cleanName,                           // "Tally Solutions Pvt. Ltd."
+      partyName.replace(/\s*\([^)]*\)\s*/g, '').trim(), // remove parentheses
+      partyName.split(' ').slice(0, 2).join(' '), // first 2 words: "Tally Solutions"
+      partyName.split(' ')[0],              // first word only: "Tally"
+    ].filter((v, i, arr) => v && arr.indexOf(v) === i); // unique, non-empty
 
     if (!tallyLedgerCircuitOpen) {
       try {
-        logger.info('Fetching ledger details from Tally', { partyName });
-        ledger = await getLedgerByName(partyName);
+        // Try each name variation until we find a match
+        for (const ledgerName of nameVariations) {
+          logger.info('Fetching ledger details from Tally', { partyName: ledgerName });
+          ledger = await getLedgerByName(ledgerName);
+          if (ledger) {
+            ledgerNameFound = ledgerName;
+            logger.info('Found ledger in Tally', { searchName: ledgerName, found: ledger.ledgerName });
+            break;
+          }
+        }
         if (ledger) {
           const fgCDM = (() => { try { return require('../services/featureGate'); } catch { return null; } })();
           const customerMapping = !fgCDM || fgCDM.isEnabled('customer-details-mapping');
@@ -361,7 +442,7 @@ async function processOutstanding() {
         const partyMatch = await findBitrixParty(outstanding.partyName);
         Object.assign(outstanding, partyMatch);
 
-        const dealFields     = mapOutstandingToDeal(outstanding);
+        const dealFields     = mapOutstandingToDeal(outstanding, false);
         const dealKey = `${outstanding.partyName}||${outstanding.voucherNumber}`;
 
         // Duplicate prevention — only if enabled on plan
@@ -461,6 +542,7 @@ async function processOutstanding() {
                 ...(outstanding.CONTACT_ID  ? { contactId:  outstanding.CONTACT_ID  } : {}),
                 parentId2:       dealId, // links invoice to deal
                 UF_TALLY_VOUCHER_NO: outstanding.voucherNumber,
+                UF_TALLY_SYNCED: 'Y',
                 UF_INVOICE_NUMBER:   outstanding.voucherNumber,
                 UF_INVOICE_DATE:     outstanding.billDate || '',
                 UF_PAYMENT_STATUS:   'Pending',
@@ -531,18 +613,48 @@ async function processOutstanding() {
                 dealId: existingDealId, message: stageErr.message,
               });
             }
+            const _voucherState = loadVoucherState();
+            const prevState = _voucherState[dealKey];
+            const voucherChanged = hasVoucherChanged(prevState, outstanding);
+            if (!voucherChanged) {
+              delete dealFields.OPPORTUNITY;
+              delete dealFields.CLOSEDATE;
+              delete dealFields.COMMENTS;
+              delete dealFields.UF_BILL_DATE;
+              delete dealFields.UF_DUE_DATE;
+              delete dealFields.UF_BILL_AMOUNT;
+              delete dealFields.UF_OUTSTANDING;
+              delete dealFields.UF_DAYS_PENDING;
+              delete dealFields.UF_INVOICE_DATE;
+              logger.info('Deal unchanged — skipping update (voucher state same)', {
+                dealId: existingDealId, voucherNumber: outstanding.voucherNumber,
+              });
+            } else {
+              _voucherState[dealKey] = {
+                billDate: outstanding.billDate,
+                dueDate: outstanding.dueDate,
+                billAmount: outstanding.billAmount,
+                pendingAmount: outstanding.pendingAmount,
+                syncedAt: new Date().toISOString(),
+              };
+              saveVoucherState(_voucherState);
+              logger.info('Voucher changed — updating deal', {
+                dealId: existingDealId, voucherNumber: outstanding.voucherNumber, prev: prevState, new: outstanding.pendingAmount,
+              });
+            }
             await updateDeal(existingDealId, dealFields);
             await attachInvoiceToDeal(existingDealId, outstanding);
             action = 'updated';
           } else {
             createdThisRun.add(dealKey);
-            const newDeal = await createDeal(dealFields);
+            // Generate dealFields with STAGE_ID for new deals only
+            const newDealFields = mapOutstandingToDeal(outstanding, true);
+            const newDeal = await createDeal(newDealFields);
             const newDealId = newDeal?.result || newDeal;
             if (newDealId) {
               await attachInvoiceToDeal(newDealId, outstanding);
               await postTimelineComment(newDealId, outstanding, 'created');
 
-              // Write to persistent dedup cache immediately so next sync skips creation
               _dealDedupCache[dealKey] = {
                 dealId:    newDealId,
                 createdAt: new Date().toISOString(),
@@ -550,6 +662,16 @@ async function processOutstanding() {
                 voucherNumber: outstanding.voucherNumber,
               };
               saveDealDedup(_dealDedupCache);
+
+              const _voucherState = loadVoucherState();
+              _voucherState[dealKey] = {
+                billDate: outstanding.billDate,
+                dueDate: outstanding.dueDate,
+                billAmount: outstanding.billAmount,
+                pendingAmount: outstanding.pendingAmount,
+                syncedAt: new Date().toISOString(),
+              };
+              saveVoucherState(_voucherState);
             }
             action = 'created';
           }

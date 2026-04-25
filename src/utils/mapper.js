@@ -71,7 +71,9 @@ const closeDateRaw = isCamel ? (invoice.closeDate || invoice.closeDateRaw) : inv
 }
 
 // Map Tally Outstanding → Bitrix24 Deal fields
-function mapOutstandingToDeal(outstanding) {
+// Note: STAGE_ID is NEVER set by default - existing deals must preserve their stage
+// Pass isNewDeal=true only when creating brand new deals
+function mapOutstandingToDeal(outstanding, isNewDeal = false) {
   const featureGate = (() => { try { return require('../services/featureGate'); } catch { return null; } })();
   const fullMapping = !featureGate || featureGate.isEnabled('deal-field-mapping');
 
@@ -91,11 +93,20 @@ function mapOutstandingToDeal(outstanding) {
       UF_OUTSTANDING:       outstanding.pendingAmount,
       UF_DAYS_PENDING:      outstanding.daysPending,
       UF_INVOICE_NUMBER:    outstanding.voucherNumber,
-      UF_INVOICE_DATE:      outstanding.billDate,
-      UF_PAYMENT_STATUS:    outstanding.paymentStatus    || 'Pending',
-      UF_CLOSING_STOCK:     outstanding.closingStock     || '',
+      UF_INVOICE_DATE:     outstanding.billDate,
+      UF_PAYMENT_STATUS:   outstanding.paymentStatus    || 'Pending',
+      UF_CLOSING_STOCK:    outstanding.closingStock     || '',
     } : {})
   };
+
+  // Only new deals get a stage - never update stage for existing deals to prevent moving backwards
+  if (isNewDeal) {
+    const { findStage } = require('../services/pipelineService');
+    const newBillStage = findStage('new bill') || findStage('newbill');
+    if (newBillStage) {
+      fields.STAGE_ID = newBillStage;
+    }
+  }
 
   if (outstanding.bitrixContactId) fields.CONTACT_ID = outstanding.bitrixContactId;
   if (outstanding.bitrixCompanyId) fields.COMPANY_ID = outstanding.bitrixCompanyId;
