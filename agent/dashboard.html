@@ -459,6 +459,12 @@ html,body{
           <span class="trig-label">Receipt Match</span>
           <span class="trig-desc">Link receipts → bills</span>
         </div>
+        <div class="trig blue" id="trig-deliverynotes" onclick="trigger('deliverynotes')">
+          <div class="spin-ring"></div>
+          <span class="trig-icon">📦</span>
+          <span class="trig-label">Delivery Notes</span>
+          <span class="trig-desc">Link DN → deal estimate</span>
+        </div>
       </div>
     </div>
 
@@ -704,8 +710,9 @@ const trigMap = {
   tallybackfill:  { path: '/sync/tally-invoices/backfill', label: 'Historical backfill (2016→now)', slug: null },
   iteminvoices:  { path: '/sync/item-invoices',    label: 'Item invoice sync',   slug: 'invoice-sync'  },
   invmatch:        { path: '/sync/inventory-match',          label: 'Inventory match',          slug: 'inventory-sync'},
-invbitrixtotally:{ path: '/sync/inventory-bitrix-to-tally', label: 'Bitrix→Tally inventory sync', slug: 'inventory-sync'},
+  invbitrixtotally:{ path: '/sync/inventory-bitrix-to-tally', label: 'Bitrix→Tally inventory sync', slug: 'inventory-sync'},
   receiptmatch:  { path: '/sync/receipts-match',    label: 'Receipt match',       slug: 'payment-sync'  },
+  deliverynotes: { path: '/sync/delivery-notes', label: 'Delivery note → Deal estimate', slug: 'quotation-sync' },
 };
 
 let _planFeatures = {}; // populated from /api/status

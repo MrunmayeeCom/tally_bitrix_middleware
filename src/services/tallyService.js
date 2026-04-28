@@ -996,6 +996,68 @@ async function verifyStockItemsExist(productNames) {
   }
 }
 
+// Get Delivery Notes from Tally
+async function getDeliveryNotes() {
+  logger.info('Fetching delivery notes from Tally');
+
+  const xml = `
+    <ENVELOPE>
+      <HEADER>
+        <TALLYREQUEST>Export Data</TALLYREQUEST>
+      </HEADER>
+      <BODY>
+        <EXPORTDATA>
+          <REQUESTDESC>
+            <REPORTNAME>Day Book</REPORTNAME>
+            <STATICVARIABLES>
+              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+              <VCHTYPE>Delivery Note</VCHTYPE>
+            </STATICVARIABLES>
+          </REQUESTDESC>
+        </EXPORTDATA>
+      </BODY>
+    </ENVELOPE>
+  `.trim();
+
+  const response = await sendToTally(xml);
+  const tallyError = detectTallyError(response);
+  if (tallyError) {
+    logger.error('Tally returned error for delivery notes', { error: tallyError });
+    return [];
+  }
+  return parseDeliveryNotesXml(response);
+}
+
+function parseDeliveryNotesXml(xml) {
+  try {
+    const notes = [];
+    const voucherRegex = /<VOUCHER\s+.*?>([\s\S]*?)<\/VOUCHER>/gi;
+    let match;
+
+    while ((match = voucherRegex.exec(xml)) !== null) {
+      const voucherXml = match[1];
+      const refMatch = /<REFERENCE>(.*?)<\/REFERENCE>/i.exec(voucherXml);
+      const partyMatch = /<PARTYLEDGERNAME>(.*?)<\/PARTYLEDGERNAME>/i.exec(voucherXml);
+      const amountMatch = /<AMOUNT>(.*?)<\/AMOUNT>/i.exec(voucherXml);
+      const dateMatch = /<DATE>(.*?)<\/DATE>/i.exec(voucherXml);
+
+      if (refMatch && partyMatch) {
+        notes.push({
+          voucherNumber: refMatch[1].replace(/^BX-/i, '').trim(),
+          partyName: partyMatch[1].trim(),
+          amount: parseFloat(amountMatch?.[1] || 0),
+          date: dateMatch?.[1] ? `${dateMatch[1].slice(0,4)}-${dateMatch[1].slice(4,6)}-${dateMatch[1].slice(6,8)}` : '',
+        });
+      }
+    }
+    return notes;
+  } catch (e) {
+    logger.warn('Parse delivery notes failed', { message: e.message });
+    return [];
+  }
+}
+
 module.exports = {
   createLedger,
   alterLedger,
@@ -1007,6 +1069,8 @@ module.exports = {
   deleteVoucher,
   getOutstanding,
   parseOutstandingXml,
+  getDeliveryNotes,
+  parseDeliveryNotesXml,
   ensureTallyDefaults,
   getVoucherTypes,
   findMasterId,

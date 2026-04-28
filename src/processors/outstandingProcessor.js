@@ -476,90 +476,10 @@ async function processOutstanding() {
             cachedDealId: _dealDedupCache[dealKey].dealId,
           });
         }
-        let action;
+let action;
 
         try {
-          // Helper — attach Smart Invoice to deal after create/update
-        const attachInvoiceToDeal = async (dealId, outstanding) => {
-          try {
-            // Check if invoice already exists for this voucher
-            let alreadyAttached = false;
-
-            // Check 1: search by voucher number custom field
-            try {
-              const axios = require('axios');
-              const bitrixConfig = require('../config/bitrixConfig');
-              const res = await axios.post(
-                `${bitrixConfig.webhookUrl}/crm.item.list.json`,
-                {
-                  entityTypeId: 31,
-                  filter: { UF_TALLY_VOUCHER_NO: outstanding.voucherNumber },
-                  select: ['id'],
-                },
-                { timeout: 8000 }
-              );
-              alreadyAttached = (res.data?.result?.items?.length ?? 0) > 0;
-            } catch (e) {
-              // UF_ field may not exist yet — fall through to title check
-            }
-
-            // Check 2: fallback search by exact title match (no UF_ dependency)
-            if (!alreadyAttached) {
-              try {
-                const titleCheck = await callBitrix('crm.item.list', {
-                  entityTypeId: 31,
-                  filter: {
-                    '=title': `${outstanding.partyName} - ${outstanding.voucherNumber}`,
-                  },
-                  select: ['id'],
-                });
-                alreadyAttached = (titleCheck.result?.items?.length ?? 0) > 0;
-              } catch (e) {
-                logger.warn('Invoice title dedup check failed — proceeding with caution', {
-                  message: e.message,
-                });
-                // If both checks fail, do NOT proceed — safer to skip than duplicate
-                alreadyAttached = true;
-              }
-            }
-
-            if (alreadyAttached) {
-              logger.info('Invoice already exists — skipping attach', {
-                voucherNumber: outstanding.voucherNumber,
-              });
-              return;
-            }
-
-            // Create Smart Invoice linked to this deal
-            await callBitrix('crm.item.add', {
-              entityTypeId: 31,
-              fields: {
-                title:           `${outstanding.partyName} - ${outstanding.voucherNumber}`,
-                opportunity:     outstanding.pendingAmount || 0,
-                currencyId:      'INR',
-                closeDate:       outstanding.dueDate || new Date().toISOString().split('T')[0],
-                ...(outstanding.COMPANY_ID  ? { companyId:  outstanding.COMPANY_ID  } : {}),
-                ...(outstanding.CONTACT_ID  ? { contactId:  outstanding.CONTACT_ID  } : {}),
-                parentId2:       dealId, // links invoice to deal
-                UF_TALLY_VOUCHER_NO: outstanding.voucherNumber,
-                UF_TALLY_SYNCED: 'Y',
-                UF_INVOICE_NUMBER:   outstanding.voucherNumber,
-                UF_INVOICE_DATE:     outstanding.billDate || '',
-                UF_PAYMENT_STATUS:   'Pending',
-              },
-            });
-            logger.info('Smart Invoice attached to deal', {
-              dealId,
-              voucherNumber: outstanding.voucherNumber,
-            });
-          } catch (e) {
-            logger.warn('Could not attach invoice to deal — non-fatal', {
-              dealId, message: e.message,
-            });
-          }
-        };
-
-        // Helper — post timeline comment with bill details
+          // Helper — post timeline comment with bill details
         const postTimelineComment = async (dealId, outstanding, action) => {
           try {
             const comment =
@@ -643,7 +563,6 @@ async function processOutstanding() {
               });
             }
             await updateDeal(existingDealId, dealFields);
-            await attachInvoiceToDeal(existingDealId, outstanding);
             action = 'updated';
           } else {
             createdThisRun.add(dealKey);
@@ -652,7 +571,6 @@ async function processOutstanding() {
             const newDeal = await createDeal(newDealFields);
             const newDealId = newDeal?.result || newDeal;
             if (newDealId) {
-              await attachInvoiceToDeal(newDealId, outstanding);
               await postTimelineComment(newDealId, outstanding, 'created');
 
               _dealDedupCache[dealKey] = {

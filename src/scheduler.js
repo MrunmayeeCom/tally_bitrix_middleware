@@ -8,6 +8,7 @@ const { pollInvoices } = require('./processors/invoicePoller');
 const featureGate = require('./services/featureGate');
 const { processInvoice } = require('./processors/invoiceProcessor');
 const { processQuotation } = require('./processors/quotationProcessor');
+const { processDeliveryNotes } = require('./processors/deliveryNoteProcessor');
 
 function recordSyncFailure(trigger, message) {
   recordSync({ success: false, processed: 0, failed: 1, trigger, error: message });
@@ -106,6 +107,24 @@ let isPaymentSyncing      = false;
 let isTallyInvoiceSyncing = false;
 let isInventoryMatchRunning = false;
 let isReceiptMatchRunning   = false;
+let isDeliveryNoteSyncing   = false;
+
+async function runDeliveryNoteSync(label) {
+  if (isDeliveryNoteSyncing) {
+    logger.warn(`${label} already running — skipping`);
+    return;
+  }
+  isDeliveryNoteSyncing = true;
+  try {
+    const result = await processDeliveryNotes();
+    logger.info(`${label} completed`, result || {});
+  } catch (error) {
+    logger.error(`${label} failed`, { message: error.message });
+    recordSyncFailure(label, error.message);
+  } finally {
+    isDeliveryNoteSyncing = false;
+  }
+}
 
 async function runPaymentSync(label) {
   if (isPaymentSyncing) {
@@ -202,6 +221,14 @@ function startScheduler() {
     _activeTasks.push(cron.schedule(syncCron, () => {
       runOutstandingSync(`${syncMinutes}min — outstanding`);
     }, { timezone: 'Asia/Kolkata' }));
+  }
+
+  // Quotation/Delivery Note sync — links to existing deals (Estimates section)
+  if (featureGate.isEnabled('quotation-sync')) {
+    _activeTasks.push(cron.schedule(syncCron, () => {
+      runDeliveryNoteSync(`${syncMinutes}min — delivery note`);
+    }, { timezone: 'Asia/Kolkata' }));
+    logger.info('[Scheduler] Delivery note (quotation) sync registered');
   }
 
   // Ledger sync — Custom+ (contact-sync or company-sync slug enabled)

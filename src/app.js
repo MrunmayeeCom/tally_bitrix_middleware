@@ -487,6 +487,21 @@ app.post('/sync/invoices', authMiddleware, async (req, res) => {
   }
 });
 
+app.post('/sync/delivery-notes', authMiddleware, async (req, res) => {
+  const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
+  if (featureGate && !featureGate.isEnabled('quotation-sync')) {
+    return res.status(403).json({ success: false, message: 'quotation-sync not enabled on your plan' });
+  }
+  try {
+    logger.info('Manual delivery note sync triggered');
+    const { processDeliveryNotes } = require('./processors/deliveryNoteProcessor');
+    const result = await processDeliveryNotes();
+    res.status(200).json(result);
+  } catch(e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
 app.use(express.static(path.join(__dirname, "../agent/installer")));
 app.use(express.static(path.join(__dirname, "../agent")));
 
