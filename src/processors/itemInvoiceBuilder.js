@@ -546,40 +546,7 @@ async function processItemInvoices() {
           }
         }
 
-        // Check 3: by company name + amount (if title doesn't match)
-        // This finds invoices like "Invoice #7032" when looking for "Zaveri Textiles - 3515"
         let partyIds = null;
-        if (!existingId) {
-          partyIds = await findBitrixParty(voucher.partyName);
-          if (partyIds.companyId) {
-            try {
-              // Search invoices by company first, then filter by amount in code (filter syntax causes 400 errors)
-              const companyInvoices = await callBitrix('crm.item.list', {
-                entityTypeId: 31,
-                filter: { COMPANY_ID: partyIds.companyId },
-                select: ['id', 'title', 'COMPANY_ID', 'OPPORTUNITY'],
-                order: { id: 'DESC' },
-              });
-              if ((companyInvoices.result?.items?.length ?? 0) > 0) {
-                for (const inv of companyInvoices.result.items) {
-                  // Match amount exactly - API returns lowercase field names
-                  const invAmount = parseFloat(inv.opportunity || inv.OPPORTUNITY || 0);
-                  if (invAmount === parseFloat(voucher.amount)) {
-                    existingId = inv.id;
-                    logger.info('[ItemInvoice] Invoice found by company+amount dedup', {
-                      voucherNumber: voucher.voucherNumber,
-                      invoiceId: existingId,
-                      companyId: partyIds.companyId,
-                      title: inv.title,
-                      amount: invAmount,
-                    });
-                    break;
-                  }
-                }
-              }
-            } catch (_) {}
-          }
-        }
 
         // If found, update and skip creating new
         if (existingId) {
@@ -672,25 +639,45 @@ async function processItemInvoices() {
         if (!dealId) {
           try {
             const { getTallyPipelineCategoryId } = require('../services/pipelineService');
+            const { findStage } = require('../services/pipelineService');
             const categoryId = await getTallyPipelineCategoryId();
             if (categoryId) {
-              const newDeal = await callBitrix('crm.deal.add', {
-                fields: {
-                  TITLE: `${voucher.partyName} - ${voucher.voucherNumber}`,
-                  OPPORTUNITY: voucher.amount,
-                  CURRENCY_ID: 'INR',
-                  COMPANY_ID: partyIds.companyId,
-                  CONTACT_ID: partyIds.contactId,
+              // Final guard — check by exact title before creating to avoid duplicates
+              const titleCheck = await callBitrix('crm.deal.list', {
+                filter: {
+                  '=TITLE': `${voucher.partyName} - ${voucher.voucherNumber}`,
                   CATEGORY_ID: categoryId,
-                  CLOSEDATE: voucher.date,
                 },
+                select: ['ID', 'TITLE'],
               });
-              dealId = newDeal.result;
-              logger.info('[ItemInvoice] Created new deal for invoice', {
-                voucherNumber: voucher.voucherNumber,
-                dealId,
-                amount: voucher.amount,
-              });
+              if ((titleCheck.result || []).length > 0) {
+                dealId = titleCheck.result[0].ID;
+                logger.info('[ItemInvoice] Deal already exists by title — skipping create', {
+                  voucherNumber: voucher.voucherNumber,
+                  dealId,
+                });
+              } else {
+                const newBillStage = findStage('new bill') || findStage('newbill');
+                const newDeal = await callBitrix('crm.deal.add', {
+                  fields: {
+                    TITLE: `${voucher.partyName} - ${voucher.voucherNumber}`,
+                    OPPORTUNITY: voucher.amount,
+                    CURRENCY_ID: 'INR',
+                    COMPANY_ID: partyIds ? partyIds.companyId : undefined,
+                    CONTACT_ID: partyIds ? partyIds.contactId : undefined,
+                    CATEGORY_ID: categoryId,
+                    CLOSEDATE: voucher.date,
+                    ...(newBillStage ? { STAGE_ID: newBillStage } : {}),
+                  },
+                });
+                dealId = newDeal.result;
+                logger.info('[ItemInvoice] Created new deal for invoice', {
+                  voucherNumber: voucher.voucherNumber,
+                  dealId,
+                  amount: voucher.amount,
+                  stage: newBillStage || 'default',
+                });
+              }
             }
           } catch (createErr) {
             logger.warn('[ItemInvoice] Deal creation failed — invoice will be unlinked', {
