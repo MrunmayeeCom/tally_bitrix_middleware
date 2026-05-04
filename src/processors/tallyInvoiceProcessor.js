@@ -28,12 +28,11 @@ function saveCache(data) {
 async function getSalesVouchers(fromDate = null) {
   const rawCompany = tallyConfig.company || '';
   // TallyPrime Gold requires the FULL company name including the date suffix
-  // e.g. "Rajlaxmi Solutions Private Limited - (From 1-Apr-2016)"
   // Do NOT strip it — Tally uses this as the exact internal identifier
   const companyName = rawCompany;
 
   logger.info(`Fetching sales vouchers from Tally (quarterly chunks) | company: "${companyName}"`);
-  if (!companyName || companyName === 'Rajlaxmi Solutions Private Limited - (From 1-Apr-2016) - (from 1-Apr-2016)') {
+  if (!companyName || companyName === 'Test Company') {
     logger.warn('[TallyInvoice] Company name looks like default — make sure the correct company is set in Settings');
   }
 
