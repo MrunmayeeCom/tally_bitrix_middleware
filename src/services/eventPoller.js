@@ -10,14 +10,25 @@ function getClientId() {
   return process.env.CLIENT_ID || (email ? `${os.hostname()}-${email}` : os.hostname());
 }
 
+// Process-level singleton guard — survives multiple require() calls
+if (!global.__pollerState) {
+  global.__pollerState = {
+    pollerInterval: null,
+    isPolling:      false,
+    registered:     false,
+    lockedClientId: null,
+    pendingConfirmIds: new Set(),
+    processingEntities: new Set(),
+  };
+}
+const _state = global.__pollerState;
+
+// Keep local aliases for readability
 let _pollerInterval = null;
-let _isPolling      = false;
-let _registered     = false;
-let _lockedClientId = null; // locked at registration time, used for all subsequent polls
 
 async function registerClient(cfg) {
   const clientId  = getClientId();
-  _lockedClientId = clientId; // lock it so polls always use same ID
+  _state.lockedClientId = clientId; // lock it so polls always use same ID
   const email     = cfg.customerEmail || process.env.CUSTOMER_EMAIL || '';
   const bitrixUrl = cfg.bitrixUrl     || process.env.BITRIX_WEBHOOK_URL || '';
 
@@ -36,7 +47,7 @@ async function registerClient(cfg) {
     }, { timeout: 10000 });
 
     if (res.data.success) {
-      _registered = true;
+      _state.registered = true;
       logger.info('[Poller] Client registered with Render server', {
         clientId,
         webhooksRegistered: res.data.webhooksRegistered,
@@ -52,7 +63,7 @@ async function registerClient(cfg) {
 async function fetchPendingEvents() {
   try {
     const axios    = require('axios');
-    const clientId = _lockedClientId || getClientId();
+    const clientId = _state.lockedClientId || getClientId();
     const res = await axios.get(`${RENDER_URL}/api/events/pending`, {
       params:  { clientId },
       timeout: 8000,
@@ -67,7 +78,7 @@ async function confirmEvents(eventIds) {
   if (!eventIds || eventIds.length === 0) return;
   try {
     const axios    = require('axios');
-    const clientId = _lockedClientId || getClientId();
+    const clientId = _state.lockedClientId || getClientId();
     const res = await axios.post(`${RENDER_URL}/api/events/confirm`, {
       clientId,
       eventIds,
@@ -98,41 +109,49 @@ async function processEvent(event) {
   }
 }
 
-let _processingEntities = new Set();
+// _processingEntities and _pendingConfirmIds live in _state — do not redeclare here
 
 async function pollOnce() {
-  if (_isPolling) return;
-  _isPolling = true;
+  if (_state.isPolling) return;
+  _state.isPolling = true;
 
   try {
+    // Flush any previously confirmed-but-not-yet-ACKed events first
+    if (_state.pendingConfirmIds.size > 0) {
+      const toFlush = [..._state.pendingConfirmIds];
+      _state.pendingConfirmIds.clear();
+      await confirmEvents(toFlush);
+    }
+
     const events = await fetchPendingEvents();
 
-    if (events.length === 0) {
-      _isPolling = false;
-      return;
-    }
-    logger.info(`[Poller] ${events.length} events received from Render server`);
+    if (events.length === 0) return;
 
+    logger.info(`[Poller] ${events.length} events received from Render server`);
     logger.info(`[Poller] Received ${events.length} pending events | clientId: ${getClientId()}`);
 
-    // Filter out events for entities currently being processed (from previous poll cycles)
+    // Filter out events already confirmed or currently being processed
     const filteredEvents = events.filter(event => {
+      if (_state.pendingConfirmIds.has(event.eventId)) {
+        logger.info(`[Poller] Skipping already-confirmed event`, { eventId: event.eventId });
+        return false;
+      }
       const entityId = event.payload?.entityId || event.entityId;
-      if (_processingEntities.has(entityId)) {
+      if (_state.processingEntities.has(entityId)) {
         logger.info(`[Poller] Skipping entity being processed in previous cycle`, { entityId, eventId: event.eventId });
         return false;
       }
       return true;
     });
 
-    // Also deduplicate by entityId within the same poll cycle
+    // Deduplicate by entityId within the same poll cycle
     const seenEntities = new Set();
     const uniqueEvents = [];
     for (const event of filteredEvents) {
       const entityId = event.payload?.entityId || event.entityId;
       if (!seenEntities.has(entityId)) {
         seenEntities.add(entityId);
-        _processingEntities.add(entityId); // Mark as being processed
+        _state.processingEntities.add(entityId);
         uniqueEvents.push(event);
       } else {
         logger.info(`[Poller] Skipping duplicate entity in same poll cycle`, { entityId, eventId: event.eventId });
@@ -150,27 +169,32 @@ async function pollOnce() {
       try {
         await processEvent(event);
         confirmedIds.push(event.eventId);
+        // Mark confirmed immediately so next poll cycle skips it
+        _state.pendingConfirmIds.add(event.eventId);
       } catch (err) {
         logger.warn(`[Poller] Skipping confirmation for failed event: ${event.eventId}`, { error: err.message });
       } finally {
         const entityId = event.payload?.entityId || event.entityId;
-        _processingEntities.delete(entityId); // Remove from in-progress set on success or failure
+        _state.processingEntities.delete(entityId);
       }
     }
 
     if (confirmedIds.length > 0) {
-      await confirmEvents(confirmedIds);
+      // Fire without awaiting — next poll will flush if this fails
+      confirmEvents(confirmedIds).catch(err => {
+        logger.warn(`[Poller] Confirm failed — will retry on next cycle: ${err.message}`);
+      });
     }
 
   } catch (err) {
     logger.warn(`[Poller] Poll cycle error: ${err.message}`);
   } finally {
-    _isPolling = false;
+    _state.isPolling = false;
   }
 }
 
 async function startPoller(cfg) {
-  if (_pollerInterval) {
+  if (_state.pollerInterval) {
     logger.warn('[Poller] Already running — skipping duplicate start');
     return;
   }
@@ -179,19 +203,21 @@ async function startPoller(cfg) {
 
   await registerClient(cfg);
 
-  _pollerInterval = setInterval(pollOnce, POLL_INTERVAL_MS);
+  _state.pollerInterval = setInterval(pollOnce, POLL_INTERVAL_MS);
+  _pollerInterval = _state.pollerInterval; // keep local alias in sync
 
   logger.info(`[Poller] Polling every ${POLL_INTERVAL_MS / 1000}s`);
 }
 
 function stopPoller() {
-  if (_pollerInterval) {
-    clearInterval(_pollerInterval);
+  if (_state.pollerInterval) {
+    clearInterval(_state.pollerInterval);
+    _state.pollerInterval = null;
     _pollerInterval = null;
     logger.info('[Poller] Stopped');
   }
 }
 
-function isRegistered() { return _registered; }
+function isRegistered() { return _state.registered; }
 
 module.exports = { startPoller, stopPoller, isRegistered, registerClient };

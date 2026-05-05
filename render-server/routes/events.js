@@ -50,6 +50,10 @@ router.post('/clients/register', async (req, res) => {
   }
 });
 
+// Per-client in-flight set — tracks eventIds currently delivered but not yet confirmed
+// Prevents re-delivering the same event in overlapping poll cycles
+const _inFlightEvents = new Map(); // clientId → Set of eventId strings
+
 // GET /api/events/pending?clientId=xxx
 // Client polls this every 5 seconds to get unprocessed events
 router.get('/events/pending', async (req, res) => {
@@ -63,13 +67,33 @@ router.get('/events/pending', async (req, res) => {
     // Update client last seen
     await Client.updateOne({ clientId }, { lastSeenAt: new Date() });
 
-    // Get up to 10 unprocessed events for this client
-    const events = await Event.find({
+    // Get in-flight set for this client
+    if (!_inFlightEvents.has(clientId)) {
+      _inFlightEvents.set(clientId, new Set());
+    }
+    const inFlight = _inFlightEvents.get(clientId);
+
+    // Get up to 10 unprocessed events, excluding ones already delivered
+    const allPending = await Event.find({
       clientId,
       processed: false,
     })
-    .sort({ createdAt: 1 }) // oldest first
-    .limit(10);
+    .sort({ createdAt: 1 })
+    .limit(50);
+
+    // Filter out events currently in-flight (delivered but not yet confirmed)
+    const events = allPending
+      .filter(e => !inFlight.has(e._id.toString()))
+      .slice(0, 10);
+
+    // Mark these as in-flight
+    events.forEach(e => inFlight.add(e._id.toString()));
+
+    // Auto-expire in-flight entries after 30s in case client crashes without confirming
+    events.forEach(e => {
+      const eid = e._id.toString();
+      setTimeout(() => inFlight.delete(eid), 30000);
+    });
 
     res.json({
       success: true,
@@ -105,6 +129,12 @@ router.post('/events/confirm', async (req, res) => {
       { _id: { $in: eventIds }, clientId },
       { processed: true, processedAt: new Date() }
     );
+
+    // Remove confirmed events from in-flight set
+    if (_inFlightEvents.has(clientId)) {
+      const inFlight = _inFlightEvents.get(clientId);
+      eventIds.forEach(id => inFlight.delete(id));
+    }
 
     console.log(`[Events] Confirmed ${eventIds.length} events for client: ${clientId}`);
 

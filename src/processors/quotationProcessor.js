@@ -34,43 +34,38 @@ const quotationDedup = new Set();
 // Used to suppress the immediate UPDATE echo Bitrix24 fires after every ADD
 const recentlyCreated = new Map();
 
-// Track in-progress operations — prevents concurrent ADD+UPDATE race
-const inFlight = new Map();
-
 // Module-level dedup window: entityId → timestamp of last completed process
 const recentlyProcessed = new Map();
+
+// Synchronous lock — catches parallel calls in the same event loop tick
+const processingLock = new Map();
 
 async function processQuotation({ entityId, isUpdate = false, entityTypeId = '7' }) {
   const entityKey = String(entityId);
 
-  // Hard dedup: if another instance is actively running for this entity, wait then drop
-  if (inFlight.has(entityKey)) {
-    logger.info('Quotation already in-flight — waiting then dropping duplicate', { entityId });
-    try { await inFlight.get(entityKey); } catch {}
-    logger.info('In-flight completed — duplicate event discarded', { entityId });
-    return { success: true, skipped: true, reason: 'Duplicate concurrent event dropped' };
+  // SYNCHRONOUS check — catches parallel calls before any await
+  if (processingLock.has(entityKey)) {
+    logger.info('Duplicate quotation event suppressed (sync lock)', { entityId });
+    return { success: true, skipped: true, reason: 'Sync lock — duplicate event' };
   }
+  processingLock.set(entityKey, true);
 
-  // Soft dedup: if this entity was processed within the last 3 seconds, drop it
+  // Soft dedup: if this entity was processed within the last 5 seconds, drop it
   const lastProcessed = recentlyProcessed.get(entityKey);
-  if (lastProcessed && (Date.now() - lastProcessed) < 3000) {
+  if (lastProcessed && (Date.now() - lastProcessed) < 5000) {
+    processingLock.delete(entityKey);
     logger.info('Quotation processed too recently — dropping near-duplicate event', {
       entityId, msSinceLast: Date.now() - lastProcessed,
     });
-    return { success: true, skipped: true, reason: 'Near-duplicate event within 3s window' };
+    return { success: true, skipped: true, reason: 'Near-duplicate event within 5s window' };
   }
-
-  let resolveInflight;
-  const inflightPromise = new Promise(r => { resolveInflight = r; });
-  inFlight.set(entityKey, inflightPromise);
 
   try {
     return await _processQuotation({ entityId, isUpdate, entityTypeId });
   } finally {
     recentlyProcessed.set(entityKey, Date.now());
-    setTimeout(() => recentlyProcessed.delete(entityKey), 5000);
-    resolveInflight();
-    inFlight.delete(entityKey);
+    setTimeout(() => recentlyProcessed.delete(entityKey), 8000);
+    processingLock.delete(entityKey);
   }
 }
 
@@ -122,28 +117,9 @@ async function _processQuotation({ entityId, isUpdate = false, entityTypeId = '7
       productRows: (quotation.productRows || []).map(r => r.PRODUCT_NAME || r.productName || 'unnamed'),
     });
 
-    // Verify stock items exist in Tally - fallback to amount-only if missing
-    const productNames = (quotation.productRows || []).map(r => r.PRODUCT_NAME || r.productName || '').filter(Boolean);
-    let finalProductRows = voucher.productRows || [];
-    
-    if (productNames.length > 0) {
-      try {
-        const { valid, missing } = await verifyStockItemsExist(productNames);
-        if (missing.length > 0) {
-          logger.warn('Stock items not found in Tally - falling back to amount-only voucher', {
-            entityId,
-            missingStockItems: missing,
-            validStockItems: valid,
-          });
-          finalProductRows = []; // Fallback: no inventory, amount-only
-        }
-      } catch (e) {
-        logger.warn('Stock item verification failed - proceeding with product rows', { message: e.message });
-      }
-    }
-
-    // Override productRows in voucher (either empty due to missing stock items, or original)
-    voucher.productRows = finalProductRows;
+    // Always pass product rows through — Sales Order vouchers require inventory entries
+    // Stock item verification is skipped; Tally will accept any item name in an order
+    voucher.productRows = voucher.productRows || [];
 
     // ── UPDATE path ───────────────────────────────────────────────────────────
     if (isUpdate) {

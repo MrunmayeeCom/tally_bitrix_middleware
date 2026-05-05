@@ -175,27 +175,147 @@ function parseLedgersXml(xml) {
 }
 
 // Create Voucher in Tally (Sales Order / Sales Invoice)
-function _renderInventory(voucher) {
+function _normalizeTallyUnit(unit) {
+  if (!unit) return 'Nos';
+  const u = unit.toString().trim();
+  const map = {
+    'pcs.':    'Nos',
+    'pcs':     'Nos',
+    'pc':      'Nos',
+    'nos':     'Nos',
+    'nos.':    'Nos',
+    'no':      'Nos',
+    'no.':     'Nos',
+    'unit':    'Nos',
+    'units':   'Nos',
+    'num':     'Nos',
+    'number':  'Nos',
+    'numbers': 'Nos',
+    'qty':     'Nos',
+    'piece':   'Nos',
+    'pieces':  'Nos',
+    // Single-letter and ambiguous Bitrix24 units that don't exist in Tally
+    'm':       'Nos',
+    'km':      'Nos',
+    'cm':      'Nos',
+    'mm':      'Nos',
+    'ft':      'Nos',
+    'in':      'Nos',
+    'kg':      'Nos',
+    'g':       'Nos',
+    'mg':      'Nos',
+    'lb':      'Nos',
+    'l':       'Nos',
+    'ml':      'Nos',
+    'hr':      'Nos',
+    'hrs':     'Nos',
+    'hour':    'Nos',
+    'hours':   'Nos',
+    'day':     'Nos',
+    'days':    'Nos',
+    'month':   'Nos',
+    'months':  'Nos',
+    'year':    'Nos',
+    'years':   'Nos',
+  };
+  const normalized = map[u.toLowerCase()];
+  if (normalized) {
+    logger.info('Unit normalized', { raw: u, normalized });
+    return normalized;
+  }
+  // Safety net: if unit is a single character or looks non-standard, default to Nos
+  if (u.length <= 2 || !/^[A-Za-z]+$/.test(u)) {
+    logger.warn('Unknown unit defaulting to Nos', { raw: u });
+    return 'Nos';
+  }
+  return u;
+}
+
+function _renderSalesLedgerEntry(voucher) {
+  const totalAmount = voucher.productRows && voucher.productRows.length > 0
+    ? voucher.productRows.reduce((sum, row) => {
+        const price = parseFloat(row.PRICE || row.price || 0);
+        const qty   = parseFloat(row.QUANTITY || row.quantity || 1);
+        return sum + (price * qty);
+      }, 0)
+    : parseFloat(voucher.amount || 0);
+
+  // Only the party ledger goes in ALLLEDGERENTRIES.LIST for Sales Order
+  // The Sales ledger credit goes inside each inventory entry as ACCOUNTINGALLOCATIONS.LIST
+  return `
+                <LEDGERENTRIES.LIST>
+                  <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
+                  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+                  <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+                  <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
+                  <AMOUNT>-${totalAmount.toFixed(2)}</AMOUNT>
+                </LEDGERENTRIES.LIST>`;
+}
+
+function _renderInventory(voucher, unitMap = {}) {
   if (!voucher.productRows || voucher.productRows.length === 0) return '';
+
+  // Format due date as Tally display string e.g. "5-May-26"
+  const formatOrderDueDate = (yyyymmdd) => {
+    if (!yyyymmdd || yyyymmdd.length !== 8) return '';
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const y = yyyymmdd.slice(0,4);
+    const m = parseInt(yyyymmdd.slice(4,6)) - 1;
+    const d = parseInt(yyyymmdd.slice(6,8));
+    return `${d}-${months[m]}-${y.slice(2)}`; // e.g. "5-May-26"
+  };
+
+  const orderDueDateRaw = voucher.dueDate
+    ? voucher.dueDate.replace(/-/g, '')
+    : (voucher.date || '').replace(/-/g, '');
+  const orderDueDateDisplay = formatOrderDueDate(orderDueDateRaw);
+  const voucherNum = voucher.voucherNumber || '';
+
   return voucher.productRows.map(row => {
-    const name = row.PRODUCT_NAME || row.productName || '';
-    const price = parseFloat(row.PRICE || row.price || 0);
-    const qty = parseFloat(row.QUANTITY || row.quantity || 1);
+    const name   = row.PRODUCT_NAME || row.productName || '';
+    const price  = parseFloat(row.PRICE || row.price || 0);
+    const qty    = parseFloat(row.QUANTITY || row.quantity || 1);
     const amount = (price * qty).toFixed(2);
+    const unit   = _normalizeTallyUnit(
+      unitMap[name.toLowerCase()] || row.MEASURE_NAME || row.measureName || 'Nos'
+    );
+
     return `
-                <ALLINVENTORYENTRIES.LIST>
-                  <STOCKITEMNAME>${escapeXml(name)}</STOCKITEMNAME>
-                  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                  <RATE>${price}/Nos</RATE>
-                  <AMOUNT>${amount}</AMOUNT>
-                  <ACTUALQTY>${qty} Nos</ACTUALQTY>
-                  <BILLEDQTY>${qty} Nos</BILLEDQTY>
-                  <ACCOUNTINGALLOCATIONS.LIST>
-                    <LEDGERNAME>Sales</LEDGERNAME>
-                    <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                    <AMOUNT>${amount}</AMOUNT>
-                  </ACCOUNTINGALLOCATIONS.LIST>
-                </ALLINVENTORYENTRIES.LIST>`;
+      <ALLINVENTORYENTRIES.LIST>
+        <STOCKITEMNAME>${escapeXml(name)}</STOCKITEMNAME>
+        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+        <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>
+        <ISAUTONEGATE>No</ISAUTONEGATE>
+        <ISTRACKCOMPONENT>No</ISTRACKCOMPONENT>
+        <ISTRACKPRODUCTION>No</ISTRACKPRODUCTION>
+        <ISPRIMARYITEM>No</ISPRIMARYITEM>
+        <ISSCRAP>No</ISSCRAP>
+        <RATE>${price.toFixed(2)}/${unit}</RATE>
+        <AMOUNT>${amount}</AMOUNT>
+        <ACTUALQTY> ${qty} ${unit}</ACTUALQTY>
+        <BILLEDQTY> ${qty} ${unit}</BILLEDQTY>
+        <BATCHALLOCATIONS.LIST>
+          <GODOWNNAME>Main Location</GODOWNNAME>
+          <BATCHNAME>Primary Batch</BATCHNAME>
+          <INDENTNO>&#4; Not Applicable</INDENTNO>
+          <ORDERNO>${escapeXml(voucherNum)}</ORDERNO>
+          <TRACKINGNUMBER>&#4; Not Applicable</TRACKINGNUMBER>
+          <DYNAMICCSTISCLEARED>No</DYNAMICCSTISCLEARED>
+          <AMOUNT>${amount}</AMOUNT>
+          <ACTUALQTY> ${qty} ${unit}</ACTUALQTY>
+          <BILLEDQTY> ${qty} ${unit}</BILLEDQTY>
+          <ORDERDUEDATE>${orderDueDateDisplay}</ORDERDUEDATE>
+        </BATCHALLOCATIONS.LIST>
+        <ACCOUNTINGALLOCATIONS.LIST>
+          <LEDGERNAME>Sales</LEDGERNAME>
+          <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+          <LEDGERFROMITEM>No</LEDGERFROMITEM>
+          <REMOVEZEROENTRIES>No</REMOVEZEROENTRIES>
+          <ISPARTYLEDGER>No</ISPARTYLEDGER>
+          <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>
+          <AMOUNT>${amount}</AMOUNT>
+        </ACCOUNTINGALLOCATIONS.LIST>
+      </ALLINVENTORYENTRIES.LIST>`;
   }).join('');
 }
 
@@ -210,13 +330,25 @@ async function createVoucher(voucher) {
     items: hasInventory ? voucher.productRows.map(r => r.PRODUCT_NAME || r.productName || '').join(', ') : ''
   });
 
+  // ── Fetch actual units from Tally for each stock item ──────────────────────
+  let unitMap = {};
+  if (hasInventory) {
+    const itemNames = voucher.productRows.map(r => r.PRODUCT_NAME || r.productName || '');
+    unitMap = await getStockItemUnits(itemNames);
+    logger.info('Resolved stock item units', {
+      voucherNumber: voucher.voucherNumber,
+      units: itemNames.map(n => `${n} → ${unitMap[n.toLowerCase()] || 'Nos (default)'}`)
+    });
+  }
+
   // Render inventory entries for logging (no XML escaping)
   const invEntries = hasInventory 
     ? voucher.productRows.map((row, i) => {
-        const name = row.PRODUCT_NAME || row.productName || '';
+        const name  = row.PRODUCT_NAME || row.productName || '';
         const price = parseFloat(row.PRICE || row.price || 0);
-        const qty = parseFloat(row.QUANTITY || row.quantity || 1);
-        return `[${i+1}] ${name} × ${qty} @ ${price}`;
+        const qty   = parseFloat(row.QUANTITY || row.quantity || 1);
+        const unit  = _normalizeTallyUnit(unitMap[name.toLowerCase()] || row.MEASURE_NAME || row.measureName || 'Nos');
+        return `[${i+1}] ${name} × ${qty} ${unit} @ ${price}`;
       }).join(' | ')
     : '(none)';
   logger.info('Inventory entries being synced', { voucherNumber: voucher.voucherNumber, entries: invEntries });
@@ -236,36 +368,38 @@ async function createVoucher(voucher) {
           </REQUESTDESC>
           <REQUESTDATA>
             <TALLYMESSAGE xmlns:UDF="TallyUDF">
-              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="${hasInventory ? 'Invoice Voucher View' : 'Accounting Voucher View'}">
+              <VOUCHER VCHTYPE="${voucher.voucherType}" ACTION="Create" OBJVIEW="Invoice Voucher View">
                 <DATE>${voucher.date.replace(/-/g, '')}</DATE>
+                <VCHSTATUSDATE>${voucher.date.replace(/-/g, '')}</VCHSTATUSDATE>
+                <EFFECTIVEDATE>${voucher.date.replace(/-/g, '')}</EFFECTIVEDATE>
+                <STATENAME>Maharashtra</STATENAME>
+                <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>
+                <PLACEOFSUPPLY>Maharashtra</PLACEOFSUPPLY>
+                <GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>
+                <VATDEALERTYPE>Regular</VATDEALERTYPE>
+                <CMPGSTREGISTRATIONTYPE>Regular</CMPGSTREGISTRATIONTYPE>
                 <VOUCHERTYPENAME>${voucher.voucherType}</VOUCHERTYPENAME>
                 <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
                 <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
-                <PERSISTEDVIEW>${hasInventory ? 'Invoice Voucher View' : 'Accounting Voucher View'}</PERSISTEDVIEW>
-                <ISINVOICE>${hasInventory ? 'Yes' : 'No'}</ISINVOICE>
+                <PERSISTEDVIEW>Invoice Voucher View</PERSISTEDVIEW>
+                <ISINVOICE>No</ISINVOICE>
+                <CLASSNAME>DefaultVoucherClass</CLASSNAME>
+                <NUMBERINGSTYLE>Auto Retain</NUMBERINGSTYLE>
                 <PARTYLEDGERNAME>${escapeXml(voucher.partyName)}</PARTYLEDGERNAME>
                 <BASICBASEPARTYNAME>${escapeXml(voucher.partyName)}</BASICBASEPARTYNAME>
                 <BASICBUYERNAME>${escapeXml(voucher.partyName)}</BASICBUYERNAME>
                 <NARRATION>${escapeXml(voucher.narration)}</NARRATION>
                 ${voucher.dueDate ? `<DUEDATE>${voucher.dueDate.replace(/-/g, '')}</DUEDATE>` : ''}
-                ${ _renderInventory(voucher) }
-                <LEDGERENTRIES.LIST>
-                  <LEDGERNAME>${escapeXml(voucher.partyName)}</LEDGERNAME>
-                  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-                  <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
-                  <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
-                  <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
-                  <BILLALLOCATIONS.LIST>
-                    <NAME>BX-${voucher.voucherNumber}</NAME>
-                    <BILLTYPE>New Ref</BILLTYPE>
-                    <AMOUNT>-${parseFloat(voucher.amount)}</AMOUNT>
-                  </BILLALLOCATIONS.LIST>
-                </LEDGERENTRIES.LIST>
-                ${!hasInventory ? `<LEDGERENTRIES.LIST>
-                  <LEDGERNAME>Sales</LEDGERNAME>
+                ${ _renderSalesLedgerEntry(voucher) }
+                ${ _renderInventory(voucher, unitMap) }
+                ${!hasInventory ? `<ALLINVENTORYENTRIES.LIST>
+                  <STOCKITEMNAME>${escapeXml(voucher.productRows?.[0]?.PRODUCT_NAME || voucher.productRows?.[0]?.productName || 'Service')}</STOCKITEMNAME>
                   <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                  <RATE>${parseFloat(voucher.amount)}/Nos</RATE>
                   <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
-                </LEDGERENTRIES.LIST>` : ''}
+                  <ACTUALQTY>1 Nos</ACTUALQTY>
+                  <BILLEDQTY>1 Nos</BILLEDQTY>
+                </ALLINVENTORYENTRIES.LIST>` : ''}
               </VOUCHER>
             </TALLYMESSAGE>
           </REQUESTDATA>
@@ -323,21 +457,6 @@ async function createVoucher(voucher) {
       fullResponse: (response || '').substring(0, 1000)
     });
     
-    // Retry: Sales Order → Sales (working fallback)
-    if (voucher.voucherType === 'Sales Order') {
-      logger.warn('Sales Order rejected by Tally — retrying as Sales', { voucherNumber: voucher.voucherNumber, error: tallyErr });
-      return createVoucher({ ...voucher, voucherType: 'Sales' });
-    }
-    // Retry: Sales Invoice → Sales
-    if (voucher.voucherType === 'Sales Invoice') {
-      logger.warn('Sales Invoice rejected — retrying as Sales', { voucherNumber: voucher.voucherNumber });
-      return createVoucher({ ...voucher, voucherType: 'Sales' });
-    }
-    // Retry: inventory rejected — strip inventory and create as pure accounting invoice
-    if (hasInventory) {
-      logger.warn('Inventory entries rejected — retrying without inventory', { voucherNumber: voucher.voucherNumber });
-      return createVoucher({ ...voucher, productRows: [] });
-    }
     logger.error('Tally voucher create failed', { voucherNumber: voucher.voucherNumber, created, exceptions, errors });
     throw new Error(`Tally voucher create failed (created=${created}, exceptions=${exceptions}, errors=${errors})`);
   }
@@ -524,6 +643,108 @@ async function getLedgerByName(ledgerName) {
   }
 }
 
+async function getStockItemUnits(itemNames) {
+  // Fetch all stock items via TDL object collection — most reliable method
+  const xml = `
+    <ENVELOPE>
+      <HEADER>
+        <TALLYREQUEST>Export Data</TALLYREQUEST>
+      </HEADER>
+      <BODY>
+        <EXPORTDATA>
+          <REQUESTDESC>
+            <REPORTNAME>List of Accounts</REPORTNAME>
+            <STATICVARIABLES>
+              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+            </STATICVARIABLES>
+          </REQUESTDESC>
+        </EXPORTDATA>
+      </BODY>
+    </ENVELOPE>`.trim();
+
+  // Also fire a direct STOCKITEM collection export in parallel
+  const xmlObj = `
+    <ENVELOPE>
+      <HEADER>
+        <TALLYREQUEST>Export Data</TALLYREQUEST>
+      </HEADER>
+      <BODY>
+        <EXPORTDATA>
+          <REQUESTDESC>
+            <STATICVARIABLES>
+              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+            </STATICVARIABLES>
+            <FETCHLIST>
+              <FETCH>NAME</FETCH>
+              <FETCH>BASEUNITS</FETCH>
+            </FETCHLIST>
+            <OBJECTPATH>STOCKITEM</OBJECTPATH>
+          </REQUESTDESC>
+        </EXPORTDATA>
+      </BODY>
+    </ENVELOPE>`.trim();
+
+  const unitMap = {};
+
+  // Skip OBJECTPATH — not supported by this Tally configuration
+  // Go straight to per-item Day Book lookup using List of Accounts
+  if (itemNames?.length > 0) {
+    logger.info('Falling back to per-item GET OBJECT fetch for units');
+    for (const itemName of itemNames) {
+      if (!itemName) continue;
+      try {
+        const xmlGet = `
+          <ENVELOPE>
+            <HEADER>
+              <TALLYREQUEST>Export Data</TALLYREQUEST>
+            </HEADER>
+            <BODY>
+              <EXPORTDATA>
+                <REQUESTDESC>
+                  <STATICVARIABLES>
+                    <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+                    <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+                    <STOCKITEMNAME>${escapeXml(itemName)}</STOCKITEMNAME>
+                  </STATICVARIABLES>
+                  <OBJECTPATH>STOCKITEM</OBJECTPATH>
+                </REQUESTDESC>
+              </EXPORTDATA>
+            </BODY>
+          </ENVELOPE>`.trim();
+
+        const r = await sendToTally(xmlGet);
+        const unitTag = /<BASEUNITS[^>]*>(.*?)<\/BASEUNITS>/i.exec(r);
+        if (unitTag?.[1]?.trim()) {
+          unitMap[itemName.toLowerCase()] = unitTag[1].trim();
+          logger.info('Per-item unit resolved via GET OBJECT', { itemName, unit: unitTag[1].trim() });
+        } else {
+          // Last resort: grep the raw XML for the item name and grab its unit
+          const escapedName = itemName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const escapedForXml = itemName.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          const sniffRegex  = new RegExp(`(?:${escapedName}|${escapedForXml.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})[\\s\\S]{0,300}?<BASEUNITS[^>]*>(.*?)<\\/BASEUNITS>`, 'i');
+          const sniffMatch  = sniffRegex.exec(r);
+          if (sniffMatch?.[1]?.trim()) {
+            unitMap[itemName.toLowerCase()] = sniffMatch[1].trim();
+            logger.info('Per-item unit resolved via sniff', { itemName, unit: sniffMatch[1].trim() });
+          } else {
+            logger.warn('Could not resolve unit for item — will use Bitrix24 MEASURE_NAME as fallback', { itemName });
+          }
+        }
+      } catch (e) {
+        logger.warn('Per-item unit GET OBJECT failed', { itemName, message: e.message });
+      }
+    }
+  }
+
+  logger.info('Fetched stock item units from Tally', {
+    count: Object.keys(unitMap).length,
+    resolved: Object.entries(unitMap).map(([k, v]) => `${k} → ${v}`),
+  });
+  return unitMap;
+}
+
 async function alterVoucher(voucher) {
   logger.info('Updating voucher via delete+recreate', { voucherNumber: voucher.voucherNumber });
 
@@ -620,8 +841,7 @@ async function alterVoucher(voucher) {
             <DATE>${tallyRecordedDate}</DATE>
             <MASTERID>${masterId}</MASTERID>
             <VOUCHERTYPENAME>${voucherTypeName}</VOUCHERTYPENAME>
-            <VOUCHERNUMBER>BX-${voucher.voucherNumber}</VOUCHERNUMBER>
-            <REFERENCE>BX-${voucher.voucherNumber}</REFERENCE>
+            <NUMBERINGSTYLE>Auto Retain</NUMBERINGSTYLE>
           </VOUCHER>
         </TALLYMESSAGE>
       </REQUESTDATA>
@@ -837,11 +1057,9 @@ async function deleteVoucher(voucherNumber) {
             <TALLYMESSAGE xmlns:UDF="TallyUDF">
               <VOUCHER VCHTYPE="Sales Order" ACTION="Delete" MASTERID="${masterId}">
                 <DATE>${voucherDate || new Date().toISOString().slice(0,10).replace(/-/g,'')}</DATE>
-                <VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME>
-                <VOUCHERNUMBER>${escapeXml(voucherNumber)}</VOUCHERNUMBER>
-                <REFERENCE>${escapeXml(voucherNumber)}</REFERENCE>
                 <MASTERID>${masterId}</MASTERID>
-                <PERSISTEDVIEW>Sales Order Voucher View</PERSISTEDVIEW>
+                <VOUCHERTYPENAME>Sales Order</VOUCHERTYPENAME>
+                <NUMBERINGSTYLE>Auto Retain</NUMBERINGSTYLE>
               </VOUCHER>
             </TALLYMESSAGE>
           </REQUESTDATA>
@@ -1075,4 +1293,5 @@ module.exports = {
   getVoucherTypes,
   findMasterId,
   verifyStockItemsExist,
+  getStockItemUnits,
 };
