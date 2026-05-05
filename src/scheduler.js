@@ -229,6 +229,19 @@ function startScheduler() {
       runDeliveryNoteSync(`${syncMinutes}min — delivery note`);
     }, { timezone: 'Asia/Kolkata' }));
     logger.info('[Scheduler] Delivery note (quotation) sync registered');
+
+    // Tally Sales Order → Bitrix24 Estimate sync
+    let isTallyQuotationSyncing = false;
+    _activeTasks.push(cron.schedule(syncCron, () => {
+      if (isTallyQuotationSyncing) return;
+      isTallyQuotationSyncing = true;
+      const { processTallyQuotations } = require('./processors/tallyQuotationProcessor');
+      processTallyQuotations()
+        .then(r => logger.info(`${syncMinutes}min — Tally quotation sync completed`, r))
+        .catch(e => logger.error('Tally quotation sync failed', { message: e.message }))
+        .finally(() => { isTallyQuotationSyncing = false; });
+    }, { timezone: 'Asia/Kolkata' }));
+    logger.info('[Scheduler] Tally Sales Order → Bitrix24 Estimate sync registered');
   }
 
   // Ledger sync — Custom+ (contact-sync or company-sync slug enabled)

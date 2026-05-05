@@ -487,6 +487,21 @@ app.post('/sync/invoices', authMiddleware, async (req, res) => {
   }
 });
 
+app.post('/sync/tally-quotations', authMiddleware, async (req, res) => {
+  const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
+  if (featureGate && !featureGate.isEnabled('quotation-sync')) {
+    return res.status(403).json({ success: false, message: 'quotation-sync not enabled on your plan' });
+  }
+  try {
+    logger.info('Manual Tally Sales Order → Bitrix24 Estimate sync triggered');
+    const { processTallyQuotations } = require('./processors/tallyQuotationProcessor');
+    const result = await processTallyQuotations();
+    res.status(200).json({ success: true, ...result });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
 app.post('/sync/delivery-notes', authMiddleware, async (req, res) => {
   const featureGate = (() => { try { return require('./services/featureGate'); } catch { return null; } })();
   if (featureGate && !featureGate.isEnabled('quotation-sync')) {
