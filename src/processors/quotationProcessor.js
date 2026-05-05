@@ -82,6 +82,13 @@ async function _processQuotation({ entityId, isUpdate = false, entityTypeId = '7
       return { success: true, skipped: true, reason: 'No contact or company linked to quotation in Bitrix24' };
     }
 
+    // Skip estimates created by Tally sync — prevents circular loop
+    const estimateTitle = quotation.title || quotation.TITLE || '';
+    if (quotation.UF_TALLY_SYNCED === 'Y' || quotation.ufTallySynced === 'Y') {
+      logger.info('Skipping quotation webhook — estimate was created by Tally sync', { entityId, title: estimateTitle });
+      return { success: true, skipped: true, reason: 'Tally-originated estimate skipped to prevent loop' };
+    }
+
     try {
       const { getLedgerByName, createLedger } = require('../services/tallyService');
       const existingLedger = await getLedgerByName(partyName);

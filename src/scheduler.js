@@ -230,18 +230,24 @@ function startScheduler() {
     }, { timezone: 'Asia/Kolkata' }));
     logger.info('[Scheduler] Delivery note (quotation) sync registered');
 
-    // Tally Sales Order → Bitrix24 Estimate sync
+    // Tally Sales Order → Bitrix24 Estimate sync (offset by 4 min to avoid collision with delivery notes)
     let isTallyQuotationSyncing = false;
-    _activeTasks.push(cron.schedule(syncCron, () => {
+    const tallyQuotationCron = syncMinutes >= 60
+      ? '22 * * * *'
+      : syncMinutes >= 30
+      ? '12,42 * * * *'
+      : `4-59/${syncMinutes} * * * *`;
+
+    _activeTasks.push(cron.schedule(tallyQuotationCron, () => {
       if (isTallyQuotationSyncing) return;
       isTallyQuotationSyncing = true;
-      const { processTallyQuotations } = require('./processors/tallyQuotationProcessor');
-      processTallyQuotations()
-        .then(r => logger.info(`${syncMinutes}min — Tally quotation sync completed`, r))
-        .catch(e => logger.error('Tally quotation sync failed', { message: e.message }))
+      const { processTallyQuotationsFromTally } = require('./processors/tallyQuotationProcessor');
+      processTallyQuotationsFromTally()
+        .then(r => logger.info(`${syncMinutes}min — Tally→Bitrix quotation sync completed`, r))
+        .catch(e => logger.error('Tally→Bitrix quotation sync failed', { message: e.message }))
         .finally(() => { isTallyQuotationSyncing = false; });
     }, { timezone: 'Asia/Kolkata' }));
-    logger.info('[Scheduler] Tally Sales Order → Bitrix24 Estimate sync registered');
+    logger.info(`[Scheduler] Tally Sales Order → Bitrix24 Estimate sync registered (offset cron: ${tallyQuotationCron})`);
   }
 
   // Ledger sync — Custom+ (contact-sync or company-sync slug enabled)

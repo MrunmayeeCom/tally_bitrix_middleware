@@ -151,6 +151,20 @@ function parseSalesOrdersXml(xml, chunkFrom, chunkTo) {
       const voucherNumber = get('VOUCHERNUMBER') || '';
       if (voucherNumber.startsWith('BX-')) continue;
 
+      // Also skip if this voucher was synced FROM Bitrix24 — check voucher cache
+      try {
+        const voucherCachePath = path.join(__dirname, '../../logs/voucher-masterid-cache.json');
+        if (fs.existsSync(voucherCachePath)) {
+          const voucherCache = JSON.parse(fs.readFileSync(voucherCachePath, 'utf8'));
+          const cacheValues = Object.values(voucherCache);
+          const isBitrixOrigin = cacheValues.some(entry => {
+            const cachedVn = entry.voucherNumber || '';
+            return cachedVn === `BX-${voucherNumber}` || cachedVn === `BX-${parseInt(voucherNumber)}`;
+          });
+          if (isBitrixOrigin) continue;
+        }
+      } catch (_) {}
+
       // Date range filter
       const dateRaw = get('DATE') || '';
       if (dateRaw.length === 8 && chunkStart && chunkEnd) {
@@ -276,6 +290,65 @@ async function quotationExistsInBitrix(voucherNumber, partyName) {
     logger.warn('[TallyQuotation] Existence check failed — blocking push', { voucherNumber, message: e.message });
     return true; // block on error
   }
+}
+
+// ── Push a Tally Sales Order into Bitrix24 as an Estimate ────────────────────
+async function pushOrderToBitrix(order, partyIds, dealId = null, productRows = []) {
+  const expectedTitle = `${order.partyName} - ${order.voucherNumber}`;
+
+  // Final check before creating — catches race with quotationProcessor
+  try {
+    const finalCheck = await callBitrix('crm.item.list', {
+      entityTypeId: 7,
+      filter: { '=title': expectedTitle },
+      select: ['id', 'title'],
+    });
+    if ((finalCheck.result?.items?.length ?? 0) > 0) {
+      const existingId = finalCheck.result.items[0].id;
+      logger.info('[TallyQuotation] Estimate already exists (final check) — skipping', {
+        voucherNumber: order.voucherNumber, estimateId: existingId,
+      });
+      return existingId;
+    }
+  } catch (_) {}
+
+  const fields = {
+    title:       expectedTitle,
+    opportunity: order.amount,
+    currencyId:  'INR',
+    closeDate:   order.dueDate || order.date,
+    UF_TALLY_VOUCHER_NO: order.voucherNumber,
+    UF_TALLY_SYNCED:     'Y',
+    ...partyIds,
+    ...(dealId ? { parentId2: Number(dealId) } : {}),
+  };
+
+  const data = await callBitrix('crm.item.add', {
+    entityTypeId: 7,
+    fields,
+  });
+
+  const estimateId = data.result?.item?.id
+    || data.result?.id
+    || (typeof data.result === 'number' ? data.result : null);
+
+  // Attach product rows
+  if (estimateId && productRows.length > 0) {
+    try {
+      await callBitrix('crm.productrow.set', {
+        ownerType: 'Q',
+        ownerId:   Number(estimateId),
+        productRows,
+      });
+      logger.info('[TallyQuotation] Product rows attached to estimate', {
+        estimateId, count: productRows.length,
+      });
+    } catch (rowErr) {
+      logger.warn('[TallyQuotation] Product row attach failed — non-fatal', { message: rowErr.message });
+    }
+  }
+
+  return estimateId;
 }
 
 // ── Main Processor ────────────────────────────────────────────────────────────
@@ -449,4 +522,143 @@ async function processTallyQuotations() {
   }
 }
 
-module.exports = { processTallyQuotations, getSalesOrders };
+// ── Main processor: Tally Sales Orders → Bitrix24 Estimates ─────────────────
+async function processTallyQuotationsFromTally() {
+  try {
+    logger.info('[TallyQuotation] Starting Tally Sales Order → Bitrix24 Estimate sync (from Tally)');
+
+    const featureGate = (() => { try { return require('../services/featureGate'); } catch { return null; } })();
+    if (featureGate && !featureGate.isEnabled('quotation-sync')) {
+      logger.info('[TallyQuotation] quotation-sync not enabled on plan — skipping');
+      return { success: true, created: 0, skipped: 0 };
+    }
+
+    const orders = await getSalesOrders();
+    if (!orders || orders.length === 0) {
+      logger.info('[TallyQuotation] No Sales Orders found in Tally');
+      return { success: true, created: 0, skipped: 0 };
+    }
+
+    const cache    = loadCache();
+    const newCache = { ...cache };
+    let created = 0, skipped = 0, failed = 0;
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    for (const order of orders) {
+      try {
+        const normalizedAmount = Math.round(order.amount);
+        const cacheKey = `tally_${order.partyName}_${order.voucherNumber}_${normalizedAmount}`;
+
+        if (cache[cacheKey]) { skipped++; continue; }
+
+        // Guard: skip BX- prefixed vouchers — these were created from Bitrix24
+        if (order.voucherNumber.startsWith('BX-')) { skipped++; continue; }
+
+        const alreadyExists = await quotationExistsInBitrix(order.voucherNumber, order.partyName);
+        if (alreadyExists) {
+          newCache[cacheKey] = { bitrixId: null, syncedAt: new Date().toISOString(), source: 'dedup-check' };
+          saveCache(newCache);
+          skipped++;
+          continue;
+        }
+
+        await sleep(300);
+
+        const partyIds = await findBitrixParty(order.partyName);
+        if (!partyIds.companyId && !partyIds.contactId) {
+          logger.warn('[TallyQuotation] Party not found in Bitrix24 — skipping', {
+            voucherNumber: order.voucherNumber, partyName: order.partyName,
+          });
+          failed++;
+          continue;
+        }
+
+        // Find matching deal
+        let dealId = null;
+        try {
+          const { getTallyPipelineCategoryId } = require('../services/pipelineService');
+          const categoryId = await getTallyPipelineCategoryId();
+          if (categoryId) {
+            const dealSearch = await callBitrix('crm.deal.list', {
+              filter: { '%TITLE': order.partyName, CATEGORY_ID: categoryId, '=OPPORTUNITY': order.amount },
+              select: ['ID', 'TITLE'],
+            });
+            if ((dealSearch.result || []).length > 0) dealId = dealSearch.result[0].ID;
+          }
+        } catch (_) {}
+
+        // Build product rows from line items
+        let productRows = [];
+        if (order.items && order.items.length > 0) {
+          try {
+            const { fetchAllBitrixProducts } = require('./inventoryProcessor');
+            const prods = await fetchAllBitrixProducts();
+            const pmap  = {};
+            prods.forEach(p => { pmap[(p.NAME || '').toLowerCase()] = p; });
+            for (const item of order.items) {
+              const mp = pmap[item.stockItemName.toLowerCase()];
+              productRows.push({
+                PRODUCT_NAME: item.stockItemName,
+                PRICE:        item.rate > 0 ? item.rate : (mp ? parseFloat(mp.PRICE) || 0 : 0),
+                QUANTITY:     item.qty,
+                DISCOUNT:     0,
+                CURRENCY_ID:  'INR',
+                ...(mp ? { PRODUCT_ID: mp.ID } : {}),
+              });
+            }
+          } catch (rowErr) {
+            logger.warn('[TallyQuotation] Product row build failed', { message: rowErr.message });
+          }
+        }
+
+        const estimateId = await pushOrderToBitrix(order, partyIds, dealId, productRows);
+
+        if (!estimateId) {
+          logger.error('[TallyQuotation] Estimate creation returned no ID', { voucherNumber: order.voucherNumber });
+          failed++;
+          continue;
+        }
+
+        newCache[cacheKey] = {
+          bitrixId:      estimateId,
+          syncedAt:      new Date().toISOString(),
+          partyName:     order.partyName,
+          voucherNumber: order.voucherNumber,
+        };
+        saveCache(newCache);
+
+        logger.info('[TallyQuotation] Sales Order pushed to Bitrix24 as Estimate', {
+          voucherNumber: order.voucherNumber,
+          partyName:     order.partyName,
+          amount:        order.amount,
+          estimateId,
+          lineItems:     productRows.length,
+        });
+
+        created++;
+        await sleep(500);
+
+      } catch (e) {
+        logger.error('[TallyQuotation] Failed to push Sales Order', {
+          voucherNumber: order.voucherNumber,
+          message: e.message,
+        });
+        failed++;
+      }
+    }
+
+    saveCache(newCache);
+    logger.info('[TallyQuotation] Tally→Bitrix sync complete', { created, skipped, failed });
+    return { success: true, created, skipped, failed };
+
+  } catch (error) {
+    if (error.message === 'TALLY_OFFLINE') {
+      logger.warn('[TallyQuotation] Skipped — Tally offline');
+      return { success: true, created: 0, skipped: 0 };
+    }
+    logger.error('[TallyQuotation] Tally→Bitrix sync failed', { message: error.message });
+    throw error;
+  }
+}
+
+module.exports = { processTallyQuotations, processTallyQuotationsFromTally, getSalesOrders };
