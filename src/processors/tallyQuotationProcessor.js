@@ -266,15 +266,8 @@ async function findBitrixParty(partyName) {
 
 async function quotationExistsInBitrix(voucherNumber, partyName) {
   try {
-    // Check by UF_TALLY_VOUCHER_NO
-    try {
-      const fieldSearch = await callBitrix('crm.item.list', {
-        entityTypeId: 7,
-        filter: { 'UF_TALLY_VOUCHER_NO': voucherNumber },
-        select: ['id'],
-      });
-      if ((fieldSearch.result?.items?.length ?? 0) > 0) return fieldSearch.result.items[0].id;
-    } catch (_) {}
+    // Skip UF_TALLY_VOUCHER_NO check — field doesn't exist on Quote entity (entityTypeId 7)
+    // and causes 400 errors. Use title match only.
 
     // Check by title
     if (partyName) {
@@ -312,6 +305,15 @@ async function pushOrderToBitrix(order, partyIds, dealId = null, productRows = [
     }
   } catch (_) {}
 
+  const formattedRows = productRows.map(r => ({
+    productId:  r.PRODUCT_ID ? Number(r.PRODUCT_ID) : undefined,
+    ...(!r.PRODUCT_ID ? { productName: r.PRODUCT_NAME || r.productName || '' } : {}),
+    price:      Number(r.PRICE || r.price || 0),
+    quantity:   Number(r.QUANTITY || r.quantity || 1),
+    discount:   0,
+    currencyId: 'INR',
+  }));
+
   const fields = {
     title:       expectedTitle,
     opportunity: order.amount,
@@ -323,6 +325,8 @@ async function pushOrderToBitrix(order, partyIds, dealId = null, productRows = [
     ...(dealId ? { parentId2: Number(dealId) } : {}),
   };
 
+  logger.info('[Product Rows Input - inline with crm.item.add]', formattedRows);
+
   const data = await callBitrix('crm.item.add', {
     entityTypeId: 7,
     fields,
@@ -332,19 +336,32 @@ async function pushOrderToBitrix(order, partyIds, dealId = null, productRows = [
     || data.result?.id
     || (typeof data.result === 'number' ? data.result : null);
 
-  // Attach product rows
-  if (estimateId && productRows.length > 0) {
+  logger.info('[TallyQuotation] Estimate created', {
+    estimateId, rowCount: formattedRows.length,
+  });
+
+  // Attach product rows separately — Bitrix24 does not persist them inline with crm.item.add for quotes
+  if (estimateId && formattedRows.length > 0) {
     try {
-      await callBitrix('crm.productrow.set', {
-        ownerType: 'Q',
-        ownerId:   Number(estimateId),
-        productRows,
+      const rowsForApi = formattedRows.map(r => ({
+        PRODUCT_ID:   r.productId ? Number(r.productId) : 0,
+        PRODUCT_NAME: r.productName || '',
+        PRICE:        Number(r.price || 0),
+        QUANTITY:     Number(r.quantity || 1),
+        DISCOUNT:     0,
+        CURRENCY_ID:  r.currencyId || 'INR',
+      }));
+      await callBitrix('crm.quote.productrows.set', {
+        ID:   Number(estimateId),
+        rows: rowsForApi,
       });
       logger.info('[TallyQuotation] Product rows attached to estimate', {
-        estimateId, count: productRows.length,
+        estimateId, rows: rowsForApi.length,
       });
     } catch (rowErr) {
-      logger.warn('[TallyQuotation] Product row attach failed — non-fatal', { message: rowErr.message });
+      logger.warn('[TallyQuotation] Product row attach failed — non-fatal', {
+        estimateId, message: rowErr.message,
+      });
     }
   }
 
@@ -374,10 +391,40 @@ async function processTallyQuotations() {
     let created = 0, skipped = 0, failed = 0;
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+    // Build product map ONCE before processing all orders
+    const normalizeProductName = (str) =>
+      (str || '')
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, ' ');   // keep hyphens/dots intact — exact name match
+
+    const bitrixProductMap = {};
+    try {
+      const { fetchAllBitrixProducts } = require('./inventoryProcessor');
+      const prods = await fetchAllBitrixProducts();
+      prods.forEach(p => {
+        const key = normalizeProductName(p.NAME);
+        // Prefer product with a valid ID; if tie, prefer one with a price
+        if (!bitrixProductMap[key]) {
+          bitrixProductMap[key] = p;
+        } else {
+          const existing = bitrixProductMap[key];
+          if (!existing.ID && p.ID) {
+            bitrixProductMap[key] = p;
+          } else if (existing.ID && p.ID && (!existing.PRICE || existing.PRICE == 0) && p.PRICE > 0) {
+            bitrixProductMap[key] = p;
+          }
+        }
+      });
+      logger.info('[TallyQuotation] Product map built', { totalProducts: prods.length, uniqueKeys: Object.keys(bitrixProductMap).length });
+    } catch (pmapErr) {
+      logger.warn('[TallyQuotation] Failed to build product map — product rows will use names only', { message: pmapErr.message });
+    }
+
     for (const order of orders) {
       try {
         const normalizedAmount = Math.round(order.amount);
-        const cacheKey = `${order.partyName}_${order.voucherNumber}_${normalizedAmount}`;
+        const cacheKey = `tally_${order.partyName}_${order.voucherNumber}_${normalizedAmount}`;
 
         if (cache[cacheKey]) { skipped++; continue; }
 
@@ -417,67 +464,50 @@ async function processTallyQuotations() {
         let productRows = [];
         if (order.items && order.items.length > 0) {
           try {
-            const { fetchAllBitrixProducts } = require('./inventoryProcessor');
-            const prods = await fetchAllBitrixProducts();
-            const pmap  = {};
-            prods.forEach(p => { pmap[(p.NAME || '').toLowerCase()] = p; });
             for (const item of order.items) {
-              const mp = pmap[item.stockItemName.toLowerCase()];
-              productRows.push({
-                PRODUCT_NAME: item.stockItemName,
-                PRICE:        item.rate > 0 ? item.rate : (mp ? parseFloat(mp.PRICE) || 0 : 0),
-                QUANTITY:     item.qty,
-                DISCOUNT:     0,
-                CURRENCY_ID:  'INR',
-                ...(mp ? { PRODUCT_ID: mp.ID } : {}),
-              });
+              const key = normalizeProductName(item.stockItemName);
+              const mp = bitrixProductMap[key];
+
+              if (mp && mp.ID) {
+                logger.info('[Product Matched]', {
+                  tallyName:  item.stockItemName,
+                  bitrixName: mp.NAME,
+                  productId:  mp.ID,
+                });
+                productRows.push({
+                  PRODUCT_ID:  Number(mp.ID),
+                  PRICE: item.rate > 0
+                    ? item.rate
+                    : (mp.PRICE && !isNaN(parseFloat(mp.PRICE)) ? parseFloat(mp.PRICE) : 0),
+                  QUANTITY:    item.qty,
+                  DISCOUNT:    0,
+                  CURRENCY_ID: 'INR',
+                });
+              } else {
+                logger.error('[Product Mapping Failed - NOT FOUND IN BITRIX]', {
+                  tallyName:     item.stockItemName,
+                  normalizedKey: key,
+                });
+                productRows.push({
+                  PRODUCT_NAME: item.stockItemName,
+                  PRICE:        item.rate,
+                  QUANTITY:     item.qty,
+                  DISCOUNT:     0,
+                  CURRENCY_ID:  'INR',
+                });
+              }
             }
           } catch (rowErr) {
             logger.warn('[TallyQuotation] Product row build failed', { message: rowErr.message });
           }
         }
 
-        // Create Bitrix24 Estimate (entityTypeId 7)
-        const estimateFields = {
-          title:       `${order.partyName} - ${order.voucherNumber}`,
-          opportunity: order.amount,
-          currencyId:  'INR',
-          closeDate:   order.dueDate || order.date,
-          UF_TALLY_VOUCHER_NO: order.voucherNumber,
-          UF_TALLY_SYNCED:     'Y',
-          ...partyIds,
-          ...(dealId ? { parentId2: Number(dealId) } : {}),
-        };
-
-        const estimateData = await callBitrix('crm.item.add', {
-          entityTypeId: 7,
-          fields: estimateFields,
-        });
-
-        const estimateId = estimateData.result?.item?.id
-          || estimateData.result?.id
-          || (typeof estimateData.result === 'number' ? estimateData.result : null);
+        const estimateId = await pushOrderToBitrix(order, partyIds, dealId, productRows);
 
         if (!estimateId) {
           logger.error('[TallyQuotation] Estimate creation returned no ID', { voucherNumber: order.voucherNumber });
           failed++;
           continue;
-        }
-
-        // Attach product rows
-        if (productRows.length > 0) {
-          try {
-            await callBitrix('crm.productrow.set', {
-              ownerType: 'Q',
-              ownerId:   Number(estimateId),
-              productRows,
-            });
-            logger.info('[TallyQuotation] Product rows attached to estimate', {
-              estimateId, count: productRows.length,
-            });
-          } catch (rowErr) {
-            logger.warn('[TallyQuotation] Product row attach failed — non-fatal', { message: rowErr.message });
-          }
         }
 
         newCache[cacheKey] = {
@@ -544,6 +574,35 @@ async function processTallyQuotationsFromTally() {
     let created = 0, skipped = 0, failed = 0;
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+    // Build product map ONCE before processing all orders
+    const normalizeProductName = (str) =>
+      (str || '')
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, ' ');   // keep hyphens/dots intact — exact name match
+
+    const bitrixProductMap = {};
+    try {
+      const { fetchAllBitrixProducts } = require('./inventoryProcessor');
+      const prods = await fetchAllBitrixProducts();
+      prods.forEach(p => {
+        const key = normalizeProductName(p.NAME);
+        if (!bitrixProductMap[key]) {
+          bitrixProductMap[key] = p;
+        } else {
+          const existing = bitrixProductMap[key];
+          if (!existing.ID && p.ID) {
+            bitrixProductMap[key] = p;
+          } else if (existing.ID && p.ID && (!existing.PRICE || existing.PRICE == 0) && p.PRICE > 0) {
+            bitrixProductMap[key] = p;
+          }
+        }
+      });
+      logger.info('[TallyQuotation] Product map built', { totalProducts: prods.length, uniqueKeys: Object.keys(bitrixProductMap).length });
+    } catch (pmapErr) {
+      logger.warn('[TallyQuotation] Failed to build product map — product rows will use names only', { message: pmapErr.message });
+    }
+
     for (const order of orders) {
       try {
         const normalizedAmount = Math.round(order.amount);
@@ -591,20 +650,37 @@ async function processTallyQuotationsFromTally() {
         let productRows = [];
         if (order.items && order.items.length > 0) {
           try {
-            const { fetchAllBitrixProducts } = require('./inventoryProcessor');
-            const prods = await fetchAllBitrixProducts();
-            const pmap  = {};
-            prods.forEach(p => { pmap[(p.NAME || '').toLowerCase()] = p; });
             for (const item of order.items) {
-              const mp = pmap[item.stockItemName.toLowerCase()];
-              productRows.push({
-                PRODUCT_NAME: item.stockItemName,
-                PRICE:        item.rate > 0 ? item.rate : (mp ? parseFloat(mp.PRICE) || 0 : 0),
-                QUANTITY:     item.qty,
-                DISCOUNT:     0,
-                CURRENCY_ID:  'INR',
-                ...(mp ? { PRODUCT_ID: mp.ID } : {}),
-              });
+              const key = normalizeProductName(item.stockItemName);
+              const mp = bitrixProductMap[key];
+              if (mp && mp.ID) {
+                logger.info('[Product Matched]', {
+                  tallyName: item.stockItemName,
+                  bitrixName: mp.NAME,
+                  productId: mp.ID,
+                });
+                productRows.push({
+                  PRODUCT_ID:  Number(mp.ID),
+                  PRICE: item.rate > 0
+                    ? item.rate
+                    : (mp.PRICE && !isNaN(parseFloat(mp.PRICE)) ? parseFloat(mp.PRICE) : 0),
+                  QUANTITY:    item.qty,
+                  DISCOUNT:    0,
+                  CURRENCY_ID: 'INR',
+                });
+              } else {
+                logger.error('[Product Mapping Failed]', {
+                  tallyName:     item.stockItemName,
+                  normalizedKey: key,
+                });
+                productRows.push({
+                  PRODUCT_NAME: item.stockItemName,
+                  PRICE:        item.rate,
+                  QUANTITY:     item.qty,
+                  DISCOUNT:     0,
+                  CURRENCY_ID:  'INR',
+                });
+              }
             }
           } catch (rowErr) {
             logger.warn('[TallyQuotation] Product row build failed', { message: rowErr.message });

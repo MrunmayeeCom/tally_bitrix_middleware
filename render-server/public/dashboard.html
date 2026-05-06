@@ -472,6 +472,12 @@ html,body{
           <span class="trig-label">Delivery Notes</span>
           <span class="trig-desc">Link DN → deal estimate</span>
         </div>
+        <div class="trig amber" id="trig-tallyquotations" onclick="trigger('tallyquotations')">
+          <div class="spin-ring"></div>
+          <span class="trig-icon">📝</span>
+          <span class="trig-label">Tally → Bitrix</span>
+          <span class="trig-desc">Sales Orders → Estimates</span>
+        </div>
       </div>
     </div>
 
@@ -697,6 +703,7 @@ const trigMap = {
   invbitrixtotally:{ path: '/sync/inventory-bitrix-to-tally', label: 'Bitrix→Tally inventory sync', slug: 'inventory-sync'},
   receiptmatch:  { path: '/sync/receipts-match',    label: 'Receipt match',       slug: 'payment-sync'  },
   deliverynotes: { path: '/sync/delivery-notes', label: 'Delivery note → Deal estimate', slug: 'quotation-sync' },
+tallyquotations: { path: '/sync/tally-quotations', label: 'Tally Quotation sync', slug: 'quotation-sync' },
 };
 
 let _planFeatures = {}; // populated from /api/status
@@ -732,6 +739,14 @@ async function loadPlanFeatures() {
       inventoryBtn.style.pointerEvents = inventoryEnabled ? 'auto' : 'none';
       inventoryBtn.querySelector('.trig-desc').textContent =
         inventoryEnabled ? 'Tally stock → Bitrix24' : 'Not on your plan';
+    }
+    const quotationEnabled = _planFeatures['quotation-sync'];
+    const quotationBtn = document.getElementById('trig-tallyquotations');
+    if (quotationBtn) {
+      quotationBtn.style.opacity       = quotationEnabled ? '1'    : '0.4';
+      quotationBtn.style.pointerEvents = quotationEnabled ? 'auto' : 'none';
+      quotationBtn.querySelector('.trig-desc').textContent =
+        quotationEnabled ? 'Sales Orders → Estimates' : 'Not on your plan';
     }
   } catch {}
 }

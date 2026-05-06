@@ -84,8 +84,21 @@ async function _processQuotation({ entityId, isUpdate = false, entityTypeId = '7
 
     // Skip estimates created by Tally sync — prevents circular loop
     const estimateTitle = quotation.title || quotation.TITLE || '';
-    if (quotation.UF_TALLY_SYNCED === 'Y' || quotation.ufTallySynced === 'Y') {
-      logger.info('Skipping quotation webhook — estimate was created by Tally sync', { entityId, title: estimateTitle });
+
+    // Check all possible UF field name formats Bitrix24 might return
+    const isTallyCreated = quotation.UF_TALLY_SYNCED === 'Y'
+      || quotation.ufTallySynced === 'Y'
+      || quotation.uf_tally_synced === 'Y'
+      // Also check by title pattern — Tally-synced estimates have "PartyName - VoucherNumber" format
+      // where voucherNumber is a pure integer (e.g. "Dipesh Machinvcgs - 34")
+      || (() => {
+        const parts = (estimateTitle || '').split(' - ');
+        const lastPart = parts[parts.length - 1]?.trim();
+        return parts.length >= 2 && /^\d+$/.test(lastPart);
+      })();
+
+    if (isTallyCreated) {
+      logger.info('Skipping quotation webhook — estimate was created by Tally sync (title pattern match)', { entityId, title: estimateTitle });
       return { success: true, skipped: true, reason: 'Tally-originated estimate skipped to prevent loop' };
     }
 

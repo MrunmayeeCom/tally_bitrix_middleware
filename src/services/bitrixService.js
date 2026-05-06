@@ -239,67 +239,43 @@ async function getQuote(id, entityTypeId = '7') {
     }
   }
 
-  // Fetch product rows for the quotation using same approach as invoiceProcessor
-  // Try multiple approaches to get product rows (different for Quote vs Smart Quote/Estimates)
+  // Fetch product rows for the quotation.
+  // NOTE: entityTypeId 7 (Quote) on this Bitrix24 instance does not return rows
+  // via any read API after crm.quote.productrows.set — rows are visible in UI only.
+  // For non-7 entity types (Smart Quotes/Estimates), use crm.item.productrow.get.
   try {
     let rowsData = { result: [] };
     let foundRows = false;
     const numericEntityTypeId = parseInt(etid);
-    
-    // Map entityTypeId to OWNER_TYPE suffix
-    const ownerTypeMap = {
-      7: 'Q',      // Regular Quote
-    };
-    const ownerTypeSuffix = ownerTypeMap[numericEntityTypeId] || 'Q';
-    
-    // For regular Quote (entityTypeId 7): use crm.productrow.list FIRST - more reliable
-    if (numericEntityTypeId === 7) {
-      try {
-        rowsData = await callBitrix('crm.productrow.list', {
-          filter: { OWNER_ID: Number(id), OWNER_TYPE: ownerTypeSuffix }
-        });
-        if ((rowsData.result || []).length > 0) foundRows = true;
-      } catch (_) {}
-    }
-    
-    // Try crm.item.productrow.get with dynamic entityTypeId (works for Smart items)
-    // ONLY use this for non-7 entity types (Smart Quotes/Estimates)
-    if (!foundRows && numericEntityTypeId !== 7) {
+
+    if (numericEntityTypeId !== 7) {
+      // Smart Quote / other SPA entity — use crm.item.productrow.get
       try {
         rowsData = await callBitrix('crm.item.productrow.get', {
           entityTypeId: numericEntityTypeId,
           id: Number(id)
         });
-        // Handle both array and single object response formats
         if (rowsData.result) {
-          if (Array.isArray(rowsData.result)) {
+          if (Array.isArray(rowsData.result) && rowsData.result.length > 0) {
             foundRows = true;
           } else if (rowsData.result.productRow) {
-            // Single productRow object - convert to array
             rowsData.result = [rowsData.result.productRow];
             foundRows = true;
-          } else if (typeof rowsData.result === 'object') {
-            // Already an object, wrap in array
+          } else if (typeof rowsData.result === 'object' && !Array.isArray(rowsData.result)) {
             rowsData.result = [rowsData.result];
             foundRows = true;
           }
         }
       } catch (_) {}
     }
-    
-    // Try crm.productrow.list with OWNER_TYPE RQ for Smart Quotes/Estimates
-    if (!foundRows) {
-      try {
-        rowsData = await callBitrix('crm.productrow.list', {
-          filter: { OWNER_ID: Number(id), OWNER_TYPE: 'RQ' }
-        });
-        if ((rowsData.result || []).length > 0) foundRows = true;
-      } catch (_) {}
-    }
-    
+
+    // entityTypeId 7: crm.quote.productrows.get and crm.productrow.list
+    // both return empty on this instance — skip to avoid log noise.
+    // Rows written by crm.quote.productrows.set are UI-only and not API-readable.
+
     item.productRows = Array.isArray(rowsData.result) ? rowsData.result : [];
-    logger.info('Quote product rows fetched', { 
-      id, 
+    logger.info('Quote product rows fetched', {
+      id,
       entityTypeId: etid,
       rowCount: item.productRows.length,
       rows: item.productRows.map(r => `${r.PRODUCT_NAME || r.productName || 'unnamed'} × ${r.QUANTITY || r.quantity || 1} @ ${r.PRICE || r.price || 0}`)
