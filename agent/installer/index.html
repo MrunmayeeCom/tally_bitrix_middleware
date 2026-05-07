@@ -1768,9 +1768,14 @@ function connectBitrix() {
   status.textContent = 'Waiting for Bitrix24 authorization…';
   status.style.color = 'var(--accent)';
 
-  // Open Bitrix24 install URL in browser
-  const { shell } = require('electron');
-  shell.openExternal(BITRIX_INSTALL_URL);
+  // Open Bitrix24 install URL — use Electron shell if available, else window.open
+  const isElectron = typeof process !== 'undefined' && process.versions?.electron;
+  if (isElectron) {
+    const { shell } = require('electron');
+    shell.openExternal(BITRIX_INSTALL_URL);
+  } else {
+    window.open(BITRIX_INSTALL_URL, '_blank');
+  }
 
   // Start polling for OAuth completion from Render server
   _startOAuthPolling();
