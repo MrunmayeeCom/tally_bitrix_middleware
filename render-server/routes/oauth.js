@@ -118,6 +118,7 @@ async function handleCallback(req, res) {
         refreshToken: refresh_token,
         expiresAt,
         memberId:     MEMBER_ID,
+        email:        req.query.email || req.body?.email || '',
         updatedAt:    new Date(),
       },
       { upsert: true, new: true }

@@ -700,6 +700,24 @@ const ipcRenderer = (function() {
         catch { return { triggered: false }; }
       }
 
+      if (channel === 'get-companies') {
+        try {
+          const d = await api('/api/companies');
+          return d;
+        } catch { return { companies: [], active: '' }; }
+      }
+
+      if (channel === 'switch-company') {
+        try {
+          const r = await fetch('http://localhost:5050/api/companies/switch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company: payload }),
+          });
+          return await r.json();
+        } catch(e) { return { success: false, error: e.message }; }
+      }
+
       if (channel === 'stop-service')  { _running = false; return {}; }
       if (channel === 'start-service') { _running = true;  return {}; }
 

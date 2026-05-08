@@ -27,7 +27,13 @@ function loadConfig() {
 }
 
 function saveConfig(cfg) {
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+  try {
+    const dir = path.dirname(CONFIG_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+  } catch (e) {
+    logger.error('Config save failed: ' + e.message);
+  }
 }
 
 function isConfigured() {
@@ -53,8 +59,6 @@ function getActiveCompany(cfg) {
 }
 
 function getServiceScript() {
-  // In production (packaged .exe), resources are in process.resourcesPath
-  // In development, use relative path
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'middleware', 'src', 'server.js');
   }
@@ -63,22 +67,26 @@ function getServiceScript() {
 
 function getNodeExecutable() {
   if (!app.isPackaged) return 'node';
-  
-  // Try common Node.js install paths on Windows
+
   const nodePaths = [
     'C:\\Program Files\\nodejs\\node.exe',
     'C:\\Program Files (x86)\\nodejs\\node.exe',
-    path.join(process.env.APPDATA, '..', 'Local', 'Programs', 'node', 'node.exe'),
+    path.join(process.env.APPDATA || '', '..', 'Local', 'Programs', 'node', 'node.exe'),
     path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'node.exe'),
   ];
-  
+
   for (const p of nodePaths) {
-    if (fs.existsSync(p)) {
-      return p;
-    }
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {}
   }
-  
-  // Fallback to PATH
+
+  // Bundled node fallback — if you ship node.exe inside extraResources
+  const bundled = path.join(process.resourcesPath, 'node', 'node.exe');
+  try {
+    if (fs.existsSync(bundled)) return bundled;
+  } catch {}
+
   return 'node';
 }
 
@@ -133,6 +141,7 @@ function spawnServer(cfg) {
     CLIENT_ID:           require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0],
     LICENSE_FEATURES:    licenseFeatures,
     LICENSE_PLAN:        licensePlan,
+    BITRIX_CLIENT_SECRET: process.env.BITRIX_CLIENT_SECRET || '',
   });
 
   serverProcess = spawn(nodePath, [scriptPath], {
@@ -161,9 +170,15 @@ function spawnServer(cfg) {
 function updateTray() {
   if (!tray) return;
   checkServiceStatus((running) => {
-    const icon = nativeImage.createFromPath(
-      path.join(__dirname, 'assets', running ? 'icon-green.png' : 'icon-red.png')
+    const iconName = running ? 'icon-green.png' : 'icon-red.png';
+    const iconPath = path.join(
+      app.isPackaged ? process.resourcesPath : __dirname,
+      'assets',
+      iconName
     );
+    const icon = fs.existsSync(iconPath)
+      ? nativeImage.createFromPath(iconPath)
+      : nativeImage.createEmpty();
     tray.setImage(icon);
     tray.setToolTip(`TallyBitrixSync — ${running ? 'Running ✅' : 'Stopped ❌'}`);
 
@@ -299,6 +314,12 @@ function createMainWindow(page = 'setup') {
     return;
   }
 
+  const winIconPath = path.join(
+    app.isPackaged ? process.resourcesPath : __dirname,
+    'assets',
+    'icon-green.png'
+  );
+
   mainWindow = new BrowserWindow({
     width:           520,
     height:          680,
@@ -306,7 +327,7 @@ function createMainWindow(page = 'setup') {
     frame:           false,
     transparent:     true,
     webPreferences:  { nodeIntegration: true, contextIsolation: false },
-    icon:            path.join(__dirname, 'assets', 'icon-green.png'),
+    icon:            fs.existsSync(winIconPath) ? winIconPath : undefined,
     titleBarStyle:   'hidden',
   });
 
@@ -319,12 +340,20 @@ function createMainWindow(page = 'setup') {
 }
 
 function createTray() {
-  const iconPath = path.join(__dirname, 'assets', 'icon-red.png');
-  tray = new Tray(nativeImage.createFromPath(iconPath));
+  const iconPath = path.join(
+    app.isPackaged ? process.resourcesPath : __dirname,
+    'assets',
+    'icon-red.png'
+  );
+  const icon = fs.existsSync(iconPath)
+    ? nativeImage.createFromPath(iconPath)
+    : nativeImage.createEmpty();
+
+  tray = new Tray(icon);
   tray.setToolTip('TallyBitrixSync');
   tray.on('double-click', openDashboard);
   updateTray();
-  setInterval(updateTray, 30000); // refresh every 30s
+  setInterval(updateTray, 30000);
 }
 
 // ── IPC ───────────────────────────────────────────────────────────────────────
@@ -437,16 +466,20 @@ ipcMain.handle('uninstall-service', async () => {
   try { fs.unlinkSync(CONFIG_PATH); } catch {}
 
   // Step 5 — Remove all cache files
+  const logsDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'middleware', 'logs')
+    : path.join(__dirname, '..', 'logs');
+
   const cacheFiles = [
-    path.join(__dirname, '..', 'logs', 'license-cache.json'),
-    path.join(__dirname, '..', 'logs', 'feature-registry-cache.json'),
-    path.join(__dirname, '..', 'logs', 'usage-cache.json'),
-    path.join(__dirname, '..', 'logs', 'pipeline-cache.json'),
-    path.join(__dirname, '..', 'logs', 'tally-snapshot.json'),
-    path.join(__dirname, '..', 'logs', 'sync-history.json'),
-    path.join(__dirname, '..', 'logs', 'escalation-cooldown.json'),
-    path.join(__dirname, '..', 'logs', 'voucher-masterid-cache.json'),
-    path.join(__dirname, '..', 'logs', 'invoice-cache.json'),
+    path.join(logsDir, 'license-cache.json'),
+    path.join(logsDir, 'feature-registry-cache.json'),
+    path.join(logsDir, 'usage-cache.json'),
+    path.join(logsDir, 'pipeline-cache.json'),
+    path.join(logsDir, 'tally-snapshot.json'),
+    path.join(logsDir, 'sync-history.json'),
+    path.join(logsDir, 'escalation-cooldown.json'),
+    path.join(logsDir, 'voucher-masterid-cache.json'),
+    path.join(logsDir, 'invoice-cache.json'),
   ];
   for (const f of cacheFiles) {
     try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
@@ -686,7 +719,15 @@ ipcMain.on('minimize-window', () => { if (mainWindow) mainWindow.minimize(); });
 
 app.whenReady().then(async () => {
   app.setAppUserModelId('com.rajlaxmi.tallybitrixsync');
-  app.setLoginItemSettings({ openAtLogin: true });
+
+  // Only enable auto-launch in packaged production build
+  if (app.isPackaged) {
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      path: process.execPath,
+    });
+  }
+
   createTray();
 
   // Kill any leftover process on port 5050 before starting fresh
