@@ -393,12 +393,35 @@ async function createVoucher(voucher) {
                 ${ _renderSalesLedgerEntry(voucher) }
                 ${ _renderInventory(voucher, unitMap) }
                 ${!hasInventory ? `<ALLINVENTORYENTRIES.LIST>
-                  <STOCKITEMNAME>${escapeXml(voucher.productRows?.[0]?.PRODUCT_NAME || voucher.productRows?.[0]?.productName || 'Service')}</STOCKITEMNAME>
+                  <STOCKITEMNAME>General Services</STOCKITEMNAME>
                   <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                  <RATE>${parseFloat(voucher.amount)}/Nos</RATE>
-                  <AMOUNT>${parseFloat(voucher.amount)}</AMOUNT>
-                  <ACTUALQTY>1 Nos</ACTUALQTY>
-                  <BILLEDQTY>1 Nos</BILLEDQTY>
+                  <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>
+                  <ISAUTONEGATE>No</ISAUTONEGATE>
+                  <RATE>${parseFloat(voucher.amount).toFixed(2)}/Nos</RATE>
+                  <AMOUNT>${parseFloat(voucher.amount).toFixed(2)}</AMOUNT>
+                  <ACTUALQTY> 1 Nos</ACTUALQTY>
+                  <BILLEDQTY> 1 Nos</BILLEDQTY>
+                  <BATCHALLOCATIONS.LIST>
+                    <GODOWNNAME>Main Location</GODOWNNAME>
+                    <BATCHNAME>Primary Batch</BATCHNAME>
+                    <INDENTNO>&#4; Not Applicable</INDENTNO>
+                    <ORDERNO>${escapeXml(voucher.voucherNumber || '')}</ORDERNO>
+                    <TRACKINGNUMBER>&#4; Not Applicable</TRACKINGNUMBER>
+                    <DYNAMICCSTISCLEARED>No</DYNAMICCSTISCLEARED>
+                    <AMOUNT>${parseFloat(voucher.amount).toFixed(2)}</AMOUNT>
+                    <ACTUALQTY> 1 Nos</ACTUALQTY>
+                    <BILLEDQTY> 1 Nos</BILLEDQTY>
+                    <ORDERDUEDATE>${voucher.dueDate ? (() => { const d = voucher.dueDate.replace(/-/g,''); const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${parseInt(d.slice(6,8))}-${months[parseInt(d.slice(4,6))-1]}-${d.slice(2,4)}`; })() : ''}</ORDERDUEDATE>
+                  </BATCHALLOCATIONS.LIST>
+                  <ACCOUNTINGALLOCATIONS.LIST>
+                    <LEDGERNAME>Sales</LEDGERNAME>
+                    <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                    <LEDGERFROMITEM>No</LEDGERFROMITEM>
+                    <REMOVEZEROENTRIES>No</REMOVEZEROENTRIES>
+                    <ISPARTYLEDGER>No</ISPARTYLEDGER>
+                    <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>
+                    <AMOUNT>${parseFloat(voucher.amount).toFixed(2)}</AMOUNT>
+                  </ACCOUNTINGALLOCATIONS.LIST>
                 </ALLINVENTORYENTRIES.LIST>` : ''}
               </VOUCHER>
             </TALLYMESSAGE>
@@ -1123,7 +1146,9 @@ async function getVoucherTypes() {
 
 async function ensureTallyDefaults() {
   logger.info('Ensuring Tally default masters exist');
-  const xml = `
+
+  // Step 1: Ensure Sales ledger
+  const ledgerXml = `
     <ENVELOPE>
       <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
       <BODY>
@@ -1147,10 +1172,43 @@ async function ensureTallyDefaults() {
       </BODY>
     </ENVELOPE>`.trim();
   try {
-    const response = await sendToTally(xml);
-    logger.info('Tally defaults ensured', { response: (response || '').substring(0, 200) });
+    const response = await sendToTally(ledgerXml);
+    logger.info('Tally defaults ensured — Sales ledger', { response: (response || '').substring(0, 200) });
   } catch (e) {
-    logger.warn('Could not ensure Tally defaults', { message: e.message });
+    logger.warn('Could not ensure Sales ledger', { message: e.message });
+  }
+
+  // Step 2: Ensure "General Services" stock item — used as fallback when quote has no product rows
+  const stockXml = `
+    <ENVELOPE>
+      <HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
+      <BODY>
+        <IMPORTDATA>
+          <REQUESTDESC>
+            <REPORTNAME>All Masters</REPORTNAME>
+            <STATICVARIABLES>
+              <SVCURRENTCOMPANY>${tallyConfig.company}</SVCURRENTCOMPANY>
+              <IMPORTDUPS>@@DUPCOMBINE</IMPORTDUPS>
+            </STATICVARIABLES>
+          </REQUESTDESC>
+          <REQUESTDATA>
+            <TALLYMESSAGE xmlns:UDF="TallyUDF">
+              <STOCKITEM NAME="General Services" ACTION="Create">
+                <NAME>General Services</NAME>
+                <BASEUNITS>Nos</BASEUNITS>
+                <GSTAPPLICABLE>@@APPLICABLEYES</GSTAPPLICABLE>
+                <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>
+              </STOCKITEM>
+            </TALLYMESSAGE>
+          </REQUESTDATA>
+        </IMPORTDATA>
+      </BODY>
+    </ENVELOPE>`.trim();
+  try {
+    const response = await sendToTally(stockXml);
+    logger.info('Tally defaults ensured — General Services stock item', { response: (response || '').substring(0, 200) });
+  } catch (e) {
+    logger.warn('Could not ensure General Services stock item', { message: e.message });
   }
 }
 

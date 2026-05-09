@@ -83,24 +83,41 @@ async function _processQuotation({ entityId, isUpdate = false, entityTypeId = '7
     }
 
     // Skip estimates created by Tally sync — prevents circular loop
-    const estimateTitle = quotation.title || quotation.TITLE || '';
-
-    // Check all possible UF field name formats Bitrix24 might return
+    // Check 1: explicit UF field set by tallyQuotationProcessor
     const isTallyCreated = quotation.UF_TALLY_SYNCED === 'Y'
       || quotation.ufTallySynced === 'Y'
-      || quotation.uf_tally_synced === 'Y'
-      // Also check by title pattern — Tally-synced estimates have "PartyName - VoucherNumber" format
-      // where voucherNumber is a pure integer (e.g. "Dipesh Machinvcgs - 34")
-      || (() => {
-        const parts = (estimateTitle || '').split(' - ');
-        const lastPart = parts[parts.length - 1]?.trim();
-        return parts.length >= 2 && /^\d+$/.test(lastPart);
-      })();
+      || quotation.uf_tally_synced === 'Y';
 
     if (isTallyCreated) {
-      logger.info('Skipping quotation webhook — estimate was created by Tally sync (title pattern match)', { entityId, title: estimateTitle });
+      logger.info('Skipping quotation webhook — estimate was created by Tally sync (UF_TALLY_SYNCED=Y)', { entityId });
       return { success: true, skipped: true, reason: 'Tally-originated estimate skipped to prevent loop' };
     }
+
+    // Check 2: title matches a voucher number in the Tally→Bitrix cache
+    // tallyQuotationProcessor stores entries with key "tally_PartyName_VoucherNumber_Amount"
+    // If the estimate title is "PartyName - VoucherNumber" and that combo exists in cache,
+    // this estimate was created by the Tally sync — block it
+    try {
+      const tallyQCache = path.join(__dirname, '../../logs/quotation-tally-sync-cache.json');
+      if (fs.existsSync(tallyQCache)) {
+        const tallyCache = JSON.parse(fs.readFileSync(tallyQCache, 'utf8'));
+        const estimateTitle = quotation.title || quotation.TITLE || '';
+        const titleParts = estimateTitle.split(' - ');
+        if (titleParts.length >= 2) {
+          const voucherNumFromTitle = titleParts[titleParts.length - 1]?.trim();
+          const partyFromTitle      = titleParts.slice(0, -1).join(' - ').trim();
+          // Check if any cache key matches this partyName + voucherNumber combination
+          const cacheKeyPattern = `tally_${partyFromTitle}_${voucherNumFromTitle}_`;
+          const isCached = Object.keys(tallyCache).some(k => k.startsWith(cacheKeyPattern));
+          if (isCached) {
+            logger.info('Skipping quotation webhook — estimate matches Tally sync cache entry', {
+              entityId, title: estimateTitle, voucherNumFromTitle,
+            });
+            return { success: true, skipped: true, reason: 'Tally-originated estimate (cache match) skipped to prevent loop' };
+          }
+        }
+      }
+    } catch (_) {}
 
     try {
       const { getLedgerByName, createLedger } = require('../services/tallyService');
@@ -260,13 +277,19 @@ async function _processQuotation({ entityId, isUpdate = false, entityTypeId = '7
     }
         // ── CREATE path ───────────────────────────────────────────────────────────
 
-    // File-based dedup check — prevents duplicates even after server restart
+    // File-based dedup check — prevents duplicates within 24 hours of initial creation
+    // After 24h, allow re-sync in case Tally data was lost
     const dedupKey = `quotation_${entityId}`;
     _quotationDedupCache = loadQuotationDedup();
     
     if (_quotationDedupCache[dedupKey]) {
-      logger.warn('Duplicate quotation blocked by file dedup', { entityId, voucherNumber: voucher.voucherNumber });
-      return { success: true, voucher, skipped: true };
+      const cachedAt = _quotationDedupCache[dedupKey];
+      const ageMs = Date.now() - (typeof cachedAt === 'number' ? cachedAt : 0);
+      if (ageMs < 24 * 60 * 60 * 1000) {
+        logger.warn('Duplicate quotation blocked by file dedup (within 24h)', { entityId, voucherNumber: voucher.voucherNumber, ageMinutes: Math.floor(ageMs / 60000) });
+        return { success: true, voucher, skipped: true };
+      }
+      logger.info('File dedup entry expired (>24h) — allowing re-sync', { entityId });
     }
     
     // Also check in-memory dedup

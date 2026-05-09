@@ -241,8 +241,8 @@ function startScheduler() {
     _activeTasks.push(cron.schedule(tallyQuotationCron, () => {
       if (isTallyQuotationSyncing) return;
       isTallyQuotationSyncing = true;
-      const { processTallyQuotationsFromTally } = require('./processors/tallyQuotationProcessor');
-      processTallyQuotationsFromTally()
+      const { processTallyQuotations } = require('./processors/tallyQuotationProcessor');
+      processTallyQuotations()
         .then(r => logger.info(`${syncMinutes}min — Tally→Bitrix quotation sync completed`, r))
         .catch(e => logger.error('Tally→Bitrix quotation sync failed', { message: e.message }))
         .finally(() => { isTallyQuotationSyncing = false; });

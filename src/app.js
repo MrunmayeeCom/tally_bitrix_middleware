@@ -494,8 +494,8 @@ app.post('/sync/tally-quotations', authMiddleware, async (req, res) => {
   }
   try {
     logger.info('Manual Tally Sales Order → Bitrix24 Estimate sync triggered');
-    const { processTallyQuotationsFromTally } = require('./processors/tallyQuotationProcessor');
-    const result = await processTallyQuotationsFromTally();
+    const { processTallyQuotations } = require('./processors/tallyQuotationProcessor');
+    const result = await processTallyQuotations();
     res.status(200).json({ success: true, ...result });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });

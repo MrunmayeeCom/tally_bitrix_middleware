@@ -266,22 +266,49 @@ async function findBitrixParty(partyName) {
 
 async function quotationExistsInBitrix(voucherNumber, partyName) {
   try {
-    // Skip UF_TALLY_VOUCHER_NO check — field doesn't exist on Quote entity (entityTypeId 7)
-    // and causes 400 errors. Use title match only.
+    // Check 1: does the Bitrix→Tally dedup cache have this voucherNumber?
+    // If so, this Sales Order was originally created FROM Bitrix24 (BX- prefix stripped by Tally)
+    // and we must NOT sync it back — that would create a duplicate estimate in Bitrix24
+    try {
+      const bitrixDedupPath = path.join(__dirname, '../../logs/quotation-dedup-cache.json');
+      if (fs.existsSync(bitrixDedupPath)) {
+        const bitrixDedup = JSON.parse(fs.readFileSync(bitrixDedupPath, 'utf8'));
+        // Bitrix→Tally stores key as "quotation_{entityId}" — we can't match by voucher number directly
+        // But the voucher-masterid-cache stores voucherNumber as "BX-{number}"
+        // If this Tally voucherNumber matches any "BX-{voucherNumber}" in the masterid cache, skip it
+        const masterCachePath = path.join(__dirname, '../../logs/voucher-masterid-cache.json');
+        if (fs.existsSync(masterCachePath)) {
+          const masterCache = JSON.parse(fs.readFileSync(masterCachePath, 'utf8'));
+          const isBitrixOrigin = Object.values(masterCache).some(entry => {
+            const cachedVn = entry.voucherNumber || '';
+            return cachedVn === `BX-${voucherNumber}` || cachedVn === `BX-${parseInt(voucherNumber)}`;
+          });
+          if (isBitrixOrigin) {
+            logger.info('[TallyQuotation] Voucher originated from Bitrix24 — skipping reverse sync', { voucherNumber });
+            return true; // treat as "already exists" to skip
+          }
+        }
+      }
+    } catch (_) {}
 
-    // Check by title
+    // Check 2: title match in Bitrix24
     if (partyName) {
       const res = await callBitrix('crm.item.list', {
         entityTypeId: 7,
         filter: { '=title': `${partyName} - ${voucherNumber}` },
         select: ['id'],
       });
-      if ((res.result?.items?.length ?? 0) > 0) return res.result.items[0].id;
+      if ((res.result?.items?.length ?? 0) > 0) {
+        logger.info('[TallyQuotation] Estimate already exists in Bitrix24 by title', {
+          voucherNumber, estimateId: res.result.items[0].id,
+        });
+        return res.result.items[0].id;
+      }
     }
     return false;
   } catch (e) {
     logger.warn('[TallyQuotation] Existence check failed — blocking push', { voucherNumber, message: e.message });
-    return true; // block on error
+    return true;
   }
 }
 
@@ -737,4 +764,4 @@ async function processTallyQuotationsFromTally() {
   }
 }
 
-module.exports = { processTallyQuotations, processTallyQuotationsFromTally, getSalesOrders };
+module.exports = { processTallyQuotations, getSalesOrders };

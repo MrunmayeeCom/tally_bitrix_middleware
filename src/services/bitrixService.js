@@ -269,9 +269,28 @@ async function getQuote(id, entityTypeId = '7') {
       } catch (_) {}
     }
 
-    // entityTypeId 7: crm.quote.productrows.get and crm.productrow.list
-    // both return empty on this instance — skip to avoid log noise.
-    // Rows written by crm.quote.productrows.set are UI-only and not API-readable.
+    // entityTypeId 7 (Quote): fetch via crm.productrow.list with OWNER_TYPE Q
+    // Retry up to 3 times with 1.5s delay — on ADD events Bitrix24 commits
+    // product rows slightly after the quote record itself, causing empty results
+    // on the first fetch.
+    if (numericEntityTypeId === 7) {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          rowsData = await callBitrix('crm.productrow.list', {
+            filter: { OWNER_ID: Number(id), OWNER_TYPE: 'Q' }
+          });
+          if ((rowsData.result || []).length > 0) {
+            foundRows = true;
+            logger.info(`Quote product rows fetched on attempt ${attempt}`, { id, count: rowsData.result.length });
+            break;
+          }
+          if (attempt < 3) {
+            logger.info(`Quote product rows empty on attempt ${attempt} — retrying in 1.5s`, { id });
+            await new Promise(r => setTimeout(r, 1500));
+          }
+        } catch (_) {}
+      }
+    }
 
     item.productRows = Array.isArray(rowsData.result) ? rowsData.result : [];
     logger.info('Quote product rows fetched', {
