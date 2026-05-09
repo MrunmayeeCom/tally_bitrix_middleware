@@ -147,9 +147,11 @@ function parseSalesOrdersXml(xml, chunkFrom, chunkTo) {
       // Skip cancelled
       if (/ACTION="Cancel"/i.test(attrs)) continue;
 
-      // Skip BX- prefixed (created by Bitrix sync)
+      // Skip BX- prefixed or Bitrix-originated vouchers
       const voucherNumber = get('VOUCHERNUMBER') || '';
       if (voucherNumber.startsWith('BX-')) continue;
+      const narration = get('NARRATION') || '';
+      if (narration.toLowerCase().includes('bitrix24 quotation') || narration.toLowerCase().includes('bitrix24 estimate')) continue;
 
       // Also skip if this voucher was synced FROM Bitrix24 — check voucher cache
       try {
