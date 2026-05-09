@@ -75,12 +75,6 @@
         "from": "assets",
         "to": "assets",
         "filter": ["*.png", "*.ico"]
-      },
-      {
-        "from": "../logs",
-        "to": "middleware/logs",
-        "filter": ["*.json"],
-        "ignore": ["combined.log", "error.log"]
       }
     ]
   }
