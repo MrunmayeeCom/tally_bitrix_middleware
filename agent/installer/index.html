@@ -312,6 +312,13 @@
       <input id="bitrixDomain" type="hidden" value=""/>
       <input id="bitrixClientId" type="hidden" value=""/>
 
+      <div class="field" style="margin-top:12px;">
+        <label>Bitrix24 Webhook URL</label>
+        <input id="bitrixUrl" type="text"
+          placeholder="https://yourportal.bitrix24.com/rest/1/abc123.../"/>
+        <div class="hint">Bitrix24 → Developer resources → Inbound webhooks → Create (needs CRM + Contacts scopes)</div>
+      </div>
+
       <button class="btn btn-primary" id="btn-step1-continue" onclick="goStep(2)" disabled
         style="opacity:0.4;cursor:not-allowed;">
         Continue →
@@ -538,12 +545,12 @@
       <div style="font-size:11px;color:var(--muted);margin-top:4px;">License email — changing this requires service restart</div>
     </div>
     <div class="field">
-      <label>Bitrix24 Portal</label>
-      <div id="s-bitrix-domain-display" style="padding:10px 14px;background:var(--surface);
-        border:1px solid var(--border2);border-radius:8px;font-size:13px;color:var(--muted);">
-        Not connected
+      <label>Bitrix24 Webhook URL</label>
+      <input id="s-bitrixUrl" type="text"
+        placeholder="https://yourportal.bitrix24.com/rest/1/abc.../"/>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px;">
+        Connected to: <span id="s-bitrix-domain-display" style="color:var(--accent2);">Not connected</span>
       </div>
-      <input id="s-bitrixUrl" type="hidden"/>
     </div>
     <div class="field-row">
       <div class="field"><label>Tally Host</label><input id="s-tallyHost" type="text"/></div>
@@ -1115,6 +1122,10 @@ function goStep(n) {
     if (!email || !email.includes('@')) { showToast('Please enter your registered email', 'error'); return; }
     const domain = document.getElementById('bitrixDomain').value.trim();
     if (!domain) { showToast('Please connect Bitrix24 first', 'error'); return; }
+    const webhookUrl = document.getElementById('bitrixUrl')?.value.trim();
+    if (!webhookUrl || !webhookUrl.includes('bitrix24.com/rest/')) {
+      showToast('Please enter your Bitrix24 webhook URL', 'error'); return;
+    }
   }
   if (n === 'install') {
     const host = document.getElementById('tallyHost').value.trim();
@@ -1238,7 +1249,7 @@ function getFormConfig() {
     customerEmail  : document.getElementById('customerEmail')?.value.trim() || '',
     bitrixDomain   : document.getElementById('bitrixDomain')?.value.trim() || '',
     bitrixClientId : document.getElementById('bitrixClientId')?.value.trim() || '',
-    bitrixUrl      : '', // no longer needed — OAuth handles this
+    bitrixUrl      : document.getElementById('bitrixUrl')?.value.trim() || '',
     tallyHost      : document.getElementById('tallyHost').value.trim() || 'localhost',
     tallyPort      : parseInt(document.getElementById('tallyPort').value) || 9000,
     tallyCompany   : safeCompanies[0] || '',
