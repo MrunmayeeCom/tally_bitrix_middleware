@@ -350,7 +350,7 @@ async function invoiceExistsInBitrix(voucherNumber, partyName = '') {
     try {
       const fieldSearch = await callBitrix('crm.item.list', {
         entityTypeId: 31,
-        filter: { 'UF_TALLY_VOUCHER_NO': voucherNumber },
+        filter: { '=UF_TALLY_VOUCHER_NO': voucherNumber },
         select: ['id', 'title'],
       });
       if ((fieldSearch.result?.items?.length ?? 0) > 0) {

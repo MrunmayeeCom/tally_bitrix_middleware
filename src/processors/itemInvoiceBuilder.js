@@ -426,7 +426,7 @@ async function processItemInvoices() {
             try {
               const fieldCheck = await callBitrix('crm.item.list', {
                 entityTypeId: 31,
-                filter: { 'UF_TALLY_VOUCHER_NO': voucher.voucherNumber },
+                filter: { '=UF_TALLY_VOUCHER_NO': voucher.voucherNumber },
                 select: ['id'],
               });
               if ((fieldCheck.result?.items?.length ?? 0) > 0) {
@@ -482,7 +482,7 @@ async function processItemInvoices() {
         try {
           const fieldCheck = await callBitrix('crm.item.list', {
             entityTypeId: 31,
-            filter: { UF_TALLY_VOUCHER_NO: voucher.voucherNumber },
+            filter: { '=UF_TALLY_VOUCHER_NO': voucher.voucherNumber },
             select: ['id', 'title'],
           });
           if ((fieldCheck.result?.items?.length ?? 0) > 0) {
@@ -519,8 +519,8 @@ async function processItemInvoices() {
           } catch (_) {}
         }
 
-        // Check 3: by company name + amount (if title doesn't match)
-        // This finds invoices like "Invoice #7032" when looking for "Zaveri Textiles - 3515"
+        // Check 3: by company name + amount — only if title starts with party name
+        // Prevents matching unrelated invoices like "Invoice #8140" that share same company+amount
         if (!existingId) {
           const partyIds = await findBitrixParty(voucher.partyName);
           if (partyIds.companyId) {
@@ -530,16 +530,20 @@ async function processItemInvoices() {
                 filter: { 
                   '=COMPANY_ID': partyIds.companyId,
                   '=OPPORTUNITY': voucher.amount,
+                  '%title': voucher.partyName,
                 },
                 select: ['id', 'title', 'COMPANY_ID'],
               });
-              if ((companyCheck.result?.items?.length ?? 0) > 0) {
-                existingId = companyCheck.result.items[0].id;
+              const matchedItem = (companyCheck.result?.items || []).find(item =>
+                (item.title || '').toLowerCase().startsWith(voucher.partyName.toLowerCase())
+              );
+              if (matchedItem) {
+                existingId = matchedItem.id;
                 logger.info('[ItemInvoice] Invoice found by company+amount dedup', {
                   voucherNumber: voucher.voucherNumber,
                   invoiceId: existingId,
                   companyId: partyIds.companyId,
-                  title: companyCheck.result.items[0].title,
+                  title: matchedItem.title,
                 });
               }
             } catch (_) {}
@@ -607,14 +611,31 @@ async function processItemInvoices() {
           const categoryId = await getTallyPipelineCategoryId();
           if (categoryId) {
             // Search for existing deal even if no company/contact exists - use party name directly
-            const dealSearch = await callBitrix('crm.deal.list', {
+            // Try exact title match first — prevents matching "test - 4310" when looking for "test - 4311"
+            const exactTitle = `${voucher.partyName} - ${voucher.voucherNumber}`;
+            let dealSearch = await callBitrix('crm.deal.list', {
               filter: {
-                '%TITLE': voucher.partyName,
+                '=TITLE': exactTitle,
                 CATEGORY_ID: categoryId,
-                '=OPPORTUNITY': voucher.amount,
               },
               select: ['ID', 'TITLE', 'OPPORTUNITY'],
             });
+
+            // Fallback: party name + amount, but only accept deals whose title starts with party name
+            if (!(dealSearch.result || []).length) {
+              const fallbackSearch = await callBitrix('crm.deal.list', {
+                filter: {
+                  '%TITLE': voucher.partyName,
+                  CATEGORY_ID: categoryId,
+                  '=OPPORTUNITY': voucher.amount,
+                },
+                select: ['ID', 'TITLE', 'OPPORTUNITY'],
+              });
+              dealSearch.result = (fallbackSearch.result || []).filter(d =>
+                (d.TITLE || '').toLowerCase().startsWith(voucher.partyName.toLowerCase())
+              );
+            }
+
             const deals = dealSearch.result || [];
             if (deals.length > 0) {
               dealId = deals[0].ID;

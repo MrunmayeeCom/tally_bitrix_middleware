@@ -47,19 +47,34 @@ async function processInvoice(entityId, isUpdate = false, invoiceType = 'smart')
     // These have titles like "PartyName - Number" which would create a circular loop
     // itemInvoiceBuilder creates Bitrix invoices, webhook fires, this tries to push back to Tally
     const invoiceTitle = invoice.title || invoice.TITLE || '';
+
+    // Skip invoices created by Tally→Bitrix sync (itemInvoiceBuilder or tallyInvoiceProcessor).
+    // UF_TALLY_SYNCED is stored under a hashed ufCrm_* key — scan all fields for the value.
+    // Also catch by title pattern "PartyName - <number>" as secondary guard.
+    const isTallySynced = !!(
+      invoice.UF_TALLY_SYNCED === 'Y' ||
+      Object.entries(invoice).some(([k, v]) => 
+        (k.toUpperCase().includes('TALLY_SYNCED') || k.toUpperCase().includes('TALLY_VOUCHER')) 
+        && v === 'Y'
+      )
+    );
+
+    // Secondary guard: title ends with a pure number AND invoice has a companyId
+    // (itemInvoiceBuilder always sets companyId; manually created invoices may not have this pattern)
     const titleParts = invoiceTitle.split(' - ');
-    if (titleParts.length >= 2) {
-      const potentialNumber = titleParts[titleParts.length - 1].trim();
-      // Check if title ends with a number (pattern from itemInvoiceBuilder)
-      if (/^\d+$/.test(potentialNumber)) {
-        // This invoice was likely created by itemInvoiceBuilder - skip it
-        logger.info('[InvoiceProcessor] Skipping itemInvoiceBuilder-created invoice to prevent circular sync', {
-          entityId,
-          title: invoiceTitle,
-          potentialNumber
-        });
-        return { success: true, skipped: true, reason: 'itemInvoiceBuilder-created invoice skipped' };
-      }
+    const titleEndsWithNumber = titleParts.length >= 2 && /^\d+$/.test(titleParts[titleParts.length - 1].trim());
+    // Only skip on title pattern if the invoice also has a parentId2 (linked deal) — 
+    // itemInvoiceBuilder always creates a deal link; manual invoices usually don't
+    const hasLinkedDeal = !!(invoice.parentId2 || invoice.PARENT_ID2);
+    const isTallyTitlePattern = titleEndsWithNumber && hasLinkedDeal;
+
+    if (isTallySynced || isTallyTitlePattern) {
+      logger.info('[InvoiceProcessor] Skipping Tally-originated invoice to prevent circular sync', {
+        entityId,
+        title: invoiceTitle,
+        reason: isTallySynced ? 'UF_TALLY_SYNCED=Y' : 'title-pattern+linked-deal',
+      });
+      return { success: true, skipped: true, reason: 'Tally-originated invoice skipped' };
     }
 
     // Step 1b: Ensure the party ledger exists in Tally before pushing the voucher
