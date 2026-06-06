@@ -689,6 +689,37 @@ async function processTallyInvoices() {
           }
         }
 
+        // Linked-deal dedup guard: if the matched deal already has a Smart Invoice, skip creation
+        if (dealId) {
+          try {
+            const linkedCheck = await callBitrix('crm.item.list', {
+              entityTypeId: 31,
+              filter: { '=parentId2': dealId },
+              select: ['id', 'title'],
+            });
+            const linkedItems = linkedCheck.result?.items || [];
+            if (linkedItems.length > 0) {
+              const linkedId = linkedItems[0].id;
+              logger.info('[TallyInvoice] Invoice already linked to deal — skipping push', {
+                voucherNumber: voucher.voucherNumber,
+                invoiceId: linkedId,
+                dealId,
+                title: linkedItems[0].title,
+              });
+              newCache[cacheKey] = { bitrixId: linkedId, syncedAt: new Date().toISOString(), source: 'linked-deal-check' };
+              saveCache(newCache);
+              skipped++;
+              continue;
+            }
+          } catch (linkErr) {
+            logger.warn('[TallyInvoice] Linked-deal check failed — proceeding to push', {
+              voucherNumber: voucher.voucherNumber,
+              dealId,
+              message: linkErr.message,
+            });
+          }
+        }
+
         // Push to Bitrix24
         const bitrixId = await pushVoucherToBitrix(voucher, partyIds, dealId, productRows);
         newCache[cacheKey] = { bitrixId, syncedAt: new Date().toISOString() };

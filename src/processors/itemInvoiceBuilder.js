@@ -550,6 +550,76 @@ async function processItemInvoices() {
           }
         }
 
+        // Check 4: voucher-masterid-cache lookup by party name + amount
+        // The forward sync (invoiceProcessor.js) stores entityId→{partyName,amount,voucherNumber}
+        // in voucher-masterid-cache.json. When the reverse sync encounters a manual voucher
+        // for the same party+amount, this finds the existing Bitrix invoice and skips creation.
+        if (!existingId) {
+          try {
+            const vchCachePath = path.join(__dirname, '../../logs/voucher-masterid-cache.json');
+            if (fs.existsSync(vchCachePath)) {
+              const vchCache = JSON.parse(fs.readFileSync(vchCachePath, 'utf8'));
+              const matched = Object.entries(vchCache).find(([, entry]) =>
+                entry.partyName === voucher.partyName &&
+                Math.abs(parseFloat(entry.amount) - voucher.amount) < 1
+              );
+              if (matched) {
+                const [entityId] = matched;
+                const verify = await callBitrix('crm.item.get', {
+                  entityTypeId: 31,
+                  id: Number(entityId),
+                });
+                if (verify.result) {
+                  existingId = Number(entityId);
+                  logger.info('[ItemInvoice] Invoice found by voucher-masterid-cache dedup', {
+                    voucherNumber: voucher.voucherNumber,
+                    invoiceId: existingId,
+                    partyName: voucher.partyName,
+                    amount: voucher.amount,
+                    cachedVoucher: matched[1].voucherNumber,
+                  });
+                }
+              }
+            }
+          } catch (cacheErr) {
+            logger.warn('[ItemInvoice] voucher-masterid-cache lookup failed', {
+              voucherNumber: voucher.voucherNumber,
+              error: cacheErr.message,
+            });
+          }
+        }
+
+        // Check 5: by %title (party name) + amount client-side
+        // Fallback when the cache doesn't have an entry (e.g. Bitrix invoice was deleted and recreated)
+        if (!existingId) {
+          try {
+            const titleSearch = await callBitrix('crm.item.list', {
+              entityTypeId: 31,
+              filter: { '%title': voucher.partyName },
+              select: ['id', 'title', 'opportunity'],
+            });
+            const matchedItem = (titleSearch.result?.items || []).find(item => {
+              const itemAmt = parseFloat(item.opportunity) || 0;
+              return Math.abs(itemAmt - voucher.amount) < 1 &&
+                (item.title || '').toLowerCase().startsWith(voucher.partyName.toLowerCase());
+            });
+            if (matchedItem) {
+              existingId = matchedItem.id;
+              logger.info('[ItemInvoice] Invoice found by %title+amount dedup', {
+                voucherNumber: voucher.voucherNumber,
+                invoiceId: existingId,
+                title: matchedItem.title,
+                amount: matchedItem.opportunity,
+              });
+            }
+          } catch (e) {
+            logger.warn('[ItemInvoice] %title search failed', {
+              voucherNumber: voucher.voucherNumber,
+              error: e.message,
+            });
+          }
+        }
+
         let partyIds = null;
 
         // If found, update and skip creating new
@@ -644,6 +714,65 @@ async function processItemInvoices() {
                 dealId,
                 amount: voucher.amount,
               });
+
+              // CHECK 4: Linked-deal dedup — if this deal already has a Smart Invoice, update it instead of creating a duplicate
+              // This prevents re-creating invoices that already exist in Bitrix24 for the same deal,
+              // which happens when Tally has manual vouchers with same party/amount as already-synced ones.
+              if (!existingId) {
+                try {
+                  const linkedCheck = await callBitrix('crm.item.list', {
+                    entityTypeId: 31,
+                    filter: { '=parentId2': dealId },
+                    select: ['id', 'title', 'opportunity'],
+                  });
+                  const linkedItems = linkedCheck.result?.items || [];
+                  if (linkedItems.length > 0) {
+                    existingId = linkedItems[0].id;
+                    logger.info('[ItemInvoice] Invoice found by parentId2 (linked deal)', {
+                      voucherNumber: voucher.voucherNumber,
+                      invoiceId: existingId,
+                      dealId,
+                      title: linkedItems[0].title,
+                    });
+                  }
+                } catch (linkErr) {
+                  logger.warn('[ItemInvoice] parentId2 lookup failed — trying deal-title fallback', {
+                    voucherNumber: voucher.voucherNumber,
+                    dealId,
+                    error: linkErr.message,
+                  });
+                  // Fallback: try searching by deal title pattern on the invoice
+                  try {
+                    const deal = await callBitrix('crm.deal.get', { id: Number(dealId) });
+                    const dealTitle = deal.result?.TITLE || '';
+                    if (dealTitle) {
+                      const titleParts = dealTitle.split(' - ');
+                      const partyPrefix = titleParts.slice(0, -1).join(' - ') || titleParts[0];
+                      if (partyPrefix) {
+                        const titleSearch = await callBitrix('crm.item.list', {
+                          entityTypeId: 31,
+                          filter: { '%title': partyPrefix },
+                          select: ['id', 'title', 'opportunity'],
+                        });
+                        const matched = (titleSearch.result?.items || []).filter(item => {
+                          const itemAmt = parseFloat(item.opportunity) || 0;
+                          return Math.abs(itemAmt - voucher.amount) < 1 &&
+                            (item.title || '').toLowerCase().startsWith(partyPrefix.toLowerCase());
+                        });
+                        if (matched.length > 0) {
+                          existingId = matched[0].id;
+                          logger.info('[ItemInvoice] Invoice found by deal-title fallback', {
+                            voucherNumber: voucher.voucherNumber,
+                            invoiceId: existingId,
+                            dealTitle,
+                            title: matched[0].title,
+                          });
+                        }
+                      }
+                    }
+                  } catch (_) {}
+                }
+              }
             } else {
               logger.info('[ItemInvoice] No matching deal — will create new deal', {
                 voucherNumber: voucher.voucherNumber,
@@ -705,6 +834,50 @@ async function processItemInvoices() {
               message: createErr.message,
             });
           }
+        }
+
+        // Linked-deal dedup guard: if existingId was set by the deal-match check above
+        // (check 4), update and skip creation instead of duplicating
+        if (existingId) {
+          try {
+            const updateCheck = await callBitrix('crm.item.get', {
+              entityTypeId: 31,
+              id: existingId,
+            });
+            const existingFields = updateCheck.result;
+            if (!existingFields.UF_TALLY_VOUCHER_NO) {
+              logger.info('[ItemInvoice] Updating existing invoice with UF_TALLY_VOUCHER_NO', {
+                voucherNumber: voucher.voucherNumber,
+                invoiceId: existingId,
+              });
+              await callBitrix('crm.item.update', {
+                entityTypeId: 31,
+                id: existingId,
+                fields: {
+                  title: expectedTitle,
+                  UF_TALLY_VOUCHER_NO: voucher.voucherNumber,
+                  UF_TALLY_SYNCED: 'Y',
+                },
+              });
+            }
+          } catch (updateErr) {
+            logger.warn('[ItemInvoice] Failed to update invoice from linked-deal check', {
+              voucherNumber: voucher.voucherNumber,
+              invoiceId: existingId,
+              error: updateErr.message,
+            });
+          }
+
+          newCache[cacheKey] = {
+            invoiceId:     existingId,
+            syncedAt:      new Date().toISOString(),
+            source:        'linked-deal-check',
+            partyName:     voucher.partyName,
+            voucherNumber: voucher.voucherNumber,
+          };
+          saveCache(newCache);
+          skipped++;
+          continue;
         }
 
         // Step 2 — Create the Smart Invoice in Bitrix24
