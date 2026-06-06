@@ -8,6 +8,7 @@ const webhookRoutes   = require('./routes/webhook');
 const eventsRoutes    = require('./routes/events');
 const oauthRoutes     = require('./routes/oauth');
 const dashboardRoutes = require('./routes/dashboard');
+const licenseRoutes   = require('./routes/license');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -45,6 +46,7 @@ app.use('/bitrix/oauth', oauthRoutes);
 
 // Dashboard — serve static HTML + push/pull API
 app.use('/dashboard', dashboardRoutes);
+app.use('/api/license', licenseRoutes);
 
 // ── Error handler ─────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {

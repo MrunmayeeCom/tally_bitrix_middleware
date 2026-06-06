@@ -28,9 +28,29 @@ let _pollerInterval = null;
 
 async function registerClient(cfg) {
   const clientId  = getClientId();
-  _state.lockedClientId = clientId; // lock it so polls always use same ID
-  const email     = cfg.customerEmail || process.env.CUSTOMER_EMAIL || '';
-  const bitrixUrl = cfg.bitrixUrl     || process.env.BITRIX_WEBHOOK_URL || '';
+  _state.lockedClientId = clientId;
+  const bitrixUrl = cfg.bitrixUrl || process.env.BITRIX_WEBHOOK_URL || '';
+
+  // Fetch customerEmail from Render server (Option 2)
+  // Falls back to env var only if Render is unreachable
+  let email = cfg.customerEmail || process.env.CUSTOMER_EMAIL || '';
+  try {
+    const axios    = require('axios');
+    const emailRes = await axios.get(
+      `${RENDER_URL}/api/license/email?clientId=${clientId}`,
+      { timeout: 5000 }
+    );
+    if (emailRes.data?.success && emailRes.data?.email) {
+      email = emailRes.data.email;
+      process.env.CUSTOMER_EMAIL = email;
+      logger.info('[Poller] customerEmail fetched from Render server', { email });
+    }
+  } catch (e) {
+    logger.warn('[Poller] Could not fetch customerEmail from Render — using local fallback', {
+      message: e.message,
+      fallback: email || 'none',
+    });
+  }
 
   if (!email || !bitrixUrl) {
     logger.warn('[Poller] Skipping registration — email or bitrixUrl not set');
