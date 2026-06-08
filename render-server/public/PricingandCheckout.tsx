@@ -35,7 +35,7 @@ interface PricingAndCheckoutProps { onBack?: () => void; }
 // CONSTANTS
 // ─────────────────────────────────────────────
 
-const LMS_BASE_URL = "https://lisence-system.onrender.com";
+const LMS_BASE_URL = "https://license-system-v6ht.onrender.com";
 const LMS_API_KEY  = "my-secret-key-123";
 const PRODUCT_ID   = "69ba90211cf0356ba779b317";
 
@@ -417,7 +417,6 @@ export function PricingAndCheckout({ onBack }: PricingAndCheckoutProps) {
     try {
       // 1. Load Razorpay SDK
       const { loadRazorpay } = await import("../../src/utils/loadRazorpay");
-      const loaded = await loadRazorpay();
       if (!loaded) { showToast("Failed to load payment gateway. Please try again.", "error"); setSubmitting(false); return; }
 
       // 2. Compute final amount (with GST, after discount)
@@ -481,6 +480,11 @@ export function PricingAndCheckout({ onBack }: PricingAndCheckoutProps) {
             const verifyData = await verifyRes.json();
             if (!verifyData.success) throw new Error(verifyData.message || "Verification failed");
             showToast("🎉 Payment successful! License activated.", "success");
+            // Give user 2 seconds to see the toast, then redirect back to dashboard
+            setTimeout(() => {
+              const dashUrl = `https://tally-bitrix-middleware.onrender.com/dashboard-ui?clientId=${CLIENT_ID}`;
+              window.location.href = dashUrl;
+            }, 2000);
           } catch (err: any) {
             showToast(err?.message || "Payment verification failed. Contact support.", "error");
           } finally {

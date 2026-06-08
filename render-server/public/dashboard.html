@@ -1028,8 +1028,31 @@ async function loadOverdue() {
   }
 }
 
+async function checkLicenseAndShowBanner() {
+  try {
+    const r = await fetch(
+      `${API}/dashboard/data?clientId=${clientId}`,
+      { headers: HEADERS, signal: AbortSignal.timeout(5000) }
+    );
+    const json = await r.json();
+    const licenseActive = json.licenseStatus === 'active';
+    const banner = document.getElementById('license-banner');
+    if (banner) banner.style.display = licenseActive ? 'none' : 'flex';
+  } catch {
+    // show banner by default if check fails
+    const banner = document.getElementById('license-banner');
+    if (banner) banner.style.display = 'flex';
+  }
+}
+
+function openPricing() {
+  const url = `https://tally-bitrix-middleware.onrender.com/pricing?clientId=${clientId}`;
+  window.open(url, '_blank', 'width=1100,height=800,scrollbars=yes,resizable=yes');
+}
+
 async function initDashboard() {
   await loadConnStatus();
+  checkLicenseAndShowBanner();
   loadPlanFeatures();
   loadCompanySwitcher();
   refreshAll(null);
@@ -1175,7 +1198,8 @@ setInterval(() => refreshAll(null), 30000);
 setInterval(loadLastSync, 60000);
 setInterval(loadOverdue, 120000);
 setInterval(loadConnStatus, 30000);
-setInterval(loadPlanFeatures, 5 * 60 * 1000); // refresh plan features every 5 min
+setInterval(loadPlanFeatures, 5 * 60 * 1000);
+setInterval(checkLicenseAndShowBanner, 30 * 1000); // re-check license every 30s // refresh plan features every 5 min
 setInterval(loadInventoryMatch, 30 * 60 * 1000); // refresh inventory match every 30 min
 setInterval(loadReceiptMatch,   15 * 60 * 1000); // refresh receipt match every 15 min
 </script>

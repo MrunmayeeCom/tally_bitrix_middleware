@@ -85,7 +85,13 @@ router.post('/verify', async (req, res) => {
       { customerEmail, licenseId, licensePlan: plan, licenseStatus: 'active', licenseLinkedAt: new Date() }
     );
 
-    res.json({ success: true, licenseId, plan, message: 'License activated — sync will resume within 6 hours' });
+    res.json({
+      success:       true,
+      licenseId,
+      plan,
+      licenseStatus: 'active',
+      message:       'License activated — sync will resume within 6 hours',
+    });
   } catch (e) {
     console.error('[Purchase] Verify error:', e.message);
     res.status(500).json({ success: false, message: e.message });

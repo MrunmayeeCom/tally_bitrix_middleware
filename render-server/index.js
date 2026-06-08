@@ -54,15 +54,18 @@ app.use('/api/license', licenseRoutes);
 // Purchase (Razorpay order creation + verification)
 app.use('/purchase', purchaseRoutes);
 
-// Serve React-built pricing page (output of `npm run build`)
-app.use('/pricing', express.static(path.join(__dirname, 'public', 'pricing')));
-app.get('/pricing/*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'pricing', 'index.html'));
-});
-
 // Serve dashboard HTML
 app.get('/dashboard-ui', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+});
+
+// Serve React-built pricing page — must be last so it catches /pricing/*
+app.use('/pricing', express.static(path.join(__dirname, 'public', 'pricing')));
+app.get('/pricing', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'pricing', 'index.html'));
+});
+app.get('/pricing/*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'pricing', 'index.html'));
 });
 
 // ── Error handler ─────────────────────────────────────────────────────────────
