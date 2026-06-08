@@ -417,6 +417,7 @@ export function PricingAndCheckout({ onBack }: PricingAndCheckoutProps) {
     try {
       // 1. Load Razorpay SDK
       const { loadRazorpay } = await import("../../src/utils/loadRazorpay");
+      const loaded = await loadRazorpay();
       if (!loaded) { showToast("Failed to load payment gateway. Please try again.", "error"); setSubmitting(false); return; }
 
       // 2. Compute final amount (with GST, after discount)

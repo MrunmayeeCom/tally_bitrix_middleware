@@ -1026,6 +1026,7 @@ async function loadOverdue() {
 
 async function initDashboard() {
   await loadConnStatus();
+  checkLicenseAndShowBanner();
   loadPlanFeatures();
   loadCompanySwitcher();
   refreshAll(null);
@@ -1174,8 +1175,30 @@ async function loadReceiptMatch() {
   }
 }
 
+function openPricing() {
+  const url = `https://tally-bitrix-middleware.onrender.com/pricing?clientId=${clientId}`;
+  window.open(url, '_blank', 'width=1100,height=800,scrollbars=yes,resizable=yes');
+}
+
+async function checkLicenseAndShowBanner() {
+  try {
+    const r = await fetch(
+      `${API}/dashboard/data?clientId=${clientId}`,
+      { headers: HEADERS, signal: AbortSignal.timeout(5000) }
+    );
+    const json = await r.json();
+    const licenseActive = json.licenseStatus === 'active';
+    const banner = document.getElementById('license-banner');
+    if (banner) banner.style.display = licenseActive ? 'none' : 'flex';
+  } catch {
+    const banner = document.getElementById('license-banner');
+    if (banner) banner.style.display = 'flex';
+  }
+}
+
 initDashboard();
 setInterval(updateNextSync, 1000);
+setInterval(checkLicenseAndShowBanner, 30 * 1000);
 setInterval(() => refreshAll(null), 30000);
 setInterval(loadLastSync, 60000);
 setInterval(loadOverdue, 120000);

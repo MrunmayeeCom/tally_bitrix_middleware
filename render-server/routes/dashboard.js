@@ -1,5 +1,5 @@
 const express = require('express');
-const router  = express.Router();333
+const router  = express.Router();
 const path    = require('path');
 const fs      = require('fs');
 
@@ -99,7 +99,15 @@ router.get('/data', (req, res) => {
   const pushedAt  = new Date(data.pushedAt);
   const agentLive = (Date.now() - pushedAt.getTime()) < 5 * 60 * 1000;
 
-  res.json({ success: true, agentLive, ...data });
+  // Pull licenseStatus from OAuthToken if available, fallback to pushed data
+  let licenseStatus = data.licenseStatus || 'inactive';
+  try {
+    const OAuthToken = require('../models/OAuthToken');
+    const token = await OAuthToken.findOne({ clientId }).lean();
+    if (token?.licenseStatus) licenseStatus = token.licenseStatus;
+  } catch {}
+
+  res.json({ success: true, agentLive, licenseStatus, ...data });
 });
 
 module.exports = router;
