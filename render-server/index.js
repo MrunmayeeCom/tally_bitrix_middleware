@@ -9,6 +9,7 @@ const eventsRoutes    = require('./routes/events');
 const oauthRoutes     = require('./routes/oauth');
 const dashboardRoutes = require('./routes/dashboard');
 const licenseRoutes   = require('./routes/license');
+const purchaseRoutes  = require('./routes/purchase');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -44,9 +45,25 @@ app.use('/api', eventsRoutes);
 // OAuth
 app.use('/bitrix/oauth', oauthRoutes);
 
-// Dashboard — serve static HTML + push/pull API
+// Dashboard data push/pull
 app.use('/dashboard', dashboardRoutes);
+
+// License management
 app.use('/api/license', licenseRoutes);
+
+// Purchase (Razorpay order creation + verification)
+app.use('/purchase', purchaseRoutes);
+
+// Serve React-built pricing page (output of `npm run build`)
+app.use('/pricing', express.static(path.join(__dirname, 'public', 'pricing')));
+app.get('/pricing/*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'pricing', 'index.html'));
+});
+
+// Serve dashboard HTML
+app.get('/dashboard-ui', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+});
 
 // ── Error handler ─────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {

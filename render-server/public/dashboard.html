@@ -332,6 +332,15 @@ html,body{
     ⚠️ Agent offline — make sure TallyBitrixSync desktop app is running on the client machine
   </div>
 
+  <!-- License expired banner — shown when no active license -->
+  <div class="offline-banner" id="license-banner" style="background:#fef8ec;border-color:#f5c84a;color:#c47a00;">
+    ⚠️ No active license — 
+    <a href="#" onclick="openPricing()" 
+      style="color:#c47a00;font-weight:700;text-decoration:underline;">
+      Click here to purchase
+    </a>
+  </div>
+
   <div class="stats">
     <div class="stat blue">
       <div class="stat-stripe"></div>
