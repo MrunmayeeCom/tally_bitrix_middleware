@@ -88,7 +88,7 @@ router.post('/push', (req, res) => {
 });
 
 // GET /dashboard/data?clientId=xxx — dashboard fetches latest data
-router.get('/data', (req, res) => {
+router.get('/data', async (req, res) => {
   const { clientId } = req.query;
   if (!clientId) return res.status(400).json({ success: false, message: 'clientId required' });
 
