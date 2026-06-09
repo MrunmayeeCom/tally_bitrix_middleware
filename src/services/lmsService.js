@@ -3,7 +3,7 @@
  * Calls the License Management System to validate license by customer email.
  *
  * LMS Base URL : https://lisence-system-1.onrender.com
- * Public route : GET /api/public-license/active-license/:email  (no auth needed)
+ * Public route : GET /api/public-license/actve-license/:email  (no auth needed)
  * Heartbeat    : POST /api/heartbeat/:licenseId
  * External key : x-api-key: my-secret-key-123  (for customer-sync routes only)
  */
@@ -241,7 +241,7 @@ let _currentLicenseId  = null;
 
 /**
  * Validate license for the given customer email.
- * Uses: GET /api/public-license/active-license/:email  (no auth)
+ * Uses: GET /api/public-license/actve-license/:email  (no auth)
  * Returns: { valid, plan, features, licenseId, endDate, ... }
  */
 async function validateLicense(customerEmail) {

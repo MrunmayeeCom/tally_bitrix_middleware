@@ -45,7 +45,7 @@ export const loginCustomer = async (data: {
 
 export const checkActiveLicense = async (email: string) => {
   const res = await API.get(
-    `/api/external/active-license/${email}?productId=${PRODUCT_ID}`,
+    `/api/external/actve-license/${email}?productId=${PRODUCT_ID}`,
     { headers: { "x-api-key": API_KEY } }
   );
   return res.data?.activeLicense || null;
