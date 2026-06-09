@@ -60,12 +60,8 @@ app.get('/dashboard-ui', (req, res) => {
 });
 
 // Serve React-built pricing page — must be last so it catches /pricing/*
-app.use('/pricing', express.static(path.join(__dirname, 'public', 'pricing')));
 app.get('/pricing', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'pricing', 'index.html'));
-});
-app.get('/pricing/*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'pricing', 'index.html'));
+  res.sendFile(path.join(__dirname, 'public', 'pricing.html'));
 });
 
 // ── Error handler ─────────────────────────────────────────────────────────────
