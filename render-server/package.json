@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "build": "vite build && vite build --config vite.dashboard.config.ts",
-    "build:pricing": "vite build",
-    "build:dashboard": "vite build --config vite.dashboard.config.ts",
+    "build": "vite build --config vite.config.ts && vite build --config vite.dashboard.config.ts",
     "start": "node index.js",
     "dev": "nodemon index.js"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
   },
   "dependencies": {
     "axios": "^1.6.0",
@@ -18,9 +19,7 @@
     "framer-motion": "^11.0.0",
     "lucide-react": "^0.383.0",
     "react": "^18.0.0",
-    "react-dom": "^18.0.0"
-  },
-  "devDependencies": {
+    "react-dom": "^18.0.0",
     "vite": "^5.0.0",
     "@vitejs/plugin-react": "^4.0.0",
     "typescript": "^5.0.0"

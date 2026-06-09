@@ -7,18 +7,19 @@ const fs      = require('fs');
 // { [clientId]: { stats, history, lastSync, connStatus, pushedAt } }
 const store = {};
 
-// GET /dashboard — serve the dashboard HTML
-// Bitrix24 sends member_id in query — use it to find clientId from MongoDB
+// GET /dashboard/info — resolve clientId from member_id or domain
+// (kept for legacy redirect support)
 router.get('/', async (req, res) => {
-  const htmlPath = path.join(__dirname, '..', 'public', 'dashboard.html');
+  const htmlPath = path.join(__dirname, '..', 'public', 'index.html');
   if (!fs.existsSync(htmlPath)) {
     return res.status(404).send('Dashboard not found.');
   }
 
-  // If clientId already in query — serve directly
+  // If clientId already in query — serve new TSX app
   if (req.query.clientId) {
-    console.log('[Dashboard] Serving with clientId:', req.query.clientId);
-    return res.sendFile(htmlPath);
+    console.log('[Dashboard] Serving TSX app with clientId:', req.query.clientId);
+    const tsxPath = path.join(__dirname, '..', 'public', 'index.html');
+    return res.sendFile(tsxPath);
   }
 
   // Bitrix24 passes member_id in query when opening the app
@@ -69,8 +70,8 @@ router.get('/', async (req, res) => {
     console.error('[Dashboard] latest token fallback failed:', e.message);
   }
 
-  // Absolute fallback — serve dashboard anyway, it will show "agent offline"
-  res.sendFile(htmlPath);
+  // Absolute fallback — redirect to TSX app
+  res.redirect('/dashboard');
 });
 
 // POST /dashboard/push?clientId=xxx — agent pushes its status up
