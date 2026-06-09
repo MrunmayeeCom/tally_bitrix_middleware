@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const API = axios.create({
-  baseURL: "https://license-system-v6ht.onrender.com",
+  baseURL: import.meta.env.VITE_LMS_BASE_URL || "https://license-system-v6ht.onrender.com",
 
   headers: {
     "Content-Type": "application/json",

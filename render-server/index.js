@@ -54,8 +54,13 @@ app.use('/api/license', licenseRoutes);
 // Purchase (Razorpay order creation + verification)
 app.use('/purchase', purchaseRoutes);
 
-// Serve dashboard HTML
+// Serve dashboard HTML (new TSX app — handles auth+license+dashboard)
 app.get('/dashboard-ui', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Legacy dashboard for iframe use inside new app
+app.get('/dashboard-legacy', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 

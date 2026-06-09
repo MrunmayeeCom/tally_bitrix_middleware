@@ -22,7 +22,9 @@ export const loginUser = async (email: string, password: string) => {
   // Store token and user data
   if (res.data.token) {
     localStorage.setItem("token", res.data.token);
+    localStorage.setItem("lms_token", res.data.token);
     localStorage.setItem("userData", JSON.stringify(res.data.user));
+    localStorage.setItem("lms_user", JSON.stringify(res.data.user));
   }
 
   return res.data;
@@ -40,7 +42,9 @@ export const registerUser = async (name: string, email: string, password: string
   // Store token and user data
   if (res.data.token) {
     localStorage.setItem("token", res.data.token);
+    localStorage.setItem("lms_token", res.data.token);
     localStorage.setItem("userData", JSON.stringify(res.data.user));
+    localStorage.setItem("lms_user", JSON.stringify(res.data.user));
   }
 
   return res.data;
