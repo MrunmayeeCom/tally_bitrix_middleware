@@ -1,4 +1,4 @@
-import {PricingAndCheckout} from "../public/PricingandCheckout";
+import {PricingAndCheckout} from "./PricingandCheckout";
 
 export default function App() {
   return (

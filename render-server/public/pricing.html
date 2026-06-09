@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Pricing — Middleware</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;background:#f8fafc;color:#0f172a;min-height:100vh}
+button{font-family:'Inter',sans-serif;cursor:pointer}
+input{font-family:'Inter',sans-serif}
+
+/* ── Toast ── */
+.toast-wrap{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{pointer-events:auto;display:flex;align-items:flex-start;gap:10px;background:#fff;border:1px solid #e5e7eb;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,0.10);padding:13px 16px;min-width:270px;max-width:330px;font-size:13px;color:#1f2937;font-weight:500;line-height:1.5;animation:slideIn .25s ease}
+.toast.success{border-left:3px solid #4ade80}
+.toast.error{border-left:3px solid #f87171}
+.toast-close{background:none;border:none;color:#9ca3af;padding:0;margin-left:auto;font-size:16px;line-height:1}
+@keyframes slideIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
+
+/* ── Modal overlay ── */
+.modal-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:0 16px;background:rgba(15,23,42,0.45);backdrop-filter:blur(6px)}
+.modal-box{background:#fff;width:100%;max-width:380px;border-radius:24px;box-shadow:0 32px 80px rgba(0,0,0,0.16);padding:40px 32px 32px;text-align:center;animation:popIn .25s ease}
+@keyframes popIn{from{opacity:0;scale:0.94;transform:translateY(16px)}to{opacity:1;scale:1;transform:translateY(0)}}
+
+/* ── Topbar ── */
+.topbar{background:#fff;border-bottom:1px solid #e8ecf0;padding:0 32px;height:60px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:30;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.brand{display:flex;align-items:center;gap:10px}
+.brand-icon{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#0d7a8a 0%,#0a3d5c 100%);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(13,122,138,0.3);color:#fff;font-size:16px}
+.brand-name{font-size:15px;font-weight:700;color:#0f172a;letter-spacing:-0.02em}
+.steps{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:500}
+.step{display:flex;align-items:center;gap:5px;color:#94a3b8}
+.step.active{color:#0f172a;font-weight:600}
+.step.done{color:#0d7a8a}
+.step-dot{width:20px;height:20px;border-radius:50%;background:#e2e8f0;color:#94a3b8;font-size:10px;font-weight:700;display:inline-flex;align-items:center;justify-content:center}
+.step.active .step-dot{background:linear-gradient(135deg,#0d7a8a,#0a3d5c);color:#fff}
+.step.done .step-dot{background:#dcfce7;color:#16a34a}
+.step-sep{color:#d1d5db}
+
+/* ── Page ── */
+.page{max-width:1100px;margin:0 auto;padding:36px 24px 80px}
+.back-btn{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:500;color:#64748b;background:none;border:none;margin-bottom:20px;transition:color .15s}
+.back-btn:hover{color:#0d7a8a}
+
+/* ── Hero ── */
+.plan-hero{text-align:center;margin-bottom:40px;padding-top:12px}
+.hero-tag{display:inline-flex;align-items:center;gap:6px;background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;font-size:11px;font-weight:600;padding:4px 12px;border-radius:100px;margin-bottom:14px;letter-spacing:.03em}
+.hero-title{font-size:clamp(1.8rem,3.5vw,2.6rem);font-weight:800;color:#0f172a;letter-spacing:-.04em;margin:0 0 8px;line-height:1.1}
+.hero-sub{font-size:15px;color:#64748b;margin:0 auto 32px;max-width:480px}
+
+/* ── Cycle selector ── */
+.cycle-selector{display:inline-grid;grid-template-columns:repeat(3,1fr);gap:6px;background:#fff;border:1px solid #e8ecf0;border-radius:16px;padding:6px;box-shadow:0 2px 12px rgba(0,0,0,0.06);margin-bottom:36px;width:460px;max-width:100%}
+.cycle-pill{padding:12px 16px;border-radius:10px;border:1.5px solid #e8ecf0;font-size:13px;font-weight:600;background:#fafbfc;color:#64748b;text-align:center;transition:all .18s;display:flex;align-items:center;justify-content:center;gap:7px;white-space:nowrap}
+.cycle-pill:hover{color:#0d7a8a;background:#f0fdfc}
+.cycle-pill.active{background:linear-gradient(135deg,#0d7a8a,#0a3d5c);color:#fff;border-color:transparent;box-shadow:0 4px 14px rgba(13,122,138,0.28)}
+.cycle-disc{font-size:10px;font-weight:700;padding:2px 7px;border-radius:100px;background:#d1fae5;color:#065f46}
+.cycle-pill.active .cycle-disc{background:rgba(255,255,255,0.22);color:#fff}
+
+/* ── Plan card ── */
+.plan-wrap{display:flex;justify-content:center;margin-bottom:48px}
+.plan-card{width:100%;max-width:540px;background:#fff;border:2px solid #99e6f0;border-radius:22px;overflow:hidden;box-shadow:0 8px 40px rgba(13,122,138,0.12),0 2px 8px rgba(0,0,0,0.04);position:relative}
+.plan-card::before{content:'';position:absolute;top:0;left:0;right:0;height:4px;background:linear-gradient(90deg,#0d7a8a,#0a3d5c)}
+.plan-top{background:linear-gradient(135deg,#f0fdfc 0%,#e6f4f8 100%);padding:32px 32px 24px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.plan-name-chip{display:inline-flex;align-items:center;gap:7px;background:linear-gradient(135deg,#0d7a8a,#0a3d5c);color:#fff;font-size:13px;font-weight:700;padding:6px 16px;border-radius:100px;margin-bottom:12px;box-shadow:0 2px 8px rgba(13,122,138,0.3)}
+.plan-users{display:flex;align-items:center;gap:5px;font-size:13px;color:#0d7a8a;font-weight:500}
+.price-block{text-align:right;flex-shrink:0}
+.price-original{font-size:14px;color:#94a3b8;text-decoration:line-through;margin-bottom:2px}
+.price-main{font-size:2.8rem;font-weight:800;color:#0d7a8a;letter-spacing:-.05em;line-height:1}
+.price-period{font-size:12px;color:#94a3b8;margin-top:4px}
+.price-save{display:inline-block;background:#d1fae5;color:#065f46;font-size:11px;font-weight:700;padding:3px 10px;border-radius:100px;margin-top:6px}
+.plan-feats{padding:22px 32px 26px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.plan-feat{display:flex;align-items:center;gap:8px;font-size:13px;color:#374151;font-weight:500}
+.feat-check{width:18px;height:18px;border-radius:50%;background:#dcfce7;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:10px;color:#16a34a;font-weight:800}
+.plan-cta{padding:0 32px 28px}
+.plan-btn{width:100%;height:52px;border-radius:13px;border:none;background:linear-gradient(135deg,#0d7a8a 0%,#0a3d5c 100%);color:#fff;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:9px;transition:transform .15s,box-shadow .15s;box-shadow:0 4px 16px rgba(13,122,138,0.3);letter-spacing:-.01em}
+.plan-btn:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(13,122,138,0.38)}
+
+/* ── Divider ── */
+.checkout-divider{display:flex;align-items:center;gap:16px;margin-bottom:32px}
+.divider-line{flex:1;height:1px;background:#e8ecf0}
+.divider-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:#94a3b8;white-space:nowrap}
+
+/* ── Checkout grid ── */
+.checkout-grid{display:grid;grid-template-columns:1fr 360px;gap:20px;align-items:start}
+@media(max-width:860px){.checkout-grid{grid-template-columns:1fr}}
+
+/* ── Card ── */
+.card{background:#fff;border:1px solid #e8ecf0;border-radius:18px;padding:28px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,0.03)}
+.card-header{display:flex;align-items:center;gap:8px;margin-bottom:20px}
+.step-badge{width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#0d7a8a,#0a3d5c);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.card-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#94a3b8}
+
+/* ── Form ── */
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field-full{grid-column:1 / -1}
+.label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8}
+.req{color:#ef4444;margin-left:2px}
+.opt{text-transform:none;font-weight:400;color:#cbd5e1;letter-spacing:0}
+.input-wrap{position:relative}
+.input-ico{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#cbd5e1;pointer-events:none;font-size:14px}
+.input{width:100%;height:44px;padding:0 14px;border:1.5px solid #e8ecf0;border-radius:10px;font-size:13.5px;color:#0f172a;background:#fafbfc;outline:none;transition:border-color .15s,box-shadow .15s}
+.input::placeholder{color:#c8d0da}
+.input:focus{border-color:#0d7a8a;background:#fff;box-shadow:0 0 0 3px rgba(13,122,138,0.09)}
+.input-with-ico{padding-left:38px}
+.input-readonly{background:#f1f5f9!important;color:#94a3b8!important;cursor:not-allowed;border-color:#e8ecf0!important;box-shadow:none!important}
+.submit-row{grid-column:1 / -1;display:flex;justify-content:flex-end;margin-top:4px}
+.submit-btn{display:inline-flex;align-items:center;gap:8px;padding:0 28px;height:48px;border-radius:12px;border:none;background:linear-gradient(135deg,#0d7a8a 0%,#0a3d5c 100%);color:#fff;font-size:14px;font-weight:600;transition:transform .15s,box-shadow .15s;box-shadow:0 4px 14px rgba(13,122,138,0.28)}
+.submit-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 20px rgba(13,122,138,0.38)}
+.submit-btn:disabled{opacity:.6;cursor:not-allowed}
+
+/* ── Summary card ── */
+.summary-card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden;position:sticky;top:76px}
+.summary-header{background:linear-gradient(135deg,#0d7a8a 0%,#0a3d5c 100%);padding:20px 24px;color:#fff}
+.summary-label{font-size:11px;font-weight:700;letter-spacing:.1em;color:rgba(255,255,255,0.6);margin-bottom:10px}
+.summary-plan-chip{display:inline-block;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);border-radius:20px;padding:4px 14px;font-size:13px;font-weight:600;margin-bottom:10px}
+.summary-users{display:flex;align-items:center;gap:6px;font-size:13px;color:rgba(255,255,255,0.8)}
+.cycle-switcher{padding:16px 24px}
+.cycle-switch-label{font-size:10px;font-weight:700;letter-spacing:.1em;color:#9ca3af;margin-bottom:12px}
+.cycle-switch-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.cycle-switch-btn{display:flex;flex-direction:column;align-items:center;padding:10px 8px;border-radius:10px;border:1.5px solid #e5e7eb;background:#f9fafb;color:#374151;transition:all .15s;font-size:12px;font-weight:600}
+.cycle-switch-btn:hover{border-color:#0d7a8a;background:#f0fdfc}
+.cycle-switch-btn.active{background:linear-gradient(135deg,#0d7a8a,#0a3d5c);color:#fff;border-color:transparent}
+.cycle-switch-disc{font-size:10px;font-weight:700;padding:1px 5px;border-radius:4px;margin-top:3px;background:#d1fae5;color:#065f46}
+.cycle-switch-btn.active .cycle-switch-disc{background:rgba(255,255,255,0.2);color:#fff}
+.breakdown{padding:0 24px 16px}
+.breakdown-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:13px}
+.breakdown-row .key{color:#6b7280}
+.breakdown-row .val{color:#111827;font-weight:500}
+.breakdown-row .val.bold{font-weight:600}
+.breakdown-row .discount{color:#0d7a8a;font-weight:600}
+.divider-hr{height:1px;background:#f3f4f6;margin:0 24px}
+.subtotal-section{padding:16px 24px}
+.total-box{margin:0 24px 16px;background:#0f172a;border-radius:12px;padding:16px 20px;display:flex;justify-content:space-between;align-items:center}
+.total-box .total-label{font-size:14px;font-weight:600;color:#fff}
+.total-box .total-amount{font-size:20px;font-weight:700;color:#fff}
+.trust-list{display:flex;flex-direction:column;gap:6px;padding:0 24px 20px}
+.trust-item{display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280}
+
+/* ── Security badges ── */
+.security-badges{display:flex;align-items:center;justify-content:center;gap:28px;margin-top:16px;flex-wrap:wrap}
+.badge-item{display:flex;align-items:center;gap:6px;font-size:12px;color:#94a3b8;font-weight:500}
+
+/* ── Loading ── */
+.loading{min-height:100vh;display:flex;align-items:center;justify-content:center}
+.spinner{width:36px;height:36px;border:3px solid #e2e8f0;border-top-color:#0d7a8a;border-radius:50%;animation:spin .75s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-txt{font-size:13px;color:#94a3b8;text-align:center}
+.error-state{min-height:100vh;display:flex;align-items:center;justify-content:center}
+.error-box{text-align:center;max-width:400px}
+.retry-btn{padding:11px 28px;border-radius:11px;border:none;background:linear-gradient(135deg,#0d7a8a,#0a3d5c);color:#fff;font-size:14px;font-weight:600;box-shadow:0 4px 14px rgba(13,122,138,0.28)}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+const { useState, useEffect, useCallback } = React;
+
+const LMS_BASE_URL = "https://license-system-v6ht.onrender.com";
+const LMS_API_KEY  = "my-secret-key-123";
+const PRODUCT_ID   = "69ba90211cf0356ba779b317";
+const APP_BASE_URL = "https://tally-bitrix-middleware.onrender.com";
+const RAZORPAY_KEY_ID = "rzp_live_XXXXXXXXXXXXXXXX"; // replace with actual key
+
+const CYCLES = [
+  { key:"quarterly",   label:"Quarterly",   months:3  },
+  { key:"half-yearly", label:"Half-Yearly", months:6  },
+  { key:"yearly",      label:"Yearly",      months:12 },
+];
+
+const BILLING_PERIOD_LABEL = {
+  monthly:"1 month", quarterly:"3 months", "half-yearly":"6 months", yearly:"12 months"
+};
+
+function getClientId() {
+  try { return new URLSearchParams(window.location.search).get("clientId") || ""; }
+  catch { return ""; }
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function ToastContainer({ toasts, onRemove }) {
+  return React.createElement("div", { className:"toast-wrap" },
+    toasts.map(t =>
+      React.createElement("div", { key:t.id, className:`toast ${t.type}` },
+        React.createElement("span", null, t.type === "success" ? "✓" : "✕"),
+        React.createElement("span", null, t.message),
+        React.createElement("button", { className:"toast-close", onClick:()=>onRemove(t.id) }, "×")
+      )
+    )
+  );
+}
+
+// ── Already Active Modal ───────────────────────────────────────────────────────
+function AlreadyActiveModal({ planName, onClose }) {
+  return React.createElement("div", { className:"modal-overlay" },
+    React.createElement("div", { className:"modal-box" },
+      React.createElement("div", {
+        style:{ width:64,height:64,borderRadius:"50%",background:"linear-gradient(135deg,#dcfce7,#bbf7d0)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px",fontSize:26 }
+      }, "✓"),
+      React.createElement("h3", { style:{ fontSize:20,fontWeight:700,marginBottom:8 } }, "Plan Already Active!"),
+      React.createElement("p", { style:{ fontSize:14,color:"#64748b",marginBottom:24,lineHeight:1.65 } },
+        "You already have an active ", React.createElement("strong", { style:{color:"#0d7a8a"} }, planName), " plan."
+      ),
+      React.createElement("button", {
+        onClick:onClose,
+        style:{ width:"100%",padding:12,borderRadius:12,border:"none",background:"linear-gradient(135deg,#0d7a8a,#0a3d5c)",color:"#fff",fontSize:14,fontWeight:600 }
+      }, "Continue")
+    )
+  );
+}
+
+// ── Checkout Summary ──────────────────────────────────────────────────────────
+function CheckoutSummary({ plan, billingCycle, onCycleChange }) {
+  const discountPct = plan.discountConfig[billingCycle] ?? 0;
+  const months      = CYCLES.find(c => c.key === billingCycle).months;
+  const baseTotal   = plan.pricePerUser * months;
+  const discountAmt = Math.round((baseTotal * discountPct) / 100);
+  const subtotal    = baseTotal - discountAmt;
+  const gst         = Math.round(subtotal * 0.18 * 100) / 100;
+  const total       = Math.round((subtotal + gst) * 100) / 100;
+
+  return React.createElement("div", { className:"summary-card" },
+    React.createElement("div", { className:"summary-header" },
+      React.createElement("div", { className:"summary-label" }, "ORDER SUMMARY"),
+      React.createElement("div", { className:"summary-plan-chip" }, plan.planName),
+      React.createElement("div", { className:"summary-users" }, "👥 Includes ", plan.includedUsers, " users")
+    ),
+    React.createElement("div", { className:"cycle-switcher" },
+      React.createElement("div", { className:"cycle-switch-label" }, "BILLING CYCLE"),
+      React.createElement("div", { className:"cycle-switch-grid" },
+        CYCLES.filter(c => c.key !== "monthly").map(c => {
+          const disc   = plan.discountConfig[c.key] ?? 0;
+          const active = billingCycle === c.key;
+          return React.createElement("button", {
+            key:c.key,
+            className:`cycle-switch-btn${active?" active":""}`,
+            onClick:()=>onCycleChange(c.key)
+          },
+            React.createElement("span", null, c.label),
+            disc > 0 && React.createElement("span", { className:"cycle-switch-disc" }, `-${disc}%`)
+          );
+        })
+      )
+    ),
+    React.createElement("div", { className:"breakdown" },
+      React.createElement("div", { className:"breakdown-row" },
+        React.createElement("span", { className:"key" }, "Plan price"),
+        React.createElement("span", { className:"val" }, `₹${plan.pricePerUser.toLocaleString("en-IN")}`)
+      ),
+      React.createElement("div", { className:"breakdown-row" },
+        React.createElement("span", { className:"key" }, "Billing period"),
+        React.createElement("span", { className:"val bold" }, BILLING_PERIOD_LABEL[billingCycle])
+      ),
+      discountPct > 0 && React.createElement("div", { className:"breakdown-row" },
+        React.createElement("span", { className:"discount" }, `Discount (${discountPct}%)`),
+        React.createElement("span", { className:"discount" }, `-₹${discountAmt.toLocaleString("en-IN")}`)
+      )
+    ),
+    React.createElement("div", { className:"divider-hr" }),
+    React.createElement("div", { className:"subtotal-section" },
+      React.createElement("div", { className:"breakdown-row" },
+        React.createElement("span", { className:"key" }, "Subtotal"),
+        React.createElement("span", { className:"val" }, `₹${subtotal.toLocaleString("en-IN")}`)
+      ),
+      React.createElement("div", { className:"breakdown-row" },
+        React.createElement("span", { className:"key" }, "GST (18%)"),
+        React.createElement("span", { className:"val" }, `₹${gst.toLocaleString("en-IN")}`)
+      )
+    ),
+    React.createElement("div", { className:"total-box" },
+      React.createElement("span", { className:"total-label" }, "Total Amount"),
+      React.createElement("span", { className:"total-amount" }, `₹${total.toLocaleString("en-IN")}`)
+    ),
+    React.createElement("div", { className:"trust-list" },
+      ["Secure payment processing","Money-back guarantee","Cancel anytime"].map(t =>
+        React.createElement("div", { key:t, className:"trust-item" }, "🔒 ", t)
+      )
+    )
+  );
+}
+
+// ── Billing Form ──────────────────────────────────────────────────────────────
+function BillingForm({ formData, onChange, onSubmit, submitting }) {
+  const field = (label, name, type="text", required=true, readOnly=false, placeholder="") =>
+    React.createElement("div", { className:`field${name==="companyName"||name==="address"?" field-full":""}` },
+      React.createElement("label", { className:"label" }, label,
+        required ? React.createElement("span", { className:"req" }, " *") :
+        React.createElement("span", { className:"opt" }, " (Optional)")
+      ),
+      React.createElement("input", {
+        type, placeholder,
+        value: formData[name],
+        readOnly,
+        required,
+        className:`input${readOnly?" input-readonly":""}`,
+        onChange: readOnly ? undefined : e => onChange(name, e.target.value)
+      })
+    );
+
+  return React.createElement("form", { onSubmit },
+    React.createElement("div", { className:"form-grid" },
+      field("Company Name", "companyName", "text", true, false, "Enter company name"),
+      field("Email Address", "email", "email", true, true),
+      field("Phone Number", "phone", "tel", true, false, "+91 98765 43210"),
+      field("Address", "address", "text", true, false, "Street address"),
+      field("City", "city", "text", true, false, "City"),
+      field("State", "state", "text", true, false, "State"),
+      field("Pincode", "pincode", "text", true, false, "400001"),
+      field("GST Number", "gstNumber", "text", false, false, "22AAAAA0000A1Z5"),
+      React.createElement("div", { className:"submit-row" },
+        React.createElement("button", { type:"submit", disabled:submitting, className:"submit-btn" },
+          "💳 ", submitting ? "Processing…" : "Proceed to Payment"
+        )
+      )
+    )
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function PricingApp() {
+  const [billingCycle, setBillingCycle] = useState("quarterly");
+  const [lmsPlan, setLmsPlan]           = useState(null);
+  const [loading, setLoading]           = useState(true);
+  const [submitting, setSubmitting]     = useState(false);
+  const [showActiveModal, setShowActiveModal] = useState(false);
+  const [existingPlanName, setExistingPlanName] = useState("Current");
+  const [toasts, setToasts]             = useState([]);
+  const [checkoutVisible, setCheckoutVisible] = useState(false);
+  const [formData, setFormData] = useState({ companyName:"", email:"", phone:"", address:"", city:"", state:"", pincode:"", gstNumber:"" });
+
+  const CLIENT_ID = getClientId();
+
+  const showToast = useCallback((message, type) => {
+    const id = Date.now();
+    setToasts(p => [...p, { id, message, type }]);
+    setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 4000);
+  }, []);
+
+  const removeToast  = id => setToasts(p => p.filter(t => t.id !== id));
+  const handleChange = (field, value) => setFormData(p => ({ ...p, [field]: value }));
+
+  // Load plan from LMS
+  useEffect(() => {
+    (async () => {
+      try {
+        const res  = await fetch(`${LMS_BASE_URL}/api/license/public/licenses-by-product/${PRODUCT_ID}`, { headers:{ "x-api-key":LMS_API_KEY } });
+        const data = await res.json();
+        const licenses = data.licenses || data.data || data || [];
+        const matched  = licenses.find(lic => {
+          const lt = lic.licenseTypeId || lic.licenseType;
+          return (lt?.price?.amount ?? 0) > 0 && lt?.name?.toLowerCase() !== "enterprise";
+        }) || licenses[0];
+        if (!matched) throw new Error("Plan not found");
+        const lt = matched.licenseTypeId || matched.licenseType;
+        let userCount = 1;
+        const rawFeatures = lt.features || [];
+        if (Array.isArray(rawFeatures)) {
+          for (const f of rawFeatures) {
+            if (typeof f === "object" && f.featureType === "limit") {
+              const slug = (f.featureSlug || "").toLowerCase();
+              const val  = f.limitValue ?? f.value;
+              if (slug.includes("user") && typeof val === "number") { userCount = val; break; }
+            }
+          }
+        }
+        setLmsPlan({
+          licenseId:      matched._id,
+          planName:       lt.name,
+          pricePerUser:   lt.price.amount,
+          includedUsers:  userCount,
+          features:       Array.isArray(rawFeatures) ? rawFeatures.filter(f => typeof f === "object" && f.uiLabel) : [],
+          discountConfig: lt.discountConfig ?? { monthly:0, quarterly:0, "half-yearly":0, yearly:0 },
+        });
+      } catch (err) {
+        showToast("Failed to load plan details. Please refresh.", "error");
+      } finally { setLoading(false); }
+    })();
+  }, []);
+
+  // Pre-fill email + check existing license
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("user");
+      if (!raw) return;
+      const user = JSON.parse(raw);
+      if (user?.email) {
+        setFormData(p => ({ ...p, email: user.email }));
+        fetch(`${LMS_BASE_URL}/api/external/actve-license/${user.email}?productId=${PRODUCT_ID}`, { headers:{ "x-api-key":LMS_API_KEY } })
+          .then(r => r.json())
+          .then(d => {
+            if (d.activeLicense?.status === "active") {
+              const lt = d.activeLicense.licenseTypeId || d.activeLicense.licenseType || {};
+              setExistingPlanName(lt.name || "Current");
+              setShowActiveModal(true);
+            }
+          }).catch(() => {});
+      }
+    } catch {}
+  }, []);
+
+  const handleSubmit = async e => {
+    e.preventDefault();
+    if (!lmsPlan?.licenseId) { showToast("Plan not loaded. Please try again.", "error"); return; }
+    setSubmitting(true);
+    try {
+      // Load Razorpay
+      await new Promise((resolve, reject) => {
+        if (window.Razorpay) { resolve(); return; }
+        const s = document.createElement("script");
+        s.src = "https://checkout.razorpay.com/v1/checkout.js";
+        s.onload = resolve;
+        s.onerror = () => reject(new Error("Razorpay load failed"));
+        document.body.appendChild(s);
+      });
+
+      const discountPct = lmsPlan.discountConfig[billingCycle] ?? 0;
+      const months      = CYCLES.find(c => c.key === billingCycle).months;
+      const baseTotal   = lmsPlan.pricePerUser * months;
+      const discountAmt = Math.round((baseTotal * discountPct) / 100);
+      const subtotal    = baseTotal - discountAmt;
+      const gst         = Math.round(subtotal * 0.18 * 100) / 100;
+      const totalAmount = Math.round((subtotal + gst) * 100) / 100;
+
+      const orderRes = await fetch(`${APP_BASE_URL}/purchase/create-order`, {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ amount:totalAmount, currency:"INR", clientId:CLIENT_ID, planName:lmsPlan.planName }),
+      });
+      const orderData = await orderRes.json();
+      if (!orderData.success) throw new Error(orderData.message || "Order creation failed");
+
+      const options = {
+        key:          RAZORPAY_KEY_ID,
+        amount:       orderData.amount * 100,
+        currency:     orderData.currency,
+        name:         "Middleware",
+        description:  `${lmsPlan.planName} — ${billingCycle}`,
+        order_id:     orderData.orderId,
+        prefill:      { name:formData.companyName, email:formData.email, contact:formData.phone },
+        notes:        { address:`${formData.address}, ${formData.city}, ${formData.state} - ${formData.pincode}`, gstNumber:formData.gstNumber, billingCycle },
+        theme:        { color:"#0d7a8a" },
+        handler: async response => {
+          try {
+            const verifyRes = await fetch(`${APP_BASE_URL}/purchase/verify`, {
+              method:"POST",
+              headers:{ "Content-Type":"application/json" },
+              body: JSON.stringify({
+                razorpay_order_id:   response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature:  response.razorpay_signature,
+                clientId:            CLIENT_ID,
+                customerEmail:       formData.email,
+                planId:              lmsPlan.licenseId,
+                billingCycle,
+              }),
+            });
+            const verifyData = await verifyRes.json();
+            if (!verifyData.success) throw new Error(verifyData.message || "Verification failed");
+            showToast("🎉 Payment successful! License activated.", "success");
+            setTimeout(() => { window.location.href = `${APP_BASE_URL}/dashboard-ui?clientId=${CLIENT_ID}`; }, 2000);
+          } catch (err) {
+            showToast(err?.message || "Payment verification failed. Contact support.", "error");
+          } finally { setSubmitting(false); }
+        },
+        modal: { ondismiss: () => { showToast("Payment cancelled.", "error"); setSubmitting(false); } },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.open();
+    } catch (err) {
+      showToast(err?.message || "Something went wrong. Please try again.", "error");
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) return React.createElement("div", { className:"loading" },
+    React.createElement("div", null,
+      React.createElement("div", { className:"spinner" }),
+      React.createElement("p", { className:"loading-txt" }, "Loading plan…")
+    )
+  );
+
+  if (!lmsPlan) return React.createElement("div", { className:"error-state" },
+    React.createElement("div", { className:"error-box" },
+      React.createElement("div", { style:{fontSize:40,marginBottom:14} }, "⚠️"),
+      React.createElement("p", { style:{fontSize:16,fontWeight:700,marginBottom:6} }, "Could not load plan details"),
+      React.createElement("p", { style:{fontSize:13,color:"#94a3b8",marginBottom:22} }, "Unable to fetch pricing from the server."),
+      React.createElement("button", { className:"retry-btn", onClick:()=>window.location.reload() }, "Retry")
+    )
+  );
+
+  // Price calculation for plan card
+  const disc       = lmsPlan.discountConfig[billingCycle] ?? 0;
+  const months     = CYCLES.find(c => c.key === billingCycle).months;
+  const baseTotal  = lmsPlan.pricePerUser * months;
+  const discAmt    = Math.round((baseTotal * disc) / 100);
+  const sub        = baseTotal - discAmt;
+  const gst        = Math.round(sub * 0.18 * 100) / 100;
+  const total      = Math.round((sub + gst) * 100) / 100;
+  const baseTotalWithGst = Math.round((baseTotal * 1.18) * 100) / 100;
+
+  return React.createElement("div", null,
+    // Toasts
+    React.createElement(ToastContainer, { toasts, onRemove:removeToast }),
+
+    // Active modal
+    showActiveModal && React.createElement(AlreadyActiveModal, { planName:existingPlanName, onClose:()=>setShowActiveModal(false) }),
+
+    // Topbar
+    React.createElement("div", { className:"topbar" },
+      React.createElement("div", { className:"brand" },
+        React.createElement("div", { className:"brand-icon" }, "💳"),
+        React.createElement("span", { className:"brand-name" }, "Middleware Checkout")
+      ),
+      React.createElement("div", { className:"steps" },
+        React.createElement("span", { className:`step ${checkoutVisible?"done":"active"}` },
+          checkoutVisible ? React.createElement("span", { className:"step-dot" }, "✓") : React.createElement("span", { className:"step-dot" }, "1"),
+          " Select Plan"
+        ),
+        React.createElement("span", { className:"step-sep" }, "›"),
+        React.createElement("span", { className:`step ${checkoutVisible?"active":""}` },
+          React.createElement("span", { className:"step-dot" }, "2"), " Billing Details"
+        ),
+        React.createElement("span", { className:"step-sep" }, "›"),
+        React.createElement("span", { className:"step" },
+          React.createElement("span", { className:"step-dot" }, "3"), " Payment"
+        )
+      )
+    ),
+
+    // Page content
+    React.createElement("div", { className:"page" },
+
+      // Hero
+      React.createElement("div", { className:"plan-hero" },
+        React.createElement("div", { className:"hero-tag" }, "✓ One-time setup · Instant access"),
+        React.createElement("h1", { className:"hero-title" }, "Pricing"),
+        React.createElement("p", { className:"hero-sub" }, "Choose a billing cycle that works for you and get started instantly"),
+
+        React.createElement("div", { style:{display:"flex",justifyContent:"center"} },
+          React.createElement("div", { className:"cycle-selector" },
+            [
+              { key:"quarterly",   label:"Quarterly",   disc:lmsPlan.discountConfig.quarterly },
+              { key:"half-yearly", label:"Half Yearly", disc:lmsPlan.discountConfig["half-yearly"] },
+              { key:"yearly",      label:"Yearly",      disc:lmsPlan.discountConfig.yearly },
+            ].map(c =>
+              React.createElement("button", {
+                key:c.key,
+                className:`cycle-pill${billingCycle===c.key?" active":""}`,
+                onClick:()=>setBillingCycle(c.key)
+              },
+                c.label,
+                c.disc > 0 && React.createElement("span", { className:"cycle-disc" }, `-${c.disc}%`)
+              )
+            )
+          )
+        )
+      ),
+
+      // Plan card
+      React.createElement("div", { className:"plan-wrap" },
+        React.createElement("div", { className:"plan-card" },
+          React.createElement("div", { className:"plan-top" },
+            React.createElement("div", null,
+              React.createElement("div", { className:"plan-name-chip" }, "⚡ ", lmsPlan.planName),
+              React.createElement("div", { className:"plan-users" }, "👥 Includes ", lmsPlan.includedUsers, " users")
+            ),
+            React.createElement("div", { className:"price-block" },
+              disc > 0 && React.createElement("div", { className:"price-original" }, `₹${baseTotalWithGst.toLocaleString("en-IN")}`),
+              React.createElement("div", { className:"price-main" }, `₹${total.toLocaleString("en-IN")}`),
+              React.createElement("div", { className:"price-period" }, `/${BILLING_PERIOD_LABEL[billingCycle]} · incl. GST`),
+              disc > 0 && React.createElement("div", { className:"price-save" }, `Save ${disc}%`)
+            )
+          ),
+          lmsPlan.features.length > 0 && React.createElement("div", { className:"plan-feats" },
+            lmsPlan.features.slice(0,6).map(f =>
+              React.createElement("div", { key:f.featureSlug, className:"plan-feat" },
+                React.createElement("span", { className:"feat-check" }, "✓"),
+                f.uiLabel
+              )
+            )
+          ),
+          React.createElement("div", { className:"plan-cta" },
+            React.createElement("button", {
+              className:"plan-btn",
+              onClick:()=>{ setCheckoutVisible(true); setTimeout(()=>document.getElementById("checkout-anchor")?.scrollIntoView({behavior:"smooth"}),50); }
+            }, "💳 Get Started")
+          )
+        )
+      ),
+
+      // Checkout section
+      checkoutVisible && React.createElement("div", { id:"checkout-anchor" },
+        React.createElement("div", { className:"checkout-divider" },
+          React.createElement("div", { className:"divider-line" }),
+          React.createElement("span", { className:"divider-label" }, "Complete Your Order"),
+          React.createElement("div", { className:"divider-line" })
+        ),
+        React.createElement("div", { className:"checkout-grid" },
+          // Left — billing form
+          React.createElement("div", null,
+            React.createElement("div", { className:"card" },
+              React.createElement("div", { className:"card-header" },
+                React.createElement("span", { className:"step-badge" }, "2"),
+                React.createElement("span", { className:"card-title" }, "Billing Information")
+              ),
+              React.createElement(BillingForm, { formData, onChange:handleChange, onSubmit:handleSubmit, submitting })
+            ),
+            React.createElement("div", { className:"security-badges" },
+              ["🔒 SSL Secured","🛡 256-bit Encryption","✅ PCI Compliant"].map(t =>
+                React.createElement("div", { key:t, className:"badge-item" }, t)
+              )
+            )
+          ),
+          // Right — summary
+          React.createElement(CheckoutSummary, { plan:lmsPlan, billingCycle, onCycleChange:setBillingCycle })
+        )
+      )
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(PricingApp));
+</script>
+</body>
+</html>

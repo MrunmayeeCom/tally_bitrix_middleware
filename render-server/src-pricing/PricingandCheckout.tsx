@@ -35,12 +35,11 @@ interface PricingAndCheckoutProps { onBack?: () => void; }
 // CONSTANTS
 // ─────────────────────────────────────────────
 
-const LMS_BASE_URL = "https://license-system-v6ht.onrender.com";
-const LMS_API_KEY  = "my-secret-key-123";
-const PRODUCT_ID   = "69ba90211cf0356ba779b317";
-
-const APP_BASE_URL    = "https://tally-bitrix-middleware.onrender.com";
-const RAZORPAY_KEY_ID = "rzp_live_XXXXXXXXXXXXXXXX"; // replace with your actual key
+const RAZORPAY_KEY_ID = import.meta.env.VITE_RAZORPAY_KEY_ID;
+const LMS_BASE_URL    = import.meta.env.VITE_LMS_BASE_URL;
+const LMS_API_KEY     = import.meta.env.VITE_LMS_API_KEY;
+const APP_BASE_URL    = import.meta.env.VITE_APP_BASE_URL;
+const PRODUCT_ID      = import.meta.env.VITE_PRODUCT_ID;
 
 function getClientId(): string {
   try { return new URLSearchParams(window.location.search).get("clientId") || ""; }
