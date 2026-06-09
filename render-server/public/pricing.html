@@ -426,10 +426,15 @@ function PricingApp() {
       const gst         = Math.round(subtotal * 0.18 * 100) / 100;
       const totalAmount = Math.round((subtotal + gst) * 100) / 100;
 
-      const orderRes = await fetch(`${APP_BASE_URL}/purchase/create-order`, {
+      const orderRes = await fetch(`${LMS_BASE_URL}/api/payment/create-order`, {
         method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ amount:totalAmount, currency:"INR", clientId:CLIENT_ID, planName:lmsPlan.planName }),
+        headers:{ "Content-Type":"application/json", "x-api-key":LMS_API_KEY },
+        body: JSON.stringify({ 
+          userId:      CLIENT_ID,
+          licenseId:   lmsPlan.licenseId,
+          billingCycle,
+          amount:      totalAmount,
+        }),
       });
       const orderData = await orderRes.json();
       if (!orderData.success) throw new Error(orderData.message || "Order creation failed");
@@ -446,23 +451,37 @@ function PricingApp() {
         theme:        { color:"#0d7a8a" },
         handler: async response => {
           try {
-            const verifyRes = await fetch(`${APP_BASE_URL}/purchase/verify`, {
-              method:"POST",
-              headers:{ "Content-Type":"application/json" },
-              body: JSON.stringify({
-                razorpay_order_id:   response.razorpay_order_id,
-                razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_signature:  response.razorpay_signature,
-                clientId:            CLIENT_ID,
-                customerEmail:       formData.email,
-                planId:              lmsPlan.licenseId,
-                billingCycle,
-              }),
-            });
-            const verifyData = await verifyRes.json();
-            if (!verifyData.success) throw new Error(verifyData.message || "Verification failed");
-            showToast("🎉 Payment successful! License activated.", "success");
-            setTimeout(() => { window.location.href = `${APP_BASE_URL}/dashboard-ui?clientId=${CLIENT_ID}`; }, 2000);
+            const verifyRes = await fetch(`${LMS_BASE_URL}/api/payment/verify-payment`, {
+                method:"POST",
+                headers:{ "Content-Type":"application/json", "x-api-key":LMS_API_KEY },
+                body: JSON.stringify({
+                    razorpay_order_id:   response.razorpay_order_id,
+                    razorpay_payment_id: response.razorpay_payment_id,
+                    razorpay_signature:  response.razorpay_signature,
+                    clientId:            CLIENT_ID,
+                    customerEmail:       formData.email,
+                    licenseId:           lmsPlan.licenseId,
+                    billingCycle,
+                }),
+                });
+                const verifyData = await verifyRes.json();
+                if (!verifyData.success) throw new Error(verifyData.message || "Verification failed");
+
+                // Link license to Bitrix portal after successful payment
+                await fetch(`${APP_BASE_URL}/api/license/link`, {
+                method:"POST",
+                headers:{ "Content-Type":"application/json" },
+                body: JSON.stringify({
+                    clientId:      CLIENT_ID,
+                    customerEmail: formData.email,
+                    licenseId:     verifyData.licenseId || lmsPlan.licenseId,
+                    licensePlan:   lmsPlan.planName,
+                    licenseStatus: "active",
+                }),
+                });
+
+                showToast("🎉 Payment successful! License activated.", "success");
+                setTimeout(() => { window.location.href = `${APP_BASE_URL}/dashboard-ui?clientId=${CLIENT_ID}`; }, 2000);
           } catch (err) {
             showToast(err?.message || "Payment verification failed. Contact support.", "error");
           } finally { setSubmitting(false); }
