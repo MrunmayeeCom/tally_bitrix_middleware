@@ -161,11 +161,11 @@ input{font-family:'Inter',sans-serif}
 <script>
 const { useState, useEffect, useCallback } = React;
 
-const RAZORPAY_KEY_ID = import.meta.env.VITE_RAZORPAY_KEY_ID;
-const LMS_BASE_URL    = import.meta.env.VITE_LMS_BASE_URL;
-const LMS_API_KEY     = import.meta.env.VITE_LMS_API_KEY;
-const APP_BASE_URL    = import.meta.env.VITE_APP_BASE_URL;
-const PRODUCT_ID      = import.meta.env.VITE_PRODUCT_ID;
+const RAZORPAY_KEY_ID = "__RAZORPAY_KEY_ID__";
+const LMS_BASE_URL    = "__LMS_BASE_URL__";
+const LMS_API_KEY     = "__LMS_API_KEY__";
+const APP_BASE_URL    = "__APP_BASE_URL__";
+const PRODUCT_ID      = "__PRODUCT_ID__";
 
 const CYCLES = [
   { key:"quarterly",   label:"Quarterly",   months:3  },

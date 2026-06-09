@@ -61,7 +61,14 @@ app.get('/dashboard-ui', (req, res) => {
 
 // Serve React-built pricing page — must be last so it catches /pricing/*
 app.get('/pricing', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'pricing.html'));
+  const fs = require('fs');
+  let html = fs.readFileSync(path.join(__dirname, 'public', 'pricing.html'), 'utf8');
+  html = html.replace('__RAZORPAY_KEY_ID__', process.env.RAZORPAY_KEY_ID || '')
+             .replace('__LMS_BASE_URL__',    process.env.LMS_BASE_URL    || 'https://license-system-v6ht.onrender.com')
+             .replace('__LMS_API_KEY__',     process.env.LMS_API_KEY     || 'my-secret-key-123')
+             .replace('__APP_BASE_URL__',    process.env.APP_URL         || 'https://tally-bitrix-middleware.onrender.com')
+             .replace('__PRODUCT_ID__',      process.env.PRODUCT_ID      || '69ba90211cf0356ba779b317');
+  res.send(html);
 });
 
 // ── Error handler ─────────────────────────────────────────────────────────────
