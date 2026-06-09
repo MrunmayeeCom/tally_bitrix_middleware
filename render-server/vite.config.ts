@@ -4,12 +4,12 @@ import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
-  root: 'src-pricing',          // TSX source lives here
+  root: path.resolve(__dirname, 'src-pricing'),
   build: {
     outDir: path.resolve(__dirname, 'public'),
-    emptyOutDir: false,          // don't wipe dashboard.html
+    emptyOutDir: false,
     rollupOptions: {
-      input: { pricing: 'src-pricing/pricing.html' },
+      input: { pricing: path.resolve(__dirname, 'src-pricing/pricing.html') },
       output: {
         entryFileNames: 'pricing-bundle.js',
         assetFileNames: 'pricing-[name][extname]',

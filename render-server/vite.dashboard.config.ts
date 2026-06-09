@@ -4,12 +4,12 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
-  root: 'src-dashboard',
+  root: path.resolve(__dirname, 'src-dashboard'),
   build: {
     outDir: path.resolve(__dirname, 'public'),
     emptyOutDir: false,
     rollupOptions: {
-      input: { dashboard: 'src-dashboard/index.html' },
+      input: { dashboard: path.resolve(__dirname, 'src-dashboard/index.html') },
       output: {
         entryFileNames: 'dashboard-bundle.js',
         assetFileNames: 'dashboard-[name][extname]',
