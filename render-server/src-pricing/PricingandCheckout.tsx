@@ -142,8 +142,9 @@ function BillingForm({ formData, onChange, onSubmit, submitting }: BillingFormPr
           <label className="pc-label">Email Address <span className="pc-req">*</span></label>
           <div className="pc-input-wrap">
             <Mail size={15} className="pc-input-ico" />
-            <input type="email" value={formData.email} readOnly
-              className="pc-input pc-input-ico-pad pc-input-readonly" />
+            <input type="email" placeholder="your@email.com" value={formData.email}
+              onChange={e => onChange("email", e.target.value)}
+              className="pc-input pc-input-ico-pad" required />
           </div>
         </div>
 

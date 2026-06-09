@@ -305,7 +305,7 @@ function BillingForm({ formData, onChange, onSubmit, submitting }) {
   return React.createElement("form", { onSubmit },
     React.createElement("div", { className:"form-grid" },
       field("Company Name", "companyName", "text", true, false, "Enter company name"),
-      field("Email Address", "email", "email", true, true),
+      field("Email Address", "email", "email", true, false, "your@email.com"),
       field("Phone Number", "phone", "tel", true, false, "+91 98765 43210"),
       field("Address", "address", "text", true, false, "Street address"),
       field("City", "city", "text", true, false, "City"),
