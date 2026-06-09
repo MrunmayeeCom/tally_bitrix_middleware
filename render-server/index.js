@@ -19,6 +19,9 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// ── Static files (built by Vite) ──────────────────────────────────────────────
+app.use(express.static(path.join(__dirname, 'public')));
+
 // ── MongoDB ───────────────────────────────────────────────────────────────────
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('[DB] MongoDB connected'))
