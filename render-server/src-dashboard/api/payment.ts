@@ -4,7 +4,21 @@ type BillingCycle = "quarterly" | "half-yearly" | "yearly";
 
 const API_KEY = import.meta.env.VITE_LMS_API_KEY || "my-secret-key-123";
 
+// Cancel existing pending transaction
+const cancelPendingTransaction = async (transactionId: string): Promise<void> => {
+  try {
+    await API.post(`/api/lms/cancel-pending-transaction`,
+      { transactionId },
+      { headers: { "x-api-key": API_KEY } }
+    );
+    console.log('[cancelPending] cancelled:', transactionId);
+  } catch(e: any) {
+    console.warn('[cancelPending] non-fatal:', e.response?.data || e.message);
+  }
+};
+
 // Step 1: Create pending transaction in LMS
+// If existing pending found → cancel it → retry fresh
 export const initiatePurchase = async ({
   name,
   email,
@@ -26,8 +40,37 @@ export const initiatePurchase = async ({
     }, {
       headers: { "x-api-key": API_KEY },
     });
+
     console.log('[initiatePurchase] response:', JSON.stringify(res.data, null, 2));
-    if (!res.data?.success) throw new Error(res.data?.message || "Purchase initiation failed");
+
+    if (!res.data?.success) {
+      throw new Error(res.data?.message || "Purchase initiation failed");
+    }
+
+    // Existing pending transaction found — cancel it and create fresh
+    if (res.data.existingTransaction && res.data.data?.transactionId) {
+      console.log('[initiatePurchase] existing transaction found, cancelling:', res.data.data.transactionId);
+      await cancelPendingTransaction(res.data.data.transactionId);
+
+      // Retry to get fresh transaction
+      const retryRes = await API.post(`/api/lms/purchase-license`, {
+        name,
+        email,
+        licenseId,
+        billingCycle,
+      }, {
+        headers: { "x-api-key": API_KEY },
+      });
+
+      console.log('[initiatePurchase] retry response:', JSON.stringify(retryRes.data, null, 2));
+
+      if (!retryRes.data?.success) {
+        throw new Error(retryRes.data?.message || "Purchase initiation failed on retry");
+      }
+
+      return retryRes.data;
+    }
+
     return res.data;
   } catch(e: any) {
     console.error('[initiatePurchase] error:', JSON.stringify(e.response?.data, null, 2));
