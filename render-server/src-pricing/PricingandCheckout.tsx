@@ -446,7 +446,7 @@ export function PricingAndCheckout({ onBack }: PricingAndCheckoutProps) {
       // 4. Open Razorpay checkout
       const options = {
         key:          RAZORPAY_KEY_ID,
-        amount:       orderData.amount * 100,
+        amount:       orderData.amountInPaise,
         currency:     orderData.currency,
         name:         "Middleware",
         description:  `${lmsPlan.planName} — ${billingCycle}`,

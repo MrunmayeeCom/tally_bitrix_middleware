@@ -433,7 +433,6 @@ function PricingApp() {
           userId:      CLIENT_ID,
           licenseId:   lmsPlan.licenseId,
           billingCycle,
-          amount:      totalAmount,
         }),
       });
       const orderData = await orderRes.json();
@@ -441,7 +440,7 @@ function PricingApp() {
 
       const options = {
         key:          RAZORPAY_KEY_ID,
-        amount:       orderData.amount * 100,
+        amount:       orderData.amountInPaise,
         currency:     orderData.currency,
         name:         "Middleware",
         description:  `${lmsPlan.planName} — ${billingCycle}`,
