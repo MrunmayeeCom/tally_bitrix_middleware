@@ -1,8 +1,6 @@
-import axios from "axios";
-
 import API from "./AxiosInstance";
 
-type BillingCycle = "monthly" | "half-yearly" | "quarterly" | "yearly";
+type BillingCycle = "quarterly" | "half-yearly" | "yearly";
 
 const API_KEY = import.meta.env.VITE_LMS_API_KEY || "my-secret-key-123";
 
@@ -17,12 +15,7 @@ export const createOrder = async ({
   billingCycle: BillingCycle;
   amount: number;
 }) => {
-  const payload = {
-    userId,
-    licenseTypeId: licenseId,  // LMS expects licenseTypeId not licenseId
-    billingCycle,
-    amount,
-  };
+  const payload = { userId, licenseId, billingCycle, amount };
   console.log('[createOrder] payload:', payload);
   try {
     const res = await API.post(`/api/payment/create-order`, payload, {
@@ -32,20 +25,23 @@ export const createOrder = async ({
     if (!res.data?.success) throw new Error(res.data?.message || "Order creation failed");
     return res.data;
   } catch(e: any) {
-    console.error('[createOrder] error response:', e.response?.data);
-    console.error('[createOrder] error status:', e.response?.status);
-    console.error('[createOrder] error details:', JSON.stringify(e.response?.data, null, 2));
-    throw new Error(e.response?.data?.message || e.response?.data?.error || e.message);
+    console.error('[createOrder] error:', JSON.stringify(e.response?.data, null, 2));
+    throw new Error(e.response?.data?.message || e.message);
   }
 };
 
 export const verifyPayment = async (details: any) => {
-  const res = await API.post(`/api/payment/verify-payment`, details, {
-    headers: { "x-api-key": API_KEY },
-  });
-  console.log('[verifyPayment] response:', res.data);
-  if (!res.data?.success) throw new Error(res.data?.message || "Verification failed");
-  return res.data;
+  try {
+    const res = await API.post(`/api/payment/verify-payment`, details, {
+      headers: { "x-api-key": API_KEY },
+    });
+    console.log('[verifyPayment] response:', res.data);
+    if (!res.data?.success) throw new Error(res.data?.message || "Verification failed");
+    return res.data;
+  } catch(e: any) {
+    console.error('[verifyPayment] error:', JSON.stringify(e.response?.data, null, 2));
+    throw new Error(e.response?.data?.message || e.message);
+  }
 };
 
 export const getTransactionDetails = async (transactionId: string) => {
@@ -60,7 +56,6 @@ export const getMyTransactions = async (userId: string) => {
 
 export const downloadInvoice = (transactionId: string) => {
   if (!transactionId) return;
-
   window.open(
     `https://license-system-v6ht.onrender.com/api/payment/invoice/${transactionId}`,
     "_blank"
