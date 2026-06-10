@@ -4,53 +4,58 @@ type BillingCycle = "quarterly" | "half-yearly" | "yearly";
 
 const API_KEY = import.meta.env.VITE_LMS_API_KEY || "my-secret-key-123";
 
+// Step 1: Create pending transaction in LMS
 export const initiatePurchase = async ({
-  userId,
+  name,
+  email,
   licenseId,
   billingCycle,
-  amount,
 }: {
-  userId: string;
+  name: string;
+  email: string;
   licenseId: string;
   billingCycle: BillingCycle;
-  amount: number;
 }) => {
-  // Step 1: initiate purchase — creates pending transaction in LMS
-  const payload = { userId, licenseTypeId: licenseId, billingCycle, amount };
-  console.log('[initiatePurchase] payload:', payload);
+  console.log('[initiatePurchase] payload:', { name, email, licenseId, billingCycle });
   try {
-    const res = await API.post(`/api/lms/purchase-license`, payload, {
+    const res = await API.post(`/api/lms/purchase-license`, {
+      name,
+      email,
+      licenseId,
+      billingCycle,
+    }, {
       headers: { "x-api-key": API_KEY },
     });
-    console.log('[initiatePurchase] response:', res.data);
+    console.log('[initiatePurchase] response:', JSON.stringify(res.data, null, 2));
     if (!res.data?.success) throw new Error(res.data?.message || "Purchase initiation failed");
-    return res.data; // contains transactionId or orderId
+    return res.data;
   } catch(e: any) {
     console.error('[initiatePurchase] error:', JSON.stringify(e.response?.data, null, 2));
     throw new Error(e.response?.data?.message || e.message);
   }
 };
 
+// Step 2: Create Razorpay order from pending transaction
 export const createOrder = async ({
   userId,
   licenseId,
   billingCycle,
-  amount,
 }: {
   userId: string;
   licenseId: string;
   billingCycle: BillingCycle;
-  amount: number;
 }) => {
-  // Step 2: create Razorpay order from pending transaction
-  const payload = { userId, licenseId, billingCycle, amount };
-  console.log('[createOrder] payload:', payload);
+  console.log('[createOrder] payload:', { userId, licenseId, billingCycle });
   try {
-    const res = await API.post(`/api/payment/create-order`, payload, {
+    const res = await API.post(`/api/payment/create-order`, {
+      userId,
+      licenseId,
+      billingCycle,
+    }, {
       headers: { "x-api-key": API_KEY },
     });
-    console.log('[createOrder] response:', res.data);
-    if (!res.data?.success) throw new Error(res.data?.message || "Order creation failed");
+    console.log('[createOrder] response:', JSON.stringify(res.data, null, 2));
+    if (!res.data?.orderId) throw new Error(res.data?.message || "Order creation failed");
     return res.data;
   } catch(e: any) {
     console.error('[createOrder] error:', JSON.stringify(e.response?.data, null, 2));
@@ -58,12 +63,18 @@ export const createOrder = async ({
   }
 };
 
-export const verifyPayment = async (details: any) => {
+// Step 3: Verify payment signature
+export const verifyPayment = async (details: {
+  razorpay_order_id: string;
+  razorpay_payment_id: string;
+  razorpay_signature: string;
+}) => {
+  console.log('[verifyPayment] payload:', details);
   try {
     const res = await API.post(`/api/payment/verify-payment`, details, {
       headers: { "x-api-key": API_KEY },
     });
-    console.log('[verifyPayment] response:', res.data);
+    console.log('[verifyPayment] response:', JSON.stringify(res.data, null, 2));
     if (!res.data?.success) throw new Error(res.data?.message || "Verification failed");
     return res.data;
   } catch(e: any) {

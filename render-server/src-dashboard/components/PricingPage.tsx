@@ -81,28 +81,25 @@ export default function PricingPage({ clientId, user, onPurchased }: Props) {
         document.body.appendChild(s);
       });
 
-      const { total } = calcPrices(plan, billingCycle);
-      const roundedTotal = Math.round(total * 100) / 100;
-
-      // Step 1: initiate purchase in LMS
+      // Step 1: create pending transaction in LMS
       await initiatePurchase({
-        userId:      user._id,
-        licenseId:   plan.licenseId,
+        name:      user.name || user.email,
+        email:     user.email,
+        licenseId: plan.licenseId,
         billingCycle,
-        amount:      roundedTotal,
       });
 
       // Step 2: create Razorpay order
+      // createOrder finds the pending transaction by userId+licenseId+billingCycle
       const orderData = await createOrder({
-        userId:      user._id,
-        licenseId:   plan.licenseId,
+        userId:    user._id,
+        licenseId: plan.licenseId,
         billingCycle,
-        amount:      roundedTotal,
       });
 
       const options = {
-        key:         RAZORPAY_KEY_ID,
-        amount:      orderData.amount * 100,
+        key:         orderData.key || RAZORPAY_KEY_ID,
+        amount:      orderData.amountInPaise || orderData.amount * 100,
         currency:    orderData.currency || "INR",
         name:        "TallyBitrixSync",
         description: `${plan.planName} — ${billingCycle}`,
@@ -121,10 +118,6 @@ export default function PricingPage({ clientId, user, onPurchased }: Props) {
               razorpay_order_id:   response.razorpay_order_id,
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_signature:  response.razorpay_signature,
-              userId:              user._id,
-              licenseId:           plan.licenseId,
-              billingCycle,
-              amount:              Math.round(total * 100) / 100,
             });
 
             // Link license to Bitrix portal
