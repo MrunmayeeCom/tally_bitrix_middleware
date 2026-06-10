@@ -4,6 +4,33 @@ type BillingCycle = "quarterly" | "half-yearly" | "yearly";
 
 const API_KEY = import.meta.env.VITE_LMS_API_KEY || "my-secret-key-123";
 
+export const initiatePurchase = async ({
+  userId,
+  licenseId,
+  billingCycle,
+  amount,
+}: {
+  userId: string;
+  licenseId: string;
+  billingCycle: BillingCycle;
+  amount: number;
+}) => {
+  // Step 1: initiate purchase — creates pending transaction in LMS
+  const payload = { userId, licenseTypeId: licenseId, billingCycle, amount };
+  console.log('[initiatePurchase] payload:', payload);
+  try {
+    const res = await API.post(`/api/lms/purchase-license`, payload, {
+      headers: { "x-api-key": API_KEY },
+    });
+    console.log('[initiatePurchase] response:', res.data);
+    if (!res.data?.success) throw new Error(res.data?.message || "Purchase initiation failed");
+    return res.data; // contains transactionId or orderId
+  } catch(e: any) {
+    console.error('[initiatePurchase] error:', JSON.stringify(e.response?.data, null, 2));
+    throw new Error(e.response?.data?.message || e.message);
+  }
+};
+
 export const createOrder = async ({
   userId,
   licenseId,
@@ -15,6 +42,7 @@ export const createOrder = async ({
   billingCycle: BillingCycle;
   amount: number;
 }) => {
+  // Step 2: create Razorpay order from pending transaction
   const payload = { userId, licenseId, billingCycle, amount };
   console.log('[createOrder] payload:', payload);
   try {

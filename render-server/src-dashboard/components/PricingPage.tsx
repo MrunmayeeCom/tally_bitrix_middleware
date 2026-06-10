@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { User, BillingCycle, LMSPlan } from "../types";
 import { fetchPlansForProduct } from "../api/lms";
-import { createOrder, verifyPayment } from "../api/payment";
+import { initiatePurchase, createOrder, verifyPayment } from "../api/payment";
 import { linkLicense } from "../api/middleware";
 
 const RAZORPAY_KEY_ID = import.meta.env.VITE_RAZORPAY_KEY_ID;
@@ -82,13 +82,22 @@ export default function PricingPage({ clientId, user, onPurchased }: Props) {
       });
 
       const { total } = calcPrices(plan, billingCycle);
+      const roundedTotal = Math.round(total * 100) / 100;
 
-      // Create order via LMS
+      // Step 1: initiate purchase in LMS
+      await initiatePurchase({
+        userId:      user._id,
+        licenseId:   plan.licenseId,
+        billingCycle,
+        amount:      roundedTotal,
+      });
+
+      // Step 2: create Razorpay order
       const orderData = await createOrder({
         userId:      user._id,
         licenseId:   plan.licenseId,
         billingCycle,
-        amount:      Math.round(total * 100) / 100,
+        amount:      roundedTotal,
       });
 
       const options = {
