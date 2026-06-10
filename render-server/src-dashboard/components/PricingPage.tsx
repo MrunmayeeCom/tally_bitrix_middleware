@@ -99,7 +99,7 @@ export default function PricingPage({ clientId, user, onPurchased }: Props) {
 
       const options = {
         key:         orderData.key || RAZORPAY_KEY_ID,
-        amount:      orderData.amountInPaise || orderData.amount * 100,
+        amount:      orderData.amountInPaise,
         currency:    orderData.currency || "INR",
         name:        "TallyBitrixSync",
         description: `${plan.planName} — ${billingCycle}`,
