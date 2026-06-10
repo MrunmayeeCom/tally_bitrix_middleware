@@ -429,25 +429,41 @@ export function PricingAndCheckout({ onBack }: PricingAndCheckoutProps) {
       const gst          = Math.round(subtotal * 0.18 * 100) / 100;
       const totalAmount  = Math.round((subtotal + gst) * 100) / 100;
 
-      // 3. Create Razorpay order via your backend
-      const orderRes = await fetch(`${APP_BASE_URL}/purchase/create-order`, {
+      // 3a. Initiate purchase (creates pending transaction in LMS)
+      const initiateRes = await fetch(`${LMS_BASE_URL}/api/lms/purchase-license`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-api-key": LMS_API_KEY },
         body: JSON.stringify({
-          amount:   totalAmount,
-          currency: "INR",
-          clientId: CLIENT_ID,
-          planName: lmsPlan.planName,
+          name:        formData.companyName || "Customer",
+          email:       formData.email,
+          licenseId:   lmsPlan.licenseId,
+          billingCycle,
+        }),
+      });
+      const initiateData = await initiateRes.json();
+      if (!initiateData.success) throw new Error(initiateData.message || "Purchase initiation failed");
+
+      const userId = initiateData.data?.userId;
+      if (!userId) throw new Error("User ID not returned from initiate step");
+
+      // 3b. Create Razorpay order via LMS
+      const orderRes = await fetch(`${LMS_BASE_URL}/api/payment/create-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": LMS_API_KEY },
+        body: JSON.stringify({
+          userId,
+          licenseId:   lmsPlan.licenseId,
+          billingCycle,
         }),
       });
       const orderData = await orderRes.json();
-      if (!orderData.success) throw new Error(orderData.message || "Order creation failed");
+      if (!orderData.orderId) throw new Error(orderData.message || "Order creation failed");
 
       // 4. Open Razorpay checkout
       const options = {
-        key:          RAZORPAY_KEY_ID,
+        key:          orderData.key || RAZORPAY_KEY_ID,
         amount:       orderData.amountInPaise,
-        currency:     orderData.currency,
+        currency:     orderData.currency || "INR",
         name:         "Middleware",
         description:  `${lmsPlan.planName} — ${billingCycle}`,
         order_id:     orderData.orderId,

@@ -426,17 +426,35 @@ function PricingApp() {
       const gst         = Math.round(subtotal * 0.18 * 100) / 100;
       const totalAmount = Math.round((subtotal + gst) * 100) / 100;
 
+      // Step 1: Create pending transaction
+      const initiateRes = await fetch(`${LMS_BASE_URL}/api/lms/purchase-license`, {
+        method:"POST",
+        headers:{ "Content-Type":"application/json", "x-api-key":LMS_API_KEY },
+        body: JSON.stringify({
+          name:        formData.companyName || "Customer",
+          email:       formData.email,
+          licenseId:   lmsPlan.licenseId,
+          billingCycle,
+        }),
+      });
+      const initiateData = await initiateRes.json();
+      if (!initiateData.success) throw new Error(initiateData.message || "Purchase initiation failed");
+
+      const userId = initiateData.data?.userId;
+      if (!userId) throw new Error("User ID not returned from initiate step");
+
+      // Step 2: Create Razorpay order
       const orderRes = await fetch(`${LMS_BASE_URL}/api/payment/create-order`, {
         method:"POST",
         headers:{ "Content-Type":"application/json", "x-api-key":LMS_API_KEY },
         body: JSON.stringify({ 
-          userId:      CLIENT_ID,
+          userId,
           licenseId:   lmsPlan.licenseId,
           billingCycle,
         }),
       });
       const orderData = await orderRes.json();
-      if (!orderData.success) throw new Error(orderData.message || "Order creation failed");
+      if (!orderData.orderId) throw new Error(orderData.message || "Order creation failed");
 
       const options = {
         key:          RAZORPAY_KEY_ID,
