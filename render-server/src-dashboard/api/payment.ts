@@ -4,6 +4,8 @@ import API from "./AxiosInstance";
 
 type BillingCycle = "monthly" | "half-yearly" | "quarterly" | "yearly";
 
+const API_KEY = import.meta.env.VITE_LMS_API_KEY || "my-secret-key-123";
+
 export const createOrder = async ({
   userId,
   licenseId,
@@ -15,18 +17,26 @@ export const createOrder = async ({
   billingCycle: BillingCycle;
   amount: number;
 }) => {
+  console.log('[createOrder] payload:', { userId, licenseId, billingCycle, amount });
   const res = await API.post(`/api/payment/create-order`, {
     userId,
     licenseId,
     billingCycle,
     amount,
+  }, {
+    headers: { "x-api-key": API_KEY },
   });
+  console.log('[createOrder] response:', res.data);
+  if (!res.data?.success) throw new Error(res.data?.message || "Order creation failed");
   return res.data;
 };
 
-// Verify payment after Razorpay returns handler response
 export const verifyPayment = async (details: any) => {
-  const res = await API.post(`/api/payment/verify-payment`, details);
+  const res = await API.post(`/api/payment/verify-payment`, details, {
+    headers: { "x-api-key": API_KEY },
+  });
+  console.log('[verifyPayment] response:', res.data);
+  if (!res.data?.success) throw new Error(res.data?.message || "Verification failed");
   return res.data;
 };
 

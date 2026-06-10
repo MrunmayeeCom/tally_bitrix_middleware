@@ -88,7 +88,7 @@ export default function PricingPage({ clientId, user, onPurchased }: Props) {
         userId:      user._id,
         licenseId:   plan.licenseId,
         billingCycle,
-        amount:      total,
+        amount:      Math.round(total * 100) / 100,
       });
 
       const options = {
@@ -115,6 +115,7 @@ export default function PricingPage({ clientId, user, onPurchased }: Props) {
               userId:              user._id,
               licenseId:           plan.licenseId,
               billingCycle,
+              amount:              Math.round(total * 100) / 100,
             });
 
             // Link license to Bitrix portal
