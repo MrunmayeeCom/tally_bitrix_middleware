@@ -221,7 +221,7 @@ function CheckoutSummary({ plan, billingCycle, onCycleChange }) {
   const baseTotal   = plan.pricePerUser * months;
   const discountAmt = Math.round((baseTotal * discountPct) / 100);
   const subtotal    = baseTotal - discountAmt;
-  const gst         = Math.round(subtotal * 0.18 * 100) / 100;
+  const gst         = Math.round((subtotal * 0.18) * 100) / 100;
   const total       = Math.round((subtotal + gst) * 100) / 100;
 
   return React.createElement("div", { className:"summary-card" },
@@ -536,7 +536,7 @@ function PricingApp() {
   const baseTotal  = lmsPlan.pricePerUser * months;
   const discAmt    = Math.round((baseTotal * disc) / 100);
   const sub        = baseTotal - discAmt;
-  const gst        = Math.round(sub * 0.18 * 100) / 100;
+  const gst        = Math.round((sub * 0.18) * 100) / 100;
   const total      = Math.round((sub + gst) * 100) / 100;
   const baseTotalWithGst = Math.round((baseTotal * 1.18) * 100) / 100;
 
