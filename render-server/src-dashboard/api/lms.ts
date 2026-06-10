@@ -77,7 +77,7 @@ export const fetchPlansForProduct = async () => {
     }
   }
   return {
-    licenseId:      matched._id,
+    licenseId:      lt._id || matched._id,
     planName:       lt.name,
     pricePerUser:   lt.price.amount,
     includedUsers:  userCount,

@@ -17,13 +17,14 @@ export const createOrder = async ({
   billingCycle: BillingCycle;
   amount: number;
 }) => {
-  console.log('[createOrder] payload:', { userId, licenseId, billingCycle, amount });
-  const res = await API.post(`/api/payment/create-order`, {
+  const payload = {
     userId,
-    licenseId,
+    licenseTypeId: licenseId,  // LMS expects licenseTypeId not licenseId
     billingCycle,
     amount,
-  }, {
+  };
+  console.log('[createOrder] payload:', payload);
+  const res = await API.post(`/api/payment/create-order`, payload, {
     headers: { "x-api-key": API_KEY },
   });
   console.log('[createOrder] response:', res.data);
