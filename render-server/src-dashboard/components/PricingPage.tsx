@@ -57,9 +57,9 @@ export default function PricingPage({ clientId, user, onPurchased }: Props) {
   const calcPrices = (p: LMSPlan, cycle: BillingCycle) => {
     const disc        = p.discountConfig[cycle] ?? 0;
     const months      = CYCLES.find(c => c.key === cycle)!.months;
-    const baseTotal   = p.pricePerUser * months;
-    const discountAmt = Math.round((baseTotal * disc) / 100);
-    const subtotal    = baseTotal - discountAmt;
+    const baseTotal   = Math.round(p.pricePerUser * months * 100) / 100;
+    const discountAmt = Math.round(baseTotal * disc) / 100;
+    const subtotal    = Math.round((baseTotal - discountAmt) * 100) / 100;
     const gst         = Math.round(subtotal * 0.18 * 100) / 100;
     const total       = Math.round((subtotal + gst) * 100) / 100;
     const originalWithGst = Math.round(baseTotal * 1.18 * 100) / 100;

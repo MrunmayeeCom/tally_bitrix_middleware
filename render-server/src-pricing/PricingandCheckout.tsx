@@ -221,9 +221,9 @@ interface CheckoutSummaryProps {
 function CheckoutSummary({ plan, billingCycle, onCycleChange }: CheckoutSummaryProps) {
   const discountPct  = plan.discountConfig[billingCycle] ?? 0;
   const months       = CYCLES.find(c => c.key === billingCycle)!.months;
-  const baseTotal    = plan.pricePerUser * months;
-  const discountAmt  = Math.round((baseTotal * discountPct) / 100);
-  const subtotal     = baseTotal - discountAmt;
+  const baseTotal    = Math.round(plan.pricePerUser * months * 100) / 100;
+  const discountAmt  = Math.round(baseTotal * discountPct) / 100;
+  const subtotal     = Math.round((baseTotal - discountAmt) * 100) / 100;
   const gst          = Math.round(subtotal * 0.18 * 100) / 100;
   const total        = Math.round((subtotal + gst) * 100) / 100;
 
@@ -738,11 +738,11 @@ export function PricingAndCheckout({ onBack }: PricingAndCheckoutProps) {
                     const disc       = lmsPlan.discountConfig[billingCycle] ?? 0;
                     const months     = CYCLES.find(c => c.key === billingCycle)!.months;
                     const baseTotal  = lmsPlan.pricePerUser * months;
-                    const discountAmt = Math.round((baseTotal * disc) / 100);
-                    const subtotal   = baseTotal - discountAmt;
+                    const discountAmt = Math.round(baseTotal * disc) / 100;
+                    const subtotal   = Math.round((baseTotal - discountAmt) * 100) / 100;
                     const gst        = Math.round(subtotal * 0.18 * 100) / 100;
                     const total      = Math.round((subtotal + gst) * 100) / 100;
-                    const baseTotalWithGst = Math.round((baseTotal * 1.18) * 100) / 100;
+                    const baseTotalWithGst = Math.round(baseTotal * 1.18 * 100) / 100;
 
                     return (
                         <>
