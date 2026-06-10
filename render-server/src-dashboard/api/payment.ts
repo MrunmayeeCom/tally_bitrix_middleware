@@ -24,12 +24,19 @@ export const createOrder = async ({
     amount,
   };
   console.log('[createOrder] payload:', payload);
-  const res = await API.post(`/api/payment/create-order`, payload, {
-    headers: { "x-api-key": API_KEY },
-  });
-  console.log('[createOrder] response:', res.data);
-  if (!res.data?.success) throw new Error(res.data?.message || "Order creation failed");
-  return res.data;
+  try {
+    const res = await API.post(`/api/payment/create-order`, payload, {
+      headers: { "x-api-key": API_KEY },
+    });
+    console.log('[createOrder] response:', res.data);
+    if (!res.data?.success) throw new Error(res.data?.message || "Order creation failed");
+    return res.data;
+  } catch(e: any) {
+    console.error('[createOrder] error response:', e.response?.data);
+    console.error('[createOrder] error status:', e.response?.status);
+    console.error('[createOrder] error details:', JSON.stringify(e.response?.data, null, 2));
+    throw new Error(e.response?.data?.message || e.response?.data?.error || e.message);
+  }
 };
 
 export const verifyPayment = async (details: any) => {
