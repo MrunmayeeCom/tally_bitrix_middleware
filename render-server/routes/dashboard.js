@@ -100,15 +100,21 @@ router.get('/data', async (req, res) => {
   const pushedAt  = new Date(data.pushedAt);
   const agentLive = (Date.now() - pushedAt.getTime()) < 5 * 60 * 1000;
 
-  // Pull licenseStatus from OAuthToken if available, fallback to pushed data
-  let licenseStatus = data.licenseStatus || 'inactive';
+  // Pull licenseStatus + customerEmail from OAuthToken — source of truth
+  let licenseStatus    = data.licenseStatus    || 'inactive';
+  let customerEmail    = data.customerEmail    || '';
+  let licenseId        = data.licenseId        || '';
+  let licensePlan      = data.licensePlan      || '';
   try {
     const OAuthToken = require('../models/OAuthToken');
     const token = await OAuthToken.findOne({ clientId }).lean();
     if (token?.licenseStatus) licenseStatus = token.licenseStatus;
+    if (token?.customerEmail) customerEmail  = token.customerEmail;
+    if (token?.licenseId)     licenseId      = token.licenseId;
+    if (token?.licensePlan)   licensePlan    = token.licensePlan;
   } catch {}
 
-  res.json({ success: true, agentLive, licenseStatus, ...data });
+  res.json({ success: true, agentLive, licenseStatus, customerEmail, licenseId, licensePlan, ...data });
 });
 
 module.exports = router;

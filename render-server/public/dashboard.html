@@ -1035,13 +1035,14 @@ async function checkLicenseAndShowBanner() {
       { headers: HEADERS, signal: AbortSignal.timeout(5000) }
     );
     const json = await r.json();
-    const licenseActive = json.licenseStatus === 'active';
+    // Check licenseStatus from DB (now always returned from OAuthToken)
+    const licenseActive = json.licenseStatus === 'active' || json.licenseId;
     const banner = document.getElementById('license-banner');
     if (banner) banner.style.display = licenseActive ? 'none' : 'flex';
   } catch {
-    // show banner by default if check fails
+    // hide banner on error — don't block user who has valid license
     const banner = document.getElementById('license-banner');
-    if (banner) banner.style.display = 'flex';
+    if (banner) banner.style.display = 'none';
   }
 }
 
@@ -1189,27 +1190,6 @@ async function loadReceiptMatch() {
     box.innerHTML = html;
   } catch {
     box.innerHTML = `<div class="empty" style="padding:28px 0;"><div class="empty-ico">⚠️</div>Could not load receipt match</div>`;
-  }
-}
-
-function openPricing() {
-  const url = `https://tally-bitrix-middleware.onrender.com/pricing?clientId=${clientId}`;
-  window.open(url, '_blank', 'width=1100,height=800,scrollbars=yes,resizable=yes');
-}
-
-async function checkLicenseAndShowBanner() {
-  try {
-    const r = await fetch(
-      `${API}/dashboard/data?clientId=${clientId}`,
-      { headers: HEADERS, signal: AbortSignal.timeout(5000) }
-    );
-    const json = await r.json();
-    const licenseActive = json.licenseStatus === 'active';
-    const banner = document.getElementById('license-banner');
-    if (banner) banner.style.display = licenseActive ? 'none' : 'flex';
-  } catch {
-    const banner = document.getElementById('license-banner');
-    if (banner) banner.style.display = 'flex';
   }
 }
 
