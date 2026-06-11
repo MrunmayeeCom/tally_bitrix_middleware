@@ -625,15 +625,19 @@ async function loadStatus() {
       { headers: HEADERS, signal: AbortSignal.timeout(5000) }
     );
     const json = await r.json();
-    const live = json.success && json.agentLive;
+    const hasData = json.success;
+    const live = hasData && json.agentLive;
     document.getElementById('status-pill').className = live ? 'pill live' : 'pill offline';
     document.getElementById('pill-text').textContent  = live ? 'LIVE' : 'OFFLINE';
     if (live) {
       document.getElementById('offline-banner').classList.remove('show');
+    } else if (hasData) {
+      // Has historical data but agent currently offline — show softer warning
+      document.getElementById('offline-banner').classList.add('show');
     } else {
       document.getElementById('offline-banner').classList.add('show');
     }
-    return live;
+    return hasData; // return true even if agent offline, so stats/history still load
   } catch {
     document.getElementById('status-pill').className = 'pill offline';
     document.getElementById('pill-text').textContent = 'OFFLINE';

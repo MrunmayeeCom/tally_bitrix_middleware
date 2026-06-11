@@ -22,6 +22,18 @@ router.get('/', async (req, res) => {
     return res.sendFile(tsxPath);
   }
 
+  // No clientId — try to find the most recently active portal and redirect
+  try {
+    const OAuthToken = require('../models/OAuthToken');
+    const latest = await OAuthToken.findOne({}).sort({ updatedAt: -1 }).lean();
+    if (latest?.clientId) {
+      console.log('[Dashboard] No clientId in query — redirecting to latest portal:', latest.clientId);
+      return res.redirect(`/dashboard?clientId=${latest.clientId}`);
+    }
+  } catch (e) {
+    console.error('[Dashboard] Latest token lookup failed:', e.message);
+  }
+
   // Bitrix24 passes member_id in query when opening the app
   const memberId = req.query.member_id || req.query.MEMBER_ID;
   if (memberId) {
@@ -75,14 +87,34 @@ router.get('/', async (req, res) => {
 });
 
 // POST /dashboard/push?clientId=xxx — agent pushes its status up
-router.post('/push', (req, res) => {
+router.post('/push', async (req, res) => {
   const { clientId } = req.query;
   if (!clientId) return res.status(400).json({ success: false, message: 'clientId required' });
 
-  store[clientId] = {
+  const payload = {
     ...req.body,
     pushedAt: new Date().toISOString(),
   };
+
+  store[clientId] = payload;
+
+  // Also store under the canonical OAuthToken clientId (bx-{memberId}) so dashboard
+  // can find it regardless of which clientId the agent uses
+  try {
+    const OAuthToken = require('../models/OAuthToken');
+    const domain = req.body?.domain || req.body?.bitrixDomain || '';
+    let token = null;
+    if (domain) {
+      token = await OAuthToken.findOne({ bitrixDomain: domain }).lean();
+    }
+    if (!token) {
+      token = await OAuthToken.findOne({}).sort({ updatedAt: -1 }).lean();
+    }
+    if (token && token.clientId && token.clientId !== clientId) {
+      store[token.clientId] = payload;
+      console.log(`[Dashboard] Push cross-stored under canonical clientId: ${token.clientId}`);
+    }
+  } catch {}
 
   console.log(`[Dashboard] Push received from clientId: ${clientId}`);
   res.json({ success: true });
@@ -94,7 +126,32 @@ router.get('/data', async (req, res) => {
   if (!clientId) return res.status(400).json({ success: false, message: 'clientId required' });
 
   const data = store[clientId];
-  if (!data) return res.json({ success: false, message: 'No data yet — agent may be offline' });
+  if (!data) {
+    // Try to find by matching OAuthToken clientId → maybe agent uses different clientId
+    try {
+      const OAuthToken = require('../models/OAuthToken');
+      const token = await OAuthToken.findOne({ clientId }).lean();
+      if (!token) {
+        // Try latest token as fallback
+        const latest = await OAuthToken.findOne({}).sort({ updatedAt: -1 }).lean();
+        if (latest && store[latest.clientId]) {
+          const altData = store[latest.clientId];
+          const pushedAt = new Date(altData.pushedAt);
+          const agentLive = (Date.now() - pushedAt.getTime()) < 5 * 60 * 1000;
+          let licenseStatus = altData.licenseStatus || 'inactive';
+          let customerEmail = altData.customerEmail || '';
+          let licenseId = altData.licenseId || '';
+          let licensePlan = altData.licensePlan || '';
+          if (latest.licenseStatus) licenseStatus = latest.licenseStatus;
+          if (latest.customerEmail) customerEmail = latest.customerEmail;
+          if (latest.licenseId) licenseId = latest.licenseId;
+          if (latest.licensePlan) licensePlan = latest.licensePlan;
+          return res.json({ success: true, agentLive, licenseStatus, customerEmail, licenseId, licensePlan, ...altData });
+        }
+      }
+    } catch {}
+    return res.json({ success: false, agentLive: false, message: 'No data yet — agent may be offline', licenseStatus: 'inactive' });
+  }
 
   // Mark agent as offline if no push in last 5 minutes
   const pushedAt  = new Date(data.pushedAt);

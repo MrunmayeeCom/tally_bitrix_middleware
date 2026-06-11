@@ -138,7 +138,7 @@ function spawnServer(cfg) {
     TALLY_COMPANIES:     getCompanies(cfg).join(','),
     CUSTOMER_EMAIL:      cfg.customerEmail || '',
     RENDER_SERVER_URL:   'https://tally-bitrix-middleware.onrender.com',
-    CLIENT_ID:           require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0],
+    CLIENT_ID:           cfg.bitrixClientId || (require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0]),
     LICENSE_FEATURES:    licenseFeatures,
     LICENSE_PLAN:        licensePlan,
     BITRIX_CLIENT_SECRET: process.env.BITRIX_CLIENT_SECRET || '',
@@ -977,7 +977,7 @@ function pushStatusToRender() {
   try {
     const cfg      = loadConfig();
     if (!cfg) return;
-    const clientId = cfg.bitrixClientId || (require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0]);
+    const clientId = cfg.bitrixClientId || cfg.CLIENT_ID || (require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0]);
 
     const http  = require('http');
     const https = require('https');
