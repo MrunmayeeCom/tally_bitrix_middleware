@@ -7,6 +7,9 @@ const fs      = require('fs');
 // { [clientId]: { stats, history, lastSync, connStatus, pushedAt } }
 const store = {};
 
+// Trigger queue: clientId → [{ trigger, queuedAt }]
+const triggerQueue = {};
+
 // GET /dashboard/info — resolve clientId from member_id or domain
 // (kept for legacy redirect support)
 router.get('/', async (req, res) => {
@@ -86,10 +89,21 @@ router.get('/', async (req, res) => {
   res.redirect('/dashboard');
 });
 
-// POST /dashboard/push?clientId=xxx — agent pushes its status up
+// POST /dashboard/push?clientId=xxx — agent pushes its status up OR dashboard sends trigger
 router.post('/push', async (req, res) => {
   const { clientId } = req.query;
   if (!clientId) return res.status(400).json({ success: false, message: 'clientId required' });
+
+  // If this is a trigger command from the dashboard (not a status push from agent)
+  if (req.body && req.body.trigger && !req.body.agentLive && !req.body.stats) {
+    if (!triggerQueue[clientId]) triggerQueue[clientId] = [];
+    triggerQueue[clientId].push({
+      trigger: req.body.trigger,
+      queuedAt: new Date().toISOString(),
+    });
+    console.log(`[Dashboard] Trigger queued for clientId: ${clientId} | trigger: ${req.body.trigger}`);
+    return res.json({ success: true, queued: true });
+  }
 
   const payload = {
     ...req.body,
@@ -171,7 +185,33 @@ router.get('/data', async (req, res) => {
     if (token?.licensePlan)   licensePlan    = token.licensePlan;
   } catch {}
 
-  res.json({ success: true, agentLive, licenseStatus, customerEmail, licenseId, licensePlan, ...data });
+  // Merge any extra structured data pushed by agent
+  const responseData = {
+    success: true,
+    agentLive,
+    licenseStatus,
+    customerEmail,
+    licenseId,
+    licensePlan,
+    ...data,
+    // Ensure these keys always exist even if agent hasn't pushed them yet
+    history:    data.history    || [],
+    lastSync:   data.lastSync   || null,
+    overdue:    data.overdue    || [],
+    status:     data.status     || {},
+    companies:  data.companies  || { companies: [], active: '' },
+  };
+  res.json(responseData);
+});
+
+// GET /dashboard/triggers?clientId=xxx — agent polls for pending triggers
+router.get('/triggers', (req, res) => {
+  const { clientId } = req.query;
+  if (!clientId) return res.status(400).json({ success: false, message: 'clientId required' });
+
+  const pending = triggerQueue[clientId] || [];
+  triggerQueue[clientId] = []; // clear after delivery
+  res.json({ success: true, triggers: pending });
 });
 
 module.exports = router;

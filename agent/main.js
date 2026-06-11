@@ -973,57 +973,138 @@ app.on('window-all-closed', (e) => e.preventDefault()); // keep running in tray
 app.on('activate', openDashboard);
 
 // ── Push agent status to Render every 30s ────────────────────────────────────
-function pushStatusToRender() {
-  try {
-    const cfg      = loadConfig();
-    if (!cfg) return;
-    const clientId = cfg.bitrixClientId || cfg.CLIENT_ID || (require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0]);
-
-    const http  = require('http');
-    const https = require('https');
-
-    // Collect local stats from service
-    const localReq = http.request(
-      { hostname: 'localhost', port: 5050, path: '/api/history', method: 'GET', timeout: 3000 },
+function fetchLocalJson(path, timeout = 3000) {
+  return new Promise((resolve) => {
+    const http = require('http');
+    const req = http.request(
+      { hostname: 'localhost', port: 5050, path, method: 'GET', timeout },
       (res) => {
         let d = '';
         res.on('data', c => d += c);
         res.on('end', () => {
-          try {
-            const history = JSON.parse(d);
-            const today   = new Date().toDateString();
-            const payload = {
-              stats: {
-                total:   history.reduce((s, r) => s + (r.processed || 0), 0),
-                today:   history.filter(r => new Date(r.timestamp).toDateString() === today).reduce((s, r) => s + (r.processed || 0), 0),
-                failed:  history.reduce((s, r) => s + (r.failed    || 0), 0),
-                runs:    history.length,
-              },
-              history:    history.slice(0, 30),
-              lastSync:   history[0] || null,
-              agentLive:  true,
-              clientId,
-              domain:     cfg.bitrixDomain || '',
-            };
-
-            const body    = JSON.stringify(payload);
-            const pushReq = https.request({
-              hostname: 'tally-bitrix-middleware.onrender.com',
-              path:     `/dashboard/push?clientId=${encodeURIComponent(clientId)}`,
-              method:   'POST',
-              headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-              timeout:  5000,
-            }, (r) => { r.resume(); });
-            pushReq.on('error', () => {});
-            pushReq.write(body);
-            pushReq.end();
-          } catch {}
+          try { resolve(JSON.parse(d)); } catch { resolve(null); }
         });
       }
     );
-    localReq.on('error', () => {});
-    localReq.end();
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+function postLocalJson(path, body = {}, timeout = 8000) {
+  return new Promise((resolve) => {
+    const http = require('http');
+    const bodyStr = JSON.stringify(body);
+    const req = http.request(
+      {
+        hostname: 'localhost', port: 5050, path, method: 'POST', timeout,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyStr) }
+      },
+      (res) => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => {
+          try { resolve(JSON.parse(d)); } catch { resolve(null); }
+        });
+      }
+    );
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.write(bodyStr);
+    req.end();
+  });
+}
+
+async function pushStatusToRender() {
+  try {
+    const cfg = loadConfig();
+    if (!cfg) return;
+    const clientId = cfg.bitrixClientId || cfg.CLIENT_ID || (require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0]);
+
+    const https = require('https');
+
+    // Fetch all data in parallel from local service
+    const [history, overdueRaw, statusRaw, companiesRaw] = await Promise.all([
+      fetchLocalJson('/api/history'),
+      fetchLocalJson('/api/overdue'),
+      fetchLocalJson('/api/status'),
+      fetchLocalJson('/api/companies'),
+    ]);
+
+    if (!history) return; // service not running
+
+    const today = new Date().toDateString();
+    const payload = {
+      stats: {
+        total:  history.reduce((s, r) => s + (r.processed || 0), 0),
+        today:  history.filter(r => new Date(r.timestamp).toDateString() === today).reduce((s, r) => s + (r.processed || 0), 0),
+        failed: history.reduce((s, r) => s + (r.failed || 0), 0),
+        runs:   history.length,
+      },
+      history:   history.slice(0, 30),
+      lastSync:  history[0] || null,
+      overdue:   overdueRaw || [],
+      status:    statusRaw  || {},
+      companies: companiesRaw || { companies: [], active: '' },
+      agentLive: true,
+      clientId,
+      domain:    cfg.bitrixDomain || '',
+    };
+
+    const body    = JSON.stringify(payload);
+    const pushReq = https.request({
+      hostname: 'tally-bitrix-middleware.onrender.com',
+      path:     `/dashboard/push?clientId=${encodeURIComponent(clientId)}`,
+      method:   'POST',
+      headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout:  8000,
+    }, (r) => { r.resume(); });
+    pushReq.on('error', () => {});
+    pushReq.write(body);
+    pushReq.end();
+  } catch {}
+}
+
+// Poll Render server for triggers queued by the dashboard and execute them locally
+async function pollTriggersFromRender() {
+  try {
+    const cfg = loadConfig();
+    if (!cfg) return;
+    const clientId = cfg.bitrixClientId || cfg.CLIENT_ID || (require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0]);
+
+    const https = require('https');
+    const data  = await new Promise((resolve) => {
+      const req = https.request({
+        hostname: 'tally-bitrix-middleware.onrender.com',
+        path:     `/dashboard/triggers?clientId=${encodeURIComponent(clientId)}`,
+        method:   'GET',
+        timeout:  5000,
+      }, (res) => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
+      });
+      req.on('error', () => resolve(null));
+      req.end();
+    });
+
+    if (!data || !data.triggers || data.triggers.length === 0) return;
+
+    logger.info(`[TriggerPoll] ${data.triggers.length} trigger(s) received from dashboard`);
+
+    for (const item of data.triggers) {
+      const triggerPath = item.trigger;
+      if (!triggerPath) continue;
+      logger.info(`[TriggerPoll] Executing trigger: ${triggerPath}`);
+      // Fire to local service
+      await postLocalJson(triggerPath, {});
+    }
   } catch {}
 }
 
 setInterval(pushStatusToRender, 30000);
+setInterval(pollTriggersFromRender, 8000); // poll for triggers every 8 seconds
+// Run immediately on startup
+setTimeout(pushStatusToRender, 5000);
+setTimeout(pollTriggersFromRender, 10000);

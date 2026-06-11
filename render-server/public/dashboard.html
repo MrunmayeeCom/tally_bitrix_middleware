@@ -594,27 +594,46 @@ const HEADERS = {
   'Content-Type': 'application/json'
 };
 
-async function get(path) {
+let _dashboardCache = null;
+let _dashboardCacheTime = 0;
+
+async function getDashboardData() {
+  if (_dashboardCache && (Date.now() - _dashboardCacheTime) < 10000) {
+    return _dashboardCache;
+  }
   const r = await fetch(
     `${API}/dashboard/data?clientId=${clientId}`,
-    { headers: HEADERS, signal: AbortSignal.timeout(5000) }
+    { headers: HEADERS, signal: AbortSignal.timeout(8000) }
   );
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const json = await r.json();
   if (!json.success) throw new Error(json.message || 'No data');
+  _dashboardCache = json;
+  _dashboardCacheTime = Date.now();
+  return json;
+}
+
+async function get(path) {
+  const json = await getDashboardData();
 
   if (path === '/api/history')   return json.history   || [];
   if (path === '/api/lastsync')  return json.lastSync  || null;
   if (path === '/api/overdue')   return json.overdue   || [];
   if (path === '/api/status')    return json.status    || {};
   if (path === '/api/companies') return json.companies || { companies: [], active: '' };
-  if (path === '/health')        return { ok: true };
+  if (path === '/health')        return json.agentLive ? { ok: true } : (() => { throw new Error('Agent offline'); })();
   return json;
 }
 
 async function post(path) {
-  const r = await fetch(`${API}/dashboard/push?clientId=${clientId}`, { method: 'POST', headers: HEADERS, body: JSON.stringify({ trigger: path }), signal: AbortSignal.timeout(8000) });
+  const r = await fetch(`${API}/dashboard/push?clientId=${clientId}`, {
+    method: 'POST',
+    headers: HEADERS,
+    body: JSON.stringify({ trigger: path }),
+    signal: AbortSignal.timeout(8000)
+  });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  _dashboardCache = null; // invalidate cache after trigger
   return r.json();
 }
 
