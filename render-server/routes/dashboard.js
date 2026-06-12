@@ -125,8 +125,10 @@ router.post('/push', async (req, res) => {
       token = await OAuthToken.findOne({}).sort({ updatedAt: -1 }).lean();
     }
     if (token && token.clientId && token.clientId !== clientId) {
-      store[token.clientId] = payload;
-      console.log(`[Dashboard] Push cross-stored under canonical clientId: ${token.clientId}`);
+      store[token.clientId] = { ...payload };
+      // Also store under the incoming clientId as a secondary key
+      if (!store[clientId]) store[clientId] = { ...payload };
+      console.log(`[Dashboard] Push cross-stored: ${clientId} → ${token.clientId}`);
     }
   } catch {}
 

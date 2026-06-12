@@ -138,7 +138,7 @@ function spawnServer(cfg) {
     TALLY_COMPANIES:     getCompanies(cfg).join(','),
     CUSTOMER_EMAIL:      cfg.customerEmail || '',
     RENDER_SERVER_URL:   'https://tally-bitrix-middleware.onrender.com',
-    CLIENT_ID:           cfg.bitrixClientId || (require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0]),
+    CLIENT_ID:           cfg.bitrixClientId || (require('os').hostname() + '-' + (cfg.customerEmail || '').replace(/@.*/, '')),
     LICENSE_FEATURES:    licenseFeatures,
     LICENSE_PLAN:        licensePlan,
     BITRIX_CLIENT_SECRET: process.env.BITRIX_CLIENT_SECRET || '',
@@ -828,6 +828,8 @@ async function bootstrapLicense(cfg) {
     _licensePlan  = result.plan || 'Unknown';
 
     if (result.valid) {
+      // Bake email into env so child process (src/server.js) can use it immediately
+      process.env.CUSTOMER_EMAIL = cfg.customerEmail || '';
       let previousPlan = getPlan();
       setFeatures(result.features, result.plan, result.valid);
 
@@ -1020,7 +1022,8 @@ async function pushStatusToRender() {
   try {
     const cfg = loadConfig();
     if (!cfg) return;
-    const clientId = cfg.bitrixClientId || cfg.CLIENT_ID || (require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0]);
+    const clientId = getAgentClientId();
+    if (!clientId) return;
 
     const https = require('https');
 
@@ -1075,7 +1078,8 @@ async function pollTriggersFromRender() {
   try {
     const cfg = loadConfig();
     if (!cfg) return;
-    const clientId = cfg.bitrixClientId || cfg.CLIENT_ID || (require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0]);
+    const clientId = getAgentClientId();
+    if (!clientId) return;
 
     const https = require('https');
     const data  = await new Promise((resolve) => {
@@ -1111,8 +1115,16 @@ async function pollTriggersFromRender() {
   } catch {}
 }
 
+function getAgentClientId() {
+  const cfg = loadConfig();
+  if (!cfg) return null;
+  return cfg.bitrixClientId
+    || process.env.CLIENT_ID
+    || (require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0]);
+}
+
 setInterval(pushStatusToRender, 30000);
-setInterval(pollTriggersFromRender, 8000); // poll for triggers every 8 seconds
+setInterval(pollTriggersFromRender, 8000);
 // Run immediately on startup
 setTimeout(pushStatusToRender, 5000);
 setTimeout(pollTriggersFromRender, 10000);

@@ -641,15 +641,12 @@ async function post(path) {
 async function loadStatus() {
   try {
     const json = await getDashboardData();
-    const live = !!json.agentLive;
+    const pushedMs = json.pushedAt ? Date.now() - new Date(json.pushedAt).getTime() : Infinity;
+    const live = !!json.agentLive && pushedMs < 5 * 60 * 1000;
     document.getElementById('status-pill').className = live ? 'pill live' : 'pill offline';
     document.getElementById('pill-text').textContent  = live ? 'LIVE' : 'OFFLINE';
-    if (live) {
-      document.getElementById('offline-banner').classList.remove('show');
-    } else {
-      document.getElementById('offline-banner').classList.add('show');
-    }
-    return true; // always return true if we got data — stats/history load regardless
+    document.getElementById('offline-banner').classList.toggle('show', !live);
+    return true;
   } catch {
     document.getElementById('status-pill').className = 'pill offline';
     document.getElementById('pill-text').textContent = 'OFFLINE';
@@ -1052,7 +1049,8 @@ async function checkLicenseAndShowBanner() {
     );
     const json = await r.json();
     // Check licenseStatus from DB (now always returned from OAuthToken)
-    const licenseActive = json.licenseStatus === 'active' || json.licenseId;
+    const licenseActive = json.licenseStatus === 'active'
+      || (json.licenseId && json.licenseId.length > 5);
     const banner = document.getElementById('license-banner');
     if (banner) banner.style.display = licenseActive ? 'none' : 'flex';
   } catch {

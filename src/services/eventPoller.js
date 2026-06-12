@@ -6,8 +6,9 @@ const POLL_INTERVAL_MS = 5000;
 
 // CLIENT_ID must be a function — reads env at call time, not module load time
 function getClientId() {
-  const email = (process.env.CUSTOMER_EMAIL || '').split('@')[0];
-  return process.env.CLIENT_ID || (email ? `${os.hostname()}-${email}` : os.hostname());
+  if (process.env.CLIENT_ID) return process.env.CLIENT_ID;
+  const email = (process.env.CUSTOMER_EMAIL || '').replace(/@.*/, '');
+  return email ? `${os.hostname()}-${email}` : os.hostname();
 }
 
 // Process-level singleton guard — survives multiple require() calls
@@ -52,8 +53,13 @@ async function registerClient(cfg) {
     });
   }
 
-  if (!email || !bitrixUrl) {
-    logger.warn('[Poller] Skipping registration — email or bitrixUrl not set');
+  if (!bitrixUrl) {
+    logger.warn('[Poller] Skipping registration — bitrixUrl not set');
+    return;
+  }
+  if (!email) {
+    logger.warn('[Poller] No email yet — will retry registration in 60s');
+    setTimeout(() => registerClient(cfg), 60000);
     return;
   }
 

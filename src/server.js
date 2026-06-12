@@ -50,7 +50,18 @@ app.listen(config.port, async () => {
   // ── Step 4: Start scheduler (once only) ──────────────────────────────────
   if (!global._schedulerStarted) {
     global._schedulerStarted = true;
-    startScheduler();
+    const { isLicenseActive } = require('./services/featureGate');
+    if (isLicenseActive()) {
+      startScheduler();
+    } else {
+      logger.warn('[Scheduler] License not active at startup — retrying in 30s');
+      setTimeout(() => {
+        if (!global._schedulerActuallyStarted) {
+          global._schedulerActuallyStarted = true;
+          startScheduler();
+        }
+      }, 30000);
+    }
   } else {
     logger.warn('[Scheduler] Already started — skipping duplicate');
   }
