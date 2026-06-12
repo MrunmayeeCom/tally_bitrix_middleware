@@ -1025,11 +1025,12 @@ async function pushStatusToRender() {
     const https = require('https');
 
     // Fetch all data in parallel from local service
-    const [history, overdueRaw, statusRaw, companiesRaw] = await Promise.all([
+    const [history, overdueRaw, statusRaw, companiesRaw, lastSyncRaw] = await Promise.all([
       fetchLocalJson('/api/history'),
       fetchLocalJson('/api/overdue'),
       fetchLocalJson('/api/status'),
       fetchLocalJson('/api/companies'),
+      fetchLocalJson('/api/lastsync'),
     ]);
 
     if (!history) return; // service not running
@@ -1043,13 +1044,16 @@ async function pushStatusToRender() {
         runs:   history.length,
       },
       history:   history.slice(0, 30),
-      lastSync:  history[0] || null,
-      overdue:   overdueRaw || [],
-      status:    statusRaw  || {},
+      lastSync:  lastSyncRaw || history[0] || null,
+      overdue:   overdueRaw  || [],
+      status:    statusRaw   || {},
       companies: companiesRaw || { companies: [], active: '' },
       agentLive: true,
       clientId,
-      domain:    cfg.bitrixDomain || '',
+      domain:      cfg.bitrixDomain   || '',
+      customerEmail: cfg.customerEmail || '',
+      licenseStatus: statusRaw?.license?.status || '',
+      licensePlan:   statusRaw?.license?.plan   || '',
     };
 
     const body    = JSON.stringify(payload);
@@ -1097,8 +1101,12 @@ async function pollTriggersFromRender() {
       const triggerPath = item.trigger;
       if (!triggerPath) continue;
       logger.info(`[TriggerPoll] Executing trigger: ${triggerPath}`);
-      // Fire to local service
-      await postLocalJson(triggerPath, {});
+      // Fire to local service — best-effort, don't let one failure block others
+      try {
+        await postLocalJson(triggerPath, {});
+      } catch (e) {
+        logger.info(`[TriggerPoll] Trigger ${triggerPath} returned error (non-fatal): ${e.message}`);
+      }
     }
   } catch {}
 }

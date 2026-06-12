@@ -297,26 +297,17 @@
         <div class="hint">This email is verified against your active TallyBitrixSync license</div>
       </div>
 
-      <div style="background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:18px;margin-bottom:14px;">
-        <div style="font-size:13px;font-weight:600;margin-bottom:6px;">Connect Bitrix24</div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.6;">
-          Click below to connect your Bitrix24 portal. Your browser will open — authorize the app and return here.
-        </div>
-        <button class="btn btn-primary" id="btn-connect-bitrix" onclick="connectBitrix()" style="margin-bottom:8px;">
-          🔗 Connect Bitrix24
-        </button>
-        <div id="bitrix-status" style="font-size:11px;color:var(--muted);text-align:center;min-height:16px;"></div>
-      </div>
-
-      <!-- Hidden — stores domain received from OAuth callback -->
+      <!-- Hidden — stores domain/clientId extracted from webhook URL -->
       <input id="bitrixDomain" type="hidden" value=""/>
       <input id="bitrixClientId" type="hidden" value=""/>
 
       <div class="field" style="margin-top:12px;">
         <label>Bitrix24 Webhook URL</label>
         <input id="bitrixUrl" type="text"
-          placeholder="https://yourportal.bitrix24.com/rest/1/abc123.../"/>
+          placeholder="https://yourportal.bitrix24.com/rest/1/abc123.../"
+          oninput="onWebhookUrlInput(this.value)"/>
         <div class="hint">Bitrix24 → Developer resources → Inbound webhooks → Create (needs CRM + Contacts scopes)</div>
+        <div id="bitrix-status" style="font-size:11px;margin-top:6px;min-height:16px;color:var(--muted);"></div>
       </div>
 
       <button class="btn btn-primary" id="btn-step1-continue" onclick="goStep(2)" disabled
@@ -1120,12 +1111,12 @@ function goStep(n) {
   if (n === 2) {
     const email = document.getElementById('customerEmail')?.value.trim();
     if (!email || !email.includes('@')) { showToast('Please enter your registered email', 'error'); return; }
-    const domain = document.getElementById('bitrixDomain').value.trim();
-    if (!domain) { showToast('Please connect Bitrix24 first', 'error'); return; }
     const webhookUrl = document.getElementById('bitrixUrl')?.value.trim();
     if (!webhookUrl || !webhookUrl.includes('bitrix24.com/rest/')) {
       showToast('Please enter your Bitrix24 webhook URL', 'error'); return;
     }
+    const domain = document.getElementById('bitrixDomain').value.trim();
+    if (!domain) { showToast('Webhook URL not validated yet — please wait', 'error'); return; }
   }
   if (n === 'install') {
     const host = document.getElementById('tallyHost').value.trim();
@@ -1242,14 +1233,24 @@ async function installService() {
 function showDashboard() { navigateTo('dashboard'); }
 
 function getFormConfig() {
-  // Guard: filter out any UUID-like values that may have crept in from a bad scan
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const safeCompanies = _companies.filter(c => !uuidRegex.test(c));
+  const webhookUrl = document.getElementById('bitrixUrl')?.value.trim() || '';
+  // Auto-derive domain and clientId from webhook URL if hidden fields are empty
+  let bitrixDomain   = document.getElementById('bitrixDomain')?.value.trim() || '';
+  let bitrixClientId = document.getElementById('bitrixClientId')?.value.trim() || '';
+  if (!bitrixDomain && webhookUrl) {
+    const m = webhookUrl.match(/https?:\/\/([^\/]+)\/rest\//);
+    if (m) {
+      bitrixDomain   = m[1];
+      bitrixClientId = 'bx-' + m[1].replace(/\./g, '-');
+    }
+  }
   return {
     customerEmail  : document.getElementById('customerEmail')?.value.trim() || '',
-    bitrixDomain   : document.getElementById('bitrixDomain')?.value.trim() || '',
-    bitrixClientId : document.getElementById('bitrixClientId')?.value.trim() || '',
-    bitrixUrl      : document.getElementById('bitrixUrl')?.value.trim() || '',
+    bitrixDomain,
+    bitrixClientId,
+    bitrixUrl      : webhookUrl,
     tallyHost      : document.getElementById('tallyHost').value.trim() || 'localhost',
     tallyPort      : parseInt(document.getElementById('tallyPort').value) || 9000,
     tallyCompany   : safeCompanies[0] || '',
@@ -1786,83 +1787,62 @@ function escapeHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// ── Bitrix24 OAuth connect ────────────────────────────────────────────────────
-const BITRIX_INSTALL_URL = 'https://www.bitrix24.com/register/reg.php?addmodule=rajlaxmi_solutions_p.app31';
+// ── Bitrix24 Webhook URL auto-validation ──────────────────────────────────────
 
-function connectBitrix() {
-  const btn = document.getElementById('btn-connect-bitrix');
-  const status = document.getElementById('bitrix-status');
-  btn.innerHTML = '<span class="btn-loader"></span> Opening browser…';
-  btn.disabled = true;
-  status.textContent = 'Waiting for Bitrix24 authorization…';
-  status.style.color = 'var(--accent)';
+let _webhookValidateTimer = null;
 
-  // Open Bitrix24 install URL — use Electron shell if available, else window.open
-  const isElectron = typeof process !== 'undefined' && process.versions?.electron;
-  if (isElectron) {
-    const { shell } = require('electron');
-    shell.openExternal(BITRIX_INSTALL_URL);
-  } else {
-    window.open(BITRIX_INSTALL_URL, '_blank');
-  }
-
-  // Start polling for OAuth completion from Render server
-  _startOAuthPolling();
-}
-
-let _oauthPollInterval = null;
-
-function _startOAuthPolling() {
-  if (_oauthPollInterval) clearInterval(_oauthPollInterval);
-  const email = document.getElementById('customerEmail')?.value.trim();
-
-  _oauthPollInterval = setInterval(async () => {
-    try {
-      const res = await fetch(
-        `https://tally-bitrix-middleware.onrender.com/bitrix/oauth/status?email=${encodeURIComponent(email)}`,
-        { signal: AbortSignal.timeout(5000) }
-      );
-      const data = await res.json();
-      if (data.success && data.connected) {
-        clearInterval(_oauthPollInterval);
-        _oauthConnected(data.domain, data.clientId);
-      }
-    } catch {}
-  }, 3000);
-
-  // Stop polling after 5 minutes
-  setTimeout(() => {
-    if (_oauthPollInterval) {
-      clearInterval(_oauthPollInterval);
-      const btn = document.getElementById('btn-connect-bitrix');
-      const status = document.getElementById('bitrix-status');
-      if (btn) { btn.innerHTML = '🔗 Connect Bitrix24'; btn.disabled = false; }
-      if (status) { status.textContent = 'Timed out — please try again'; status.style.color = 'var(--danger)'; }
-    }
-  }, 5 * 60 * 1000);
-}
-
-function _oauthConnected(domain, clientId) {
-  document.getElementById('bitrixDomain').value  = domain  || '';
-  document.getElementById('bitrixClientId').value = clientId || '';
-
-  const btn    = document.getElementById('btn-connect-bitrix');
+function onWebhookUrlInput(val) {
+  clearTimeout(_webhookValidateTimer);
   const status = document.getElementById('bitrix-status');
   const cont   = document.getElementById('btn-step1-continue');
+  const domainInput   = document.getElementById('bitrixDomain');
+  const clientIdInput = document.getElementById('bitrixClientId');
 
-  btn.innerHTML = '✓ Bitrix24 Connected';
-  btn.style.background = 'var(--accent2)';
-  btn.style.color = '#0d0f14';
-  btn.disabled = true;
+  // Extract domain from webhook URL immediately (no async needed)
+  const urlMatch = val.match(/https?:\/\/([^\/]+)\/rest\/(\d+)\//);
+  if (!urlMatch) {
+    status.textContent = '';
+    domainInput.value   = '';
+    clientIdInput.value = '';
+    cont.disabled = true;
+    cont.style.opacity = '0.4';
+    cont.style.cursor = 'not-allowed';
+    return;
+  }
 
-  status.textContent = `Connected to ${domain}`;
-  status.style.color = 'var(--accent2)';
+  const domain   = urlMatch[1];
+  const userId   = urlMatch[2];
+  const clientId = 'bx-' + domain.replace(/\./g, '-');
 
-  cont.disabled = false;
-  cont.style.opacity = '1';
-  cont.style.cursor = 'pointer';
+  domainInput.value   = domain;
+  clientIdInput.value = clientId;
 
-  showToast(`Bitrix24 connected ✓`, 'success');
+  status.textContent = 'Validating webhook…';
+  status.style.color = 'var(--accent)';
+
+  // Debounce — validate after 600ms of no typing
+  _webhookValidateTimer = setTimeout(async () => {
+    try {
+      const testUrl = val.replace(/\/$/, '') + '/crm.category.list?entityTypeId=2';
+      const res = await fetch(testUrl, { signal: AbortSignal.timeout(6000) });
+      const data = await res.json();
+      if (data && (data.result !== undefined || data.total !== undefined)) {
+        status.textContent = `✓ Connected to ${domain}`;
+        status.style.color = 'var(--accent2)';
+        cont.disabled = false;
+        cont.style.opacity = '1';
+        cont.style.cursor = 'pointer';
+      } else {
+        throw new Error('Invalid response');
+      }
+    } catch (e) {
+      status.textContent = 'Could not reach Bitrix24 — check URL and scopes';
+      status.style.color = 'var(--danger)';
+      cont.disabled = true;
+      cont.style.opacity = '0.4';
+      cont.style.cursor = 'not-allowed';
+    }
+  }, 600);
 }
 </script>
 </body>

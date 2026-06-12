@@ -135,6 +135,8 @@ router.post('/push', async (req, res) => {
 });
 
 // GET /dashboard/data?clientId=xxx — dashboard fetches latest data
+// Also handle /dashboard/data POST (some Bitrix24 iframes POST instead of GET)
+router.post('/data', async (req, res, next) => { req.query = { ...req.query, ...req.body }; next(); });
 router.get('/data', async (req, res) => {
   const { clientId } = req.query;
   if (!clientId) return res.status(400).json({ success: false, message: 'clientId required' });

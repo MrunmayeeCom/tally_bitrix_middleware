@@ -639,7 +639,8 @@ async function post(path) {
   }
 
   // Remote mode — queue trigger via Render server for agent to pick up
-  const r = await fetch(`${API}/dashboard/push?clientId=${clientId}`, {
+  // Use the dedicated /dashboard/push endpoint which queues to triggerQueue
+  const r = await fetch(`${API}/dashboard/push?clientId=${encodeURIComponent(clientId)}`, {
     method: 'POST',
     headers: HEADERS,
     body: JSON.stringify({ trigger: path }),
@@ -648,6 +649,7 @@ async function post(path) {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   // Invalidate cache so next get() fetches fresh data after trigger
   _dashboardCache = null;
+  _dashboardCacheTime = 0;
   return r.json();
 }
 

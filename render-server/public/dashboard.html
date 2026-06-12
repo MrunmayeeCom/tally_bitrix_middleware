@@ -626,37 +626,30 @@ async function get(path) {
 }
 
 async function post(path) {
-  const r = await fetch(`${API}/dashboard/push?clientId=${clientId}`, {
+  const r = await fetch(`${API}/dashboard/push?clientId=${encodeURIComponent(clientId)}`, {
     method: 'POST',
     headers: HEADERS,
     body: JSON.stringify({ trigger: path }),
     signal: AbortSignal.timeout(8000)
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  _dashboardCache = null; // invalidate cache after trigger
+  _dashboardCache = null;
+  _dashboardCacheTime = 0;
   return r.json();
 }
 
 async function loadStatus() {
   try {
-    const r = await fetch(
-      `${API}/dashboard/data?clientId=${clientId}`,
-      { headers: HEADERS, signal: AbortSignal.timeout(5000) }
-    );
-    const json = await r.json();
-    const hasData = json.success;
-    const live = hasData && json.agentLive;
+    const json = await getDashboardData();
+    const live = !!json.agentLive;
     document.getElementById('status-pill').className = live ? 'pill live' : 'pill offline';
     document.getElementById('pill-text').textContent  = live ? 'LIVE' : 'OFFLINE';
     if (live) {
       document.getElementById('offline-banner').classList.remove('show');
-    } else if (hasData) {
-      // Has historical data but agent currently offline — show softer warning
-      document.getElementById('offline-banner').classList.add('show');
     } else {
       document.getElementById('offline-banner').classList.add('show');
     }
-    return hasData; // return true even if agent offline, so stats/history still load
+    return true; // always return true if we got data — stats/history load regardless
   } catch {
     document.getElementById('status-pill').className = 'pill offline';
     document.getElementById('pill-text').textContent = 'OFFLINE';
