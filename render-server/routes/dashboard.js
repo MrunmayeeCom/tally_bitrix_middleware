@@ -142,20 +142,28 @@ router.post('/push', async (req, res) => {
   // can find it regardless of which clientId the agent uses
   try {
     const OAuthToken = require('../models/OAuthToken');
+    const email  = req.body?.customerEmail || '';
     const domain = req.body?.domain || req.body?.bitrixDomain || '';
     let token = null;
-    if (domain) {
-      token = await OAuthToken.findOne({ bitrixDomain: domain }).lean();
+    if (email)  token = await OAuthToken.findOne({ customerEmail: email }).lean();
+    if (!token && domain) token = await OAuthToken.findOne({ bitrixDomain: domain }).lean();
+    if (!token) token = await OAuthToken.findOne({}).sort({ updatedAt: -1 }).lean();
+    if (token) {
+      // Cross-store under OAuth clientId (bx-{memberId})
+      if (token.clientId && token.clientId !== clientId) {
+        store[token.clientId] = { ...payload };
+        console.log(`[Dashboard] Cross-stored: ${clientId} → ${token.clientId}`);
+      }
+      // Cross-store under MongoDB _id (used by marketplace app after login)
+      const mongoId = token._id?.toString();
+      if (mongoId && mongoId !== clientId) {
+        store[mongoId] = { ...payload };
+        console.log(`[Dashboard] Cross-stored: ${clientId} → mongoId: ${mongoId}`);
+      }
     }
-    if (!token) {
-      token = await OAuthToken.findOne({}).sort({ updatedAt: -1 }).lean();
-    }
-    if (token && token.clientId && token.clientId !== clientId) {
-      store[token.clientId] = { ...payload };
-      store[clientId] = { ...payload };
-      console.log(`[Dashboard] Push cross-stored: ${clientId} → ${token.clientId}`);
-    }
-  } catch {}
+  } catch(e) {
+    console.error('[Dashboard] cross-store failed:', e.message);
+  }
 
   console.log(`[Dashboard] Push received from clientId: ${clientId}`);
   res.json({ success: true });
@@ -170,26 +178,54 @@ router.get('/data', async (req, res) => {
 
   const data = store[clientId];
   if (!data) {
-    // Try to find by matching OAuthToken clientId → maybe agent uses different clientId
     try {
       const OAuthToken = require('../models/OAuthToken');
-      const token = await OAuthToken.findOne({ clientId }).lean();
+      let token = await OAuthToken.findOne({ clientId }).lean();
+      // clientId from marketplace login is the MongoDB _id of OAuthToken
       if (!token) {
-        // Try latest token as fallback
-        const latest = await OAuthToken.findOne({}).sort({ updatedAt: -1 }).lean();
-        if (latest && store[latest.clientId]) {
-          const altData = store[latest.clientId];
-          const pushedAt = new Date(altData.pushedAt);
+        try { token = await OAuthToken.findById(clientId).lean(); } catch {}
+      }
+      if (token) {
+        // Check store under all known keys for this token
+        const altData = store[token.clientId] || store[token._id?.toString()];
+        if (altData) {
+          const pushedAt  = new Date(altData.pushedAt);
           const agentLive = (Date.now() - pushedAt.getTime()) < 5 * 60 * 1000;
-          let licenseStatus = altData.licenseStatus || 'inactive';
-          let customerEmail = altData.customerEmail || '';
-          let licenseId = altData.licenseId || '';
-          let licensePlan = altData.licensePlan || '';
-          if (latest.licenseStatus) licenseStatus = latest.licenseStatus;
-          if (latest.customerEmail) customerEmail = latest.customerEmail;
-          if (latest.licenseId) licenseId = latest.licenseId;
-          if (latest.licensePlan) licensePlan = latest.licensePlan;
-          return res.json({ success: true, agentLive, licenseStatus, customerEmail, licenseId, licensePlan, ...altData });
+          return res.json({
+            success: true, agentLive,
+            licenseStatus: token.licenseStatus || altData.licenseStatus || 'inactive',
+            customerEmail: token.customerEmail || altData.customerEmail || '',
+            licenseId:     token.licenseId     || altData.licenseId     || '',
+            licensePlan:   token.licensePlan   || altData.licensePlan   || '',
+            ...altData,
+            history:   altData.history   || [],
+            lastSync:  altData.lastSync  || null,
+            overdue:   altData.overdue   || [],
+            status:    altData.status    || {},
+            companies: altData.companies || { companies: [], active: '' },
+          });
+        }
+      }
+      // Last resort — use latest token's store data
+      const latest = await OAuthToken.findOne({}).sort({ updatedAt: -1 }).lean();
+      if (latest) {
+        const altData = store[latest.clientId] || store[latest._id?.toString()];
+        if (altData) {
+          const pushedAt  = new Date(altData.pushedAt);
+          const agentLive = (Date.now() - pushedAt.getTime()) < 5 * 60 * 1000;
+          return res.json({
+            success: true, agentLive,
+            licenseStatus: latest.licenseStatus || altData.licenseStatus || 'inactive',
+            customerEmail: latest.customerEmail || altData.customerEmail || '',
+            licenseId:     latest.licenseId     || altData.licenseId     || '',
+            licensePlan:   latest.licensePlan   || altData.licensePlan   || '',
+            ...altData,
+            history:   altData.history   || [],
+            lastSync:  altData.lastSync  || null,
+            overdue:   altData.overdue   || [],
+            status:    altData.status    || {},
+            companies: altData.companies || { companies: [], active: '' },
+          });
         }
       }
     } catch {}
