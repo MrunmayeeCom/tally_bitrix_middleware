@@ -112,6 +112,32 @@ router.post('/push', async (req, res) => {
 
   store[clientId] = payload;
 
+  // Persist license fields to OAuthToken so they survive Render restarts
+  try {
+    const OAuthToken = require('../models/OAuthToken');
+    const domain = req.body?.domain || req.body?.bitrixDomain || '';
+    const updateFields = {};
+    if (req.body?.licenseStatus) updateFields.licenseStatus = req.body.licenseStatus;
+    if (req.body?.licensePlan)   updateFields.licensePlan   = req.body.licensePlan;
+    if (req.body?.customerEmail) updateFields.customerEmail = req.body.customerEmail;
+    if (Object.keys(updateFields).length > 0) {
+      // Update by clientId first, fallback to domain
+      const updated = await OAuthToken.findOneAndUpdate(
+        { clientId },
+        { $set: updateFields },
+        { new: false }
+      );
+      if (!updated && domain) {
+        await OAuthToken.findOneAndUpdate(
+          { bitrixDomain: domain },
+          { $set: updateFields }
+        );
+      }
+    }
+  } catch(e) {
+    console.error('[Dashboard] OAuthToken license update failed:', e.message);
+  }
+
   // Also store under the canonical OAuthToken clientId (bx-{memberId}) so dashboard
   // can find it regardless of which clientId the agent uses
   try {
@@ -126,8 +152,7 @@ router.post('/push', async (req, res) => {
     }
     if (token && token.clientId && token.clientId !== clientId) {
       store[token.clientId] = { ...payload };
-      // Also store under the incoming clientId as a secondary key
-      if (!store[clientId]) store[clientId] = { ...payload };
+      store[clientId] = { ...payload };
       console.log(`[Dashboard] Push cross-stored: ${clientId} → ${token.clientId}`);
     }
   } catch {}

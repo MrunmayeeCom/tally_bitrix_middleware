@@ -739,6 +739,8 @@ app.whenReady().then(async () => {
     const cfg = loadConfig();
     if (cfg) {
       userStoppedService = true;
+      // Push a "connecting" status immediately so dashboard shows agent is alive
+      setTimeout(pushStatusToRender, 2000);
       setTimeout(() => bootstrapLicense(cfg), 1000);
     }
     createMainWindow('dashboard');
@@ -832,6 +834,8 @@ async function bootstrapLicense(cfg) {
       process.env.CUSTOMER_EMAIL = cfg.customerEmail || '';
       let previousPlan = getPlan();
       setFeatures(result.features, result.plan, result.valid);
+      // Push status immediately after license validates — don't wait for 30s interval
+      setTimeout(pushStatusToRender, 2000);
 
       // Kill any existing server before spawning fresh with correct license env
       if (serverProcess) {
@@ -1036,9 +1040,54 @@ async function pushStatusToRender() {
       fetchLocalJson('/api/lastsync'),
     ]);
 
-    if (!history) return; // service not running
+    if (!history) {
+      // Service not running locally — still push agent heartbeat so dashboard shows LIVE
+      const minPayload = {
+        agentLive: true,
+        clientId,
+        domain:        cfg.bitrixDomain  || '',
+        customerEmail: cfg.customerEmail || '',
+        licenseStatus: '',
+        licensePlan:   '',
+        history: [], lastSync: null, overdue: [], status: {}, companies: { companies: [], active: '' },
+        stats: { total: 0, today: 0, failed: 0, runs: 0 },
+      };
+      try {
+        const { loadLicenseCache } = require('../src/services/lmsService');
+        const cache = loadLicenseCache();
+        if (cache) {
+          minPayload.licenseStatus = cache.status  || (cache.valid ? 'active' : 'inactive');
+          minPayload.licensePlan   = cache.plan    || '';
+        }
+      } catch {}
+      const body2    = JSON.stringify(minPayload);
+      const pushReq2 = https.request({
+        hostname: 'tally-bitrix-middleware.onrender.com',
+        path:     `/dashboard/push?clientId=${encodeURIComponent(clientId)}`,
+        method:   'POST',
+        headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body2) },
+        timeout:  8000,
+      }, (r) => { r.resume(); });
+      pushReq2.on('error', () => {});
+      pushReq2.write(body2);
+      pushReq2.end();
+      return;
+    }
 
     const today = new Date().toDateString();
+     let licenseStatus = statusRaw?.license?.status || '';
+    let licensePlan   = statusRaw?.license?.plan   || '';
+    try {
+      if (!licenseStatus || !licensePlan) {
+        const { loadLicenseCache } = require('../src/services/lmsService');
+        const cache = loadLicenseCache();
+        if (cache) {
+        licenseStatus = licenseStatus || cache.status || (cache.valid ? 'active' : 'inactive');
+        licensePlan   = licensePlan   || cache.plan   || '';
+      }
+      }
+    } catch {}
+
     const payload = {
       stats: {
         total:  history.reduce((s, r) => s + (r.processed || 0), 0),
@@ -1053,10 +1102,10 @@ async function pushStatusToRender() {
       companies: companiesRaw || { companies: [], active: '' },
       agentLive: true,
       clientId,
-      domain:      cfg.bitrixDomain   || '',
-      customerEmail: cfg.customerEmail || '',
-      licenseStatus: statusRaw?.license?.status || '',
-      licensePlan:   statusRaw?.license?.plan   || '',
+      domain:        cfg.bitrixDomain   || '',
+      customerEmail: cfg.customerEmail  || '',
+      licenseStatus,
+      licensePlan,
     };
 
     const body    = JSON.stringify(payload);
@@ -1118,9 +1167,14 @@ async function pollTriggersFromRender() {
 function getAgentClientId() {
   const cfg = loadConfig();
   if (!cfg) return null;
-  return cfg.bitrixClientId
-    || process.env.CLIENT_ID
-    || (require('os').hostname() + '-' + (cfg.customerEmail || '').split('@')[0]);
+  // bitrixClientId is always "bx-{domain-with-dashes}" — derive it if missing
+  if (cfg.bitrixClientId) return cfg.bitrixClientId;
+  if (cfg.bitrixDomain) return 'bx-' + cfg.bitrixDomain.replace(/\./g, '-');
+  if (cfg.bitrixUrl) {
+    const m = cfg.bitrixUrl.match(/https?:\/\/([^\/]+)\/rest\//);
+    if (m) return 'bx-' + m[1].replace(/\./g, '-');
+  }
+  return null; // don't fall back to hostname — it will never match dashboard's query
 }
 
 setInterval(pushStatusToRender, 30000);
