@@ -1167,14 +1167,49 @@ async function pollTriggersFromRender() {
 function getAgentClientId() {
   const cfg = loadConfig();
   if (!cfg) return null;
-  // bitrixClientId is always "bx-{domain-with-dashes}" — derive it if missing
-  if (cfg.bitrixClientId) return cfg.bitrixClientId;
-  if (cfg.bitrixDomain) return 'bx-' + cfg.bitrixDomain.replace(/\./g, '-');
-  if (cfg.bitrixUrl) {
-    const m = cfg.bitrixUrl.match(/https?:\/\/([^\/]+)\/rest\//);
-    if (m) return 'bx-' + m[1].replace(/\./g, '-');
+  // Use saved bitrixClientId — must be bx-{memberId} format set during OAuth install
+  if (cfg.bitrixClientId && cfg.bitrixClientId !== 'bx-world-bitrix24-com') {
+    return cfg.bitrixClientId;
   }
-  return null; // don't fall back to hostname — it will never match dashboard's query
+  // Fetch canonical clientId from Render using email — async, so cache it
+  _resolveAndCacheClientId(cfg);
+  // Return whatever we have for now (may be wrong until resolved)
+  return cfg.bitrixClientId || null;
+}
+
+let _resolvingClientId = false;
+async function _resolveAndCacheClientId(cfg) {
+  if (_resolvingClientId) return;
+  _resolvingClientId = true;
+  try {
+    const https = require('https');
+    const email = encodeURIComponent(cfg.customerEmail || '');
+    const data = await new Promise((resolve) => {
+      const req = https.request({
+        hostname: 'tally-bitrix-middleware.onrender.com',
+        path: `/api/license/status?bitrixDomain=${encodeURIComponent(cfg.bitrixDomain || 'world.bitrix24.com')}`,
+        method: 'GET', timeout: 8000,
+      }, (res) => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
+      });
+      req.on('error', () => resolve(null));
+      req.on('timeout', () => { req.destroy(); resolve(null); });
+      req.end();
+    });
+    if (data?.clientId && data.clientId !== cfg.bitrixClientId) {
+      console.log('[Agent] Resolved correct clientId:', data.clientId, '(was:', cfg.bitrixClientId + ')');
+      const updatedCfg = loadConfig() || cfg;
+      updatedCfg.bitrixClientId = data.clientId;
+      saveConfig(updatedCfg);
+      // Push immediately with correct clientId
+      setTimeout(pushStatusToRender, 1000);
+    }
+  } catch(e) {
+    console.error('[Agent] clientId resolve failed:', e.message);
+  }
+  _resolvingClientId = false;
 }
 
 setInterval(pushStatusToRender, 30000);
