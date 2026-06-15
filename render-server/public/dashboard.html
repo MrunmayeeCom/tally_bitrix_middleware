@@ -809,7 +809,9 @@ let _syncIntervalMinutes = 15; // updated from /api/status
 
 function updateNextSync() {
   const now = Date.now();
-  const interval = _syncIntervalMinutes * 60 * 1000;
+  // Cap display interval at 60min max — longer intervals show as "next scheduled"
+  const displayMinutes = Math.min(_syncIntervalMinutes, 60);
+  const interval = displayMinutes * 60 * 1000;
   const nextMs = Math.ceil(now / interval) * interval;
   const diff = nextMs - now;
   const m = Math.floor(diff / 60000);
@@ -954,7 +956,9 @@ async function loadConnStatus() {
 
     // Read sync interval from live license features
     if (s.license?.features?.['auto-sync']) {
-      _syncIntervalMinutes = Number(s.license.features['auto-sync']) || 15;
+      const raw = Number(s.license.features['auto-sync']) || 15;
+      _syncIntervalMinutes = raw;
+      // For display — show hours if ≥ 60min
     }
 
     // Update plan info in next sync bar
@@ -973,8 +977,8 @@ async function loadConnStatus() {
     const userLimit = f['user-limit'];
     document.getElementById('next-meta').innerHTML =
       `Plan: <strong>${plan}</strong> · Valid till ${endDate}<br/>` +
-      `Outstanding · ${interval}min` +
-      (ledgerEnabled  ? ` · Ledgers · ${interval}min` : '') +
+      `Outstanding · ${interval >= 60 ? Math.round(interval/60)+'hr' : interval+'min'}` +
+      (ledgerEnabled  ? ` · Ledgers · ${interval >= 60 ? Math.round(interval/60)+'hr' : interval+'min'}` : '') +
       (dueDateEnabled ? ' · Due Dates · 1hr'          : '') +
       `<br/>Parties per sync: <strong>${userLimit > 0 ? userLimit : 'Unlimited'}</strong>`;
 

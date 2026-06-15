@@ -1353,8 +1353,8 @@ async function loadDashboard() {
     try { localStorage.setItem('tbs_license_plan', plan); } catch {}
     const userLimitVal = Number(features['user-limit']) || 0;
     document.getElementById('status-sub').textContent =
-      `Outstanding every ${interval}min` +
-      (ledger  ? ` · Ledgers every ${interval}min` : '') +
+      `Outstanding every ${interval >= 60 ? Math.round(interval/60)+'hr' : interval+'min'}` +
+      (ledger  ? ` · Ledgers every ${interval >= 60 ? Math.round(interval/60)+'hr' : interval+'min'}` : '') +
       (dueDate ? ' · Due dates every 1hr'          : '') +
       ` · Plan: ${plan}` +
       ` · Parties: ${userLimitVal > 0 ? userLimitVal : 'Unlimited'}`;
@@ -1710,8 +1710,8 @@ async function loadSettings() {
   if (scheduleEl) {
     scheduleEl.innerHTML =
       `⏰ Full sync (Ledger + Outstanding) — 9:00 AM IST<br/>` +
-      `🔄 Outstanding sync — Every ${interval} minutes · Plan: ${plan}<br/>` +
-      (ledger  ? `👥 Ledger sync — Every ${interval} minutes<br/>` : '') +
+      `🔄 Outstanding sync — Every ${interval >= 60 ? Math.round(interval/60)+'hr' : interval+'min'} · Plan: ${plan}<br/>` +
+      (ledger  ? `👥 Ledger sync — Every ${interval >= 60 ? Math.round(interval/60)+'hr' : interval+'min'}<br/>` : '') +
       (dueDate ? `🔔 Due date automation — Every 1 hour<br/>`       : '') +
       `👤 Parties per sync — <strong style="color:var(--accent2)">${userLimit > 0 ? userLimit : 'Unlimited'}</strong><br/>` +
       `🏢 Tally companies — <strong style="color:var(--accent2)">${companyLimit}</strong>`;

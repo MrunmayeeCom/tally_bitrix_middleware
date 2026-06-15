@@ -164,7 +164,11 @@ async function runInventorySync(label) {
 
 function intervalToCron(minutes) {
   const m = Math.max(1, Math.floor(Number(minutes) || 60));
-  if (m >= 60) return `0 * * * *`;
+  if (m >= 1440) return `0 3 * * *`;   // 24h+ → once daily at 3AM
+  if (m >= 60) {
+    const h = Math.floor(m / 60);
+    return `0 */${h} * * *`;           // e.g. 1460min → every 24h
+  }
   if (m === 1) return `* * * * *`;
   return `*/${m} * * * *`;
 }
