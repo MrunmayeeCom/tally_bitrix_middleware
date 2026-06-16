@@ -966,10 +966,13 @@ async function bootstrapLicense(cfg) {
     }
     updateTray();
   } catch(e) {
+    logger.error('[Bootstrap] FATAL uncaught exception: ' + e.message + '\n' + e.stack);
     try {
       const { applyStarterFallback } = require('../src/services/featureGate');
       applyStarterFallback(); // locks all features on unexpected error
-    } catch {}
+    } catch(e2) {
+      logger.error('[Bootstrap] applyStarterFallback also failed: ' + e2.message);
+    }
     _licenseValid      = false;
     _licensePlan       = 'No License';
     userStoppedService = true; // prevent auto-restart loop
@@ -1037,13 +1040,21 @@ function postLocalJson(path, body = {}, timeout = 8000) {
 async function pushStatusToRender() {
   try {
     const cfg = loadConfig();
-    if (!cfg) return;
+    if (!cfg) {
+      logger.warn('[Push] Skipped — no config found at: ' + CONFIG_PATH);
+      return;
+    }
     const clientId = getAgentClientId();
-    if (!clientId) return;
+    if (!clientId) {
+      logger.warn('[Push] Skipped — getAgentClientId() returned null. bitrixClientId=' + (cfg.bitrixClientId || 'EMPTY') + ' bitrixDomain=' + (cfg.bitrixDomain || 'EMPTY'));
+      return;
+    }
 
+    logger.info('[Push] Attempting push — clientId: ' + clientId);
     const https = require('https');
 
     // Fetch all data in parallel from local service
+    logger.info('[Push] Fetching local service data from http://localhost:5050');
     const [history, overdueRaw, statusRaw, companiesRaw, lastSyncRaw] = await Promise.all([
       fetchLocalJson('/api/history'),
       fetchLocalJson('/api/overdue'),
@@ -1051,6 +1062,7 @@ async function pushStatusToRender() {
       fetchLocalJson('/api/companies'),
       fetchLocalJson('/api/lastsync'),
     ]);
+    logger.info('[Push] Local fetch complete — history: ' + (history ? history.length + ' records' : 'null') + ' | status: ' + (statusRaw ? 'ok' : 'null'));
 
     if (!history) {
       // Service not running locally — still push agent heartbeat so dashboard shows LIVE
@@ -1073,14 +1085,20 @@ async function pushStatusToRender() {
         }
       } catch {}
       const body2    = JSON.stringify(minPayload);
+      logger.info('[Push] Sending heartbeat-only push (local service offline) — clientId: ' + clientId);
       const pushReq2 = https.request({
         hostname: 'tally-bitrix-middleware.onrender.com',
         path:     `/dashboard/push?clientId=${encodeURIComponent(clientId)}`,
         method:   'POST',
         headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body2) },
         timeout:  8000,
-      }, (r) => { r.resume(); });
-      pushReq2.on('error', () => {});
+      }, (r) => {
+        let d = '';
+        r.on('data', c => d += c);
+        r.on('end', () => logger.info('[Push] Heartbeat response ' + r.statusCode + ': ' + d.slice(0, 200)));
+      });
+      pushReq2.on('error', (e) => logger.error('[Push] Heartbeat HTTP error: ' + e.message + ' | code: ' + e.code));
+      pushReq2.on('timeout', () => { logger.error('[Push] Heartbeat timeout after 8s'); pushReq2.destroy(); });
       pushReq2.write(body2);
       pushReq2.end();
       return;
@@ -1121,17 +1139,26 @@ async function pushStatusToRender() {
     };
 
     const body    = JSON.stringify(payload);
+    const pushUrl = `https://tally-bitrix-middleware.onrender.com/dashboard/push?clientId=${encodeURIComponent(clientId)}`;
+    logger.info('[Push] POST ' + pushUrl + ' — payload size: ' + Buffer.byteLength(body) + ' bytes');
     const pushReq = https.request({
       hostname: 'tally-bitrix-middleware.onrender.com',
       path:     `/dashboard/push?clientId=${encodeURIComponent(clientId)}`,
       method:   'POST',
       headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
       timeout:  8000,
-    }, (r) => { r.resume(); });
-    pushReq.on('error', () => {});
+    }, (r) => {
+      let d = '';
+      r.on('data', c => d += c);
+      r.on('end', () => logger.info('[Push] Response ' + r.statusCode + ': ' + d.slice(0, 200)));
+    });
+    pushReq.on('error', (e) => logger.error('[Push] HTTP error: ' + e.message + ' | code: ' + e.code));
+    pushReq.on('timeout', () => { logger.error('[Push] Timeout after 8s'); pushReq.destroy(); });
     pushReq.write(body);
     pushReq.end();
-  } catch {}
+  } catch(e) {
+    logger.error('[Push] Uncaught exception in pushStatusToRender: ' + e.message + '\n' + e.stack);
+  }
 }
 
 // Poll Render server for triggers queued by the dashboard and execute them locally
@@ -1180,7 +1207,10 @@ function getAgentClientId() {
   const cfg = loadConfig();
   if (!cfg) return null;
 
-  // Valid canonical format is bx-{20+ hex chars}
+  logger.info('[ClientId] Reading from config — bitrixClientId: "' + (cfg.bitrixClientId || '') + '" | bitrixDomain: "' + (cfg.bitrixDomain || '') + '"');
+
+  // Reject ANY domain-based clientId (bx-{hostname-with-hyphens} pattern)
+  // Valid canonical format is bx-{32-char-hex-memberId}
   const isMemberIdFormat = cfg.bitrixClientId && /^bx-[0-9a-f]{20,}$/.test(cfg.bitrixClientId);
 
   if (isMemberIdFormat) {
@@ -1215,6 +1245,9 @@ async function _resolveAndCacheClientId(cfg) {
 
     logger.info('[Agent] Resolving canonical clientId from server — domain: ' + domain + ' | url: https://tally-bitrix-middleware.onrender.com/api/license/status?bitrixDomain=' + encodeURIComponent(domain));
 
+    const resolveUrl = 'https://tally-bitrix-middleware.onrender.com/api/license/status?bitrixDomain=' + encodeURIComponent(domain);
+    logger.info('[Agent] Resolving canonical clientId — GET ' + resolveUrl);
+
     const data = await new Promise((resolve) => {
       const req = https.request({
         hostname: 'tally-bitrix-middleware.onrender.com',
@@ -1223,10 +1256,13 @@ async function _resolveAndCacheClientId(cfg) {
       }, (res) => {
         let d = '';
         res.on('data', c => d += c);
-        res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
+        res.on('end', () => {
+          logger.info('[Agent] Resolution response HTTP ' + res.statusCode + ': ' + d.slice(0, 300));
+          try { resolve(JSON.parse(d)); } catch(e) { logger.error('[Agent] Resolution JSON parse failed: ' + e.message + ' | raw: ' + d.slice(0, 100)); resolve(null); }
+        });
       });
-      req.on('error', () => resolve(null));
-      req.on('timeout', () => { req.destroy(); resolve(null); });
+      req.on('error', (e) => { logger.error('[Agent] Resolution HTTP error: ' + e.message + ' | code: ' + e.code); resolve(null); });
+      req.on('timeout', () => { logger.error('[Agent] Resolution request timed out after 8s'); req.destroy(); resolve(null); });
       req.end();
     });
 
@@ -1261,8 +1297,10 @@ async function _resolveAndCacheClientId(cfg) {
   _resolvingClientId = false;
 }
 
+logger.info('[Agent] Scheduling push interval every 30s and trigger poll every 8s');
 setInterval(pushStatusToRender, 30000);
 setInterval(pollTriggersFromRender, 8000);
 // Run immediately on startup
-setTimeout(pushStatusToRender, 5000);
-setTimeout(pollTriggersFromRender, 10000);
+logger.info('[Agent] Scheduling startup push in 5s and trigger poll in 10s');
+setTimeout(() => { logger.info('[Agent] Startup push firing now'); pushStatusToRender(); }, 5000);
+setTimeout(() => { logger.info('[Agent] Startup trigger poll firing now'); pollTriggersFromRender(); }, 10000);
