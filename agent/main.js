@@ -138,7 +138,9 @@ function spawnServer(cfg) {
     TALLY_COMPANIES:     getCompanies(cfg).join(','),
     CUSTOMER_EMAIL:      cfg.customerEmail || '',
     RENDER_SERVER_URL:   'https://tally-bitrix-middleware.onrender.com',
-    CLIENT_ID:           cfg.bitrixClientId || (require('os').hostname() + '-' + (cfg.customerEmail || '').replace(/@.*/, '')),
+    // CLIENT_ID must be the canonical bx-{memberId} format.
+    // Never fall back to hostname-based IDs — they cause clientId mismatch in event poller.
+    CLIENT_ID:           (/^bx-[0-9a-f]{20,}$/.test(cfg.bitrixClientId || '') ? cfg.bitrixClientId : ''),
     LICENSE_FEATURES:    licenseFeatures,
     LICENSE_PLAN:        licensePlan,
     BITRIX_CLIENT_SECRET: process.env.BITRIX_CLIENT_SECRET || '',
@@ -1167,14 +1169,27 @@ async function pollTriggersFromRender() {
 function getAgentClientId() {
   const cfg = loadConfig();
   if (!cfg) return null;
-  // Use saved bitrixClientId — must be bx-{memberId} format set during OAuth install
-  if (cfg.bitrixClientId && cfg.bitrixClientId !== 'bx-world-bitrix24-com') {
+
+  // Reject ANY domain-based clientId (bx-{hostname-with-hyphens} pattern)
+  // Valid canonical format is bx-{32-char-hex-memberId}
+  const isMemberIdFormat = cfg.bitrixClientId && /^bx-[0-9a-f]{20,}$/.test(cfg.bitrixClientId);
+
+  if (isMemberIdFormat) {
     return cfg.bitrixClientId;
   }
-  // Fetch canonical clientId from Render using email — async, so cache it
+
+  // clientId is missing or in old domain-based format — resolve from server async
   _resolveAndCacheClientId(cfg);
-  // Return whatever we have for now (may be wrong until resolved)
-  return cfg.bitrixClientId || null;
+
+  // Return null until resolved — prevents pushing under wrong clientId
+  // which would create a split-brain in the dashboard store
+  if (isMemberIdFormat === false && cfg.bitrixClientId) {
+    logger.warn('[Agent] Stale domain-based clientId detected — suppressing push until canonical ID resolved', {
+      stale: cfg.bitrixClientId,
+    });
+    return null;
+  }
+  return null;
 }
 
 let _resolvingClientId = false;
@@ -1183,11 +1198,19 @@ async function _resolveAndCacheClientId(cfg) {
   _resolvingClientId = true;
   try {
     const https = require('https');
-    const email = encodeURIComponent(cfg.customerEmail || '');
+    const domain = cfg.bitrixDomain || '';
+    if (!domain) {
+      logger.warn('[Agent] Cannot resolve clientId — bitrixDomain not set in config');
+      _resolvingClientId = false;
+      return;
+    }
+
+    logger.info('[Agent] Resolving canonical clientId from server', { domain });
+
     const data = await new Promise((resolve) => {
       const req = https.request({
         hostname: 'tally-bitrix-middleware.onrender.com',
-        path: `/api/license/status?bitrixDomain=${encodeURIComponent(cfg.bitrixDomain || 'world.bitrix24.com')}`,
+        path: `/api/license/status?bitrixDomain=${encodeURIComponent(domain)}`,
         method: 'GET', timeout: 8000,
       }, (res) => {
         let d = '';
@@ -1198,16 +1221,34 @@ async function _resolveAndCacheClientId(cfg) {
       req.on('timeout', () => { req.destroy(); resolve(null); });
       req.end();
     });
-    if (data?.clientId && data.clientId !== cfg.bitrixClientId) {
-      console.log('[Agent] Resolved correct clientId:', data.clientId, '(was:', cfg.bitrixClientId + ')');
+
+    // Validate: only accept bx-{memberId} format (32-char hex after bx-)
+    const resolvedId = data?.clientId;
+    const isCanonical = resolvedId && /^bx-[0-9a-f]{20,}$/.test(resolvedId);
+
+    if (isCanonical && resolvedId !== cfg.bitrixClientId) {
+      logger.info('[Agent] Canonical clientId resolved', {
+        resolved: resolvedId,
+        was: cfg.bitrixClientId || '(none)',
+      });
       const updatedCfg = loadConfig() || cfg;
-      updatedCfg.bitrixClientId = data.clientId;
+      updatedCfg.bitrixClientId = resolvedId;
+      // Also update customerEmail from server if we don't have it locally
+      if (!updatedCfg.customerEmail && data.customerEmail) {
+        updatedCfg.customerEmail = data.customerEmail;
+        process.env.CUSTOMER_EMAIL = data.customerEmail;
+        logger.info('[Agent] customerEmail synced from server', { email: data.customerEmail });
+      }
       saveConfig(updatedCfg);
-      // Push immediately with correct clientId
+      // Push immediately under the correct clientId
       setTimeout(pushStatusToRender, 1000);
+    } else if (!isCanonical && resolvedId) {
+      logger.warn('[Agent] Server returned non-canonical clientId — ignoring', { returned: resolvedId });
+    } else if (!data?.clientId) {
+      logger.warn('[Agent] Server has no clientId for domain — OAuth may not have completed', { domain });
     }
   } catch(e) {
-    console.error('[Agent] clientId resolve failed:', e.message);
+    logger.error('[Agent] clientId resolve failed:', e.message);
   }
   _resolvingClientId = false;
 }

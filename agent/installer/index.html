@@ -1238,12 +1238,16 @@ function getFormConfig() {
   const webhookUrl = document.getElementById('bitrixUrl')?.value.trim() || '';
   // Auto-derive domain and clientId from webhook URL if hidden fields are empty
   let bitrixDomain   = document.getElementById('bitrixDomain')?.value.trim() || '';
+  // Never generate a domain-based clientId — leave blank so the server assigns
+  // the canonical bx-{memberId} after OAuth. The domain-based format is legacy
+  // and causes split-brain between OAuthToken and Client collections.
   let bitrixClientId = document.getElementById('bitrixClientId')?.value.trim() || '';
   if (!bitrixDomain && webhookUrl) {
     const m = webhookUrl.match(/https?:\/\/([^\/]+)\/rest\//);
     if (m) {
       bitrixDomain   = m[1];
-      bitrixClientId = 'bx-' + m[1].replace(/\./g, '-');
+      // Do NOT set bitrixClientId here — it will be resolved from the server
+      // after OAuth completes (bx-{memberId} format)
     }
   }
   return {
@@ -1812,10 +1816,10 @@ function onWebhookUrlInput(val) {
 
   const domain   = urlMatch[1];
   const userId   = urlMatch[2];
-  const clientId = 'bx-' + domain.replace(/\./g, '-');
-
+  // Do NOT store a domain-based clientId — leave the hidden field empty.
+  // The canonical clientId (bx-{memberId}) is assigned by the server after OAuth.
   domainInput.value   = domain;
-  clientIdInput.value = clientId;
+  clientIdInput.value = '';
 
   status.textContent = 'Validating webhook…';
   status.style.color = 'var(--accent)';

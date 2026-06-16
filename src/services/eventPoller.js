@@ -8,7 +8,16 @@ const POLL_INTERVAL_MS = 5000;
 function getClientId() {
   if (process.env.CLIENT_ID) return process.env.CLIENT_ID;
   const email = (process.env.CUSTOMER_EMAIL || '').replace(/@.*/, '');
-  return email ? `${os.hostname()}-${email}` : os.hostname();
+  return email ? `${os.hostname()}-${email}` : os.hostname();function getClientId() {
+  // Must be the canonical bx-{memberId} format set by Electron after OAuth.
+  // Hostname-based fallbacks cause clientId mismatch with the OAuthToken collection
+  // and result in events being queued under a key no one polls.
+  const id = process.env.CLIENT_ID || '';
+  if (/^bx-[0-9a-f]{20,}$/.test(id)) return id;
+  // Not yet resolved — return empty string so registration is deferred
+  // rather than registering under a wrong key
+  return '';
+}
 }
 
 // Process-level singleton guard — survives multiple require() calls
@@ -55,6 +64,11 @@ async function registerClient(cfg) {
 
   if (!bitrixUrl) {
     logger.warn('[Poller] Skipping registration — bitrixUrl not set');
+    return;
+  }
+  if (!clientId) {
+    logger.warn('[Poller] clientId not yet canonical — deferring registration 30s');
+    setTimeout(() => registerClient(cfg), 30000);
     return;
   }
   if (!email) {

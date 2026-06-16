@@ -110,59 +110,52 @@ router.post('/push', async (req, res) => {
     pushedAt: new Date().toISOString(),
   };
 
+  // Always store under the incoming clientId first (fast path)
   store[clientId] = payload;
 
-  // Persist license fields to OAuthToken so they survive Render restarts
+  // Resolve the canonical OAuthToken clientId (bx-{memberId}) for this portal.
+  // The agent may still be using the old domain-based format during transition.
+  // We look up by domain or email and store under ALL known keys so the dashboard
+  // always finds the data regardless of which clientId it queries with.
   try {
     const OAuthToken = require('../models/OAuthToken');
+    const email  = req.body?.customerEmail || '';
     const domain = req.body?.domain || req.body?.bitrixDomain || '';
-    const updateFields = {};
-    if (req.body?.licenseStatus) updateFields.licenseStatus = req.body.licenseStatus;
-    if (req.body?.licensePlan)   updateFields.licensePlan   = req.body.licensePlan;
-    if (req.body?.customerEmail) updateFields.customerEmail = req.body.customerEmail;
-    if (Object.keys(updateFields).length > 0) {
-      // Update by clientId first, fallback to domain
-      const updated = await OAuthToken.findOneAndUpdate(
-        { clientId },
-        { $set: updateFields },
-        { new: false }
-      );
-      if (!updated && domain) {
+
+    // Priority: exact clientId match → domain match → email match → latest
+    let token = await OAuthToken.findOne({ clientId }).lean();
+    if (!token && domain) token = await OAuthToken.findOne({ bitrixDomain: domain }).lean();
+    if (!token && email)  token = await OAuthToken.findOne({ customerEmail: email }).lean();
+    if (!token) token = await OAuthToken.findOne({}).sort({ updatedAt: -1 }).lean();
+
+    if (token) {
+      const canonicalId = token.clientId;
+      const mongoId     = token._id?.toString();
+
+      // Store under canonical memberId-based clientId (the one dashboard uses after OAuth login)
+      if (canonicalId && canonicalId !== clientId) {
+        store[canonicalId] = { ...payload };
+        console.log(`[Dashboard] Cross-stored push: ${clientId} → canonical: ${canonicalId}`);
+      }
+      // Store under MongoDB _id (used by marketplace app iframe after login)
+      if (mongoId && mongoId !== clientId) {
+        store[mongoId] = { ...payload };
+      }
+
+      // Persist latest license fields back to OAuthToken so they survive Render restarts
+      const updateFields = {};
+      if (req.body?.licenseStatus) updateFields.licenseStatus = req.body.licenseStatus;
+      if (req.body?.licensePlan)   updateFields.licensePlan   = req.body.licensePlan;
+      if (req.body?.customerEmail) updateFields.customerEmail = req.body.customerEmail;
+      if (Object.keys(updateFields).length > 0) {
         await OAuthToken.findOneAndUpdate(
-          { bitrixDomain: domain },
+          { _id: token._id },
           { $set: updateFields }
         );
       }
     }
   } catch(e) {
-    console.error('[Dashboard] OAuthToken license update failed:', e.message);
-  }
-
-  // Also store under the canonical OAuthToken clientId (bx-{memberId}) so dashboard
-  // can find it regardless of which clientId the agent uses
-  try {
-    const OAuthToken = require('../models/OAuthToken');
-    const email  = req.body?.customerEmail || '';
-    const domain = req.body?.domain || req.body?.bitrixDomain || '';
-    let token = null;
-    if (email)  token = await OAuthToken.findOne({ customerEmail: email }).lean();
-    if (!token && domain) token = await OAuthToken.findOne({ bitrixDomain: domain }).lean();
-    if (!token) token = await OAuthToken.findOne({}).sort({ updatedAt: -1 }).lean();
-    if (token) {
-      // Cross-store under OAuth clientId (bx-{memberId})
-      if (token.clientId && token.clientId !== clientId) {
-        store[token.clientId] = { ...payload };
-        console.log(`[Dashboard] Cross-stored: ${clientId} → ${token.clientId}`);
-      }
-      // Cross-store under MongoDB _id (used by marketplace app after login)
-      const mongoId = token._id?.toString();
-      if (mongoId && mongoId !== clientId) {
-        store[mongoId] = { ...payload };
-        console.log(`[Dashboard] Cross-stored: ${clientId} → mongoId: ${mongoId}`);
-      }
-    }
-  } catch(e) {
-    console.error('[Dashboard] cross-store failed:', e.message);
+    console.error('[Dashboard] cross-store/license update failed:', e.message);
   }
 
   console.log(`[Dashboard] Push received from clientId: ${clientId}`);

@@ -29,9 +29,34 @@ router.post('/', async (req, res) => {
       // Bitrix24 sends the portal domain in the payload as auth.domain
       const bitrixDomain = payload?.auth?.domain || payload?.DOMAIN || '';
       if (bitrixDomain) {
-        client = await Client.findOne({ bitrixDomain, isActive: true });
-        if (client) {
-          console.log(`[Webhook] Matched client by domain: ${bitrixDomain} → ${client.clientId}`);
+        // Prefer OAuthToken lookup — it always has the canonical bx-{memberId} clientId
+        // Client collection may have the stale domain-based clientId from old installs
+        try {
+          const OAuthToken = require('../models/OAuthToken');
+          const oauthToken = await OAuthToken.findOne({ bitrixDomain }).lean();
+          if (oauthToken?.clientId) {
+            client = await Client.findOne({ clientId: oauthToken.clientId, isActive: true });
+            if (!client) {
+              // Client record may not exist yet — upsert it with canonical clientId
+              client = await Client.findOneAndUpdate(
+                { clientId: oauthToken.clientId },
+                { clientId: oauthToken.clientId, bitrixDomain, isActive: true, lastSeenAt: new Date() },
+                { upsert: true, new: true }
+              );
+            }
+            if (client) {
+              console.log(`[Webhook] Matched client via OAuthToken domain: ${bitrixDomain} → ${client.clientId}`);
+            }
+          }
+        } catch (e) {
+          console.error('[Webhook] OAuthToken domain lookup failed:', e.message);
+        }
+        // Fallback to Client collection direct lookup
+        if (!client) {
+          client = await Client.findOne({ bitrixDomain, isActive: true });
+          if (client) {
+            console.log(`[Webhook] Matched client by domain (Client collection): ${bitrixDomain} → ${client.clientId}`);
+          }
         }
       }
     }

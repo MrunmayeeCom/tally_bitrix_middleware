@@ -91,8 +91,25 @@ router.get('/status', async (req, res) => {
       return res.status(400).json({ success: false, message: 'clientId or bitrixDomain required' });
     }
 
-    const filter = clientId ? { clientId } : { bitrixDomain };
-    const token  = await OAuthToken.findOne(filter).lean();
+    // Try exact clientId first, then fall back to domain.
+    // This handles the transition period where the agent may still use the old
+    // domain-based clientId while OAuthToken has the canonical bx-{memberId} one.
+    let token = null;
+    if (clientId) {
+      token = await OAuthToken.findOne({ clientId }).lean();
+      // If not found by clientId, the agent may be using the old domain-based format.
+      // Try to find by domain extracted from a domain-style clientId.
+      if (!token && /^bx-[a-z0-9-]+-bitrix24-com$/.test(clientId)) {
+        const inferredDomain = clientId.replace(/^bx-/, '').replace(/-/g, '.');
+        token = await OAuthToken.findOne({ bitrixDomain: inferredDomain }).lean();
+        if (token) {
+          console.log(`[License] Matched by inferred domain from legacy clientId: ${clientId} → ${inferredDomain} → canonical: ${token.clientId}`);
+        }
+      }
+    }
+    if (!token && bitrixDomain) {
+      token = await OAuthToken.findOne({ bitrixDomain }).lean();
+    }
 
     if (!token) {
       return res.json({ success: false, linked: false, message: 'Portal not found' });

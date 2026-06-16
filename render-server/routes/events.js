@@ -252,4 +252,44 @@ router.post('/clients/reregister', async (req, res) => {
   }
 });
 
+// GET /api/clients/migrate — one-time reconciliation of domain-based clientIds
+// Finds Client records with bx-{domain} format and updates them to match OAuthToken canonical id
+router.post('/clients/migrate', async (req, res) => {
+  try {
+    const OAuthToken = require('../models/OAuthToken');
+    const clients = await Client.find({}).lean();
+    let migrated = 0, skipped = 0;
+
+    for (const client of clients) {
+      // Detect old domain-based format: bx-world-bitrix24-com
+      const isDomainBased = /^bx-[a-z0-9]+-bitrix24-com$/.test(client.clientId)
+                         || /^bx-[a-z0-9-]+-bitrix24\.(in|net|eu|de)$/.test(client.clientId);
+      if (!isDomainBased) { skipped++; continue; }
+
+      // Find the canonical OAuthToken for this domain
+      const domain = client.bitrixDomain || client.clientId.replace(/^bx-/, '').replace(/-/g, '.');
+      const token = await OAuthToken.findOne({ bitrixDomain: domain }).lean();
+      if (!token?.clientId) { skipped++; continue; }
+
+      if (token.clientId === client.clientId) { skipped++; continue; }
+
+      // Check if a canonical Client already exists
+      const existing = await Client.findOne({ clientId: token.clientId });
+      if (existing) {
+        // Canonical already exists — just delete the stale domain-based one
+        await Client.deleteOne({ _id: client._id });
+      } else {
+        // Update in place
+        await Client.updateOne({ _id: client._id }, { $set: { clientId: token.clientId } });
+      }
+      console.log(`[Migrate] ${client.clientId} → ${token.clientId}`);
+      migrated++;
+    }
+
+    res.json({ success: true, migrated, skipped });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 module.exports = router;
