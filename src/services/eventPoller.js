@@ -92,6 +92,13 @@ async function registerClient(cfg) {
         clientId,
         webhooksRegistered: res.data.webhooksRegistered,
       });
+      // Clean up any stale hostname-based Client records from previous installs
+      try {
+        await axios.post(`${RENDER_URL}/api/clients/migrate`, {}, { timeout: 8000 });
+        logger.info('[Poller] Stale client migration triggered');
+      } catch (e) {
+        logger.warn('[Poller] Stale client migration failed (non-fatal): ' + e.message);
+      }
     } else {
       logger.warn('[Poller] Registration failed:', res.data.message);
     }
