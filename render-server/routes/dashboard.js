@@ -114,15 +114,14 @@ router.post('/push', async (req, res) => {
   store[clientId] = payload;
 
   // Resolve the canonical OAuthToken clientId (bx-{memberId}) for this portal.
-  // The agent may still be using the old domain-based format during transition.
-  // We look up by domain or email and store under ALL known keys so the dashboard
-  // always finds the data regardless of which clientId it queries with.
+  // Agent may push under a raw bitrixDomain string (e.g. "world.bitrix24.com") while
+  // canonical clientId is still being resolved — handle that case explicitly.
   try {
     const OAuthToken = require('../models/OAuthToken');
     const email  = req.body?.customerEmail || '';
-    const domain = req.body?.domain || req.body?.bitrixDomain || '';
+    const domain = req.body?.domain || req.body?.bitrixDomain || clientId || '';
 
-    // Priority: exact clientId match → domain match → email match → latest
+    // Priority: exact clientId match → domain match (including when clientId IS the domain) → email match → latest
     let token = await OAuthToken.findOne({ clientId }).lean();
     if (!token && domain) token = await OAuthToken.findOne({ bitrixDomain: domain }).lean();
     if (!token && email)  token = await OAuthToken.findOne({ customerEmail: email }).lean();
@@ -131,6 +130,7 @@ router.post('/push', async (req, res) => {
     if (token) {
       const canonicalId = token.clientId;
       const mongoId     = token._id?.toString();
+      const tokenDomain = token.bitrixDomain;
 
       // Store under canonical memberId-based clientId (the one dashboard uses after OAuth login)
       if (canonicalId && canonicalId !== clientId) {
@@ -140,6 +140,11 @@ router.post('/push', async (req, res) => {
       // Store under MongoDB _id (used by marketplace app iframe after login)
       if (mongoId && mongoId !== clientId) {
         store[mongoId] = { ...payload };
+      }
+      // Store under raw domain string (agent pushes under domain while clientId resolving)
+      if (tokenDomain && tokenDomain !== clientId) {
+        store[tokenDomain] = { ...payload };
+        console.log(`[Dashboard] Cross-stored push: ${clientId} → domain key: ${tokenDomain}`);
       }
 
       // Persist latest license fields back to OAuthToken so they survive Render restarts

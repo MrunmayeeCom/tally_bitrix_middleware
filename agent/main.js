@@ -820,6 +820,16 @@ async function bootstrapLicense(cfg) {
       logger.info('[LMS] Different email detected — clearing stale license cache');
       clearRegistryCache();
     }
+    // Immediately apply cached license so dashboard shows correct plan
+    // even before network validation completes
+    if (cache && cache.valid && cache.features) {
+      const { setFeatures } = require('../src/services/featureGate');
+      setFeatures(cache.features, cache.plan, cache.valid);
+      _licensePlan = cache.plan || 'Cached';
+      logger.info('[LMS] Applied cached license on startup — plan: ' + _licensePlan);
+      // Trigger a push immediately so dashboard shows LIVE without waiting for full validation
+      setTimeout(pushStatusToRender, 1000);
+    }
   } catch {}
   // ───────────────────────────────────────────────────────────────────
 
@@ -1170,25 +1180,23 @@ function getAgentClientId() {
   const cfg = loadConfig();
   if (!cfg) return null;
 
-  // Reject ANY domain-based clientId (bx-{hostname-with-hyphens} pattern)
-  // Valid canonical format is bx-{32-char-hex-memberId}
+  // Valid canonical format is bx-{20+ hex chars}
   const isMemberIdFormat = cfg.bitrixClientId && /^bx-[0-9a-f]{20,}$/.test(cfg.bitrixClientId);
 
   if (isMemberIdFormat) {
     return cfg.bitrixClientId;
   }
 
-  // clientId is missing or in old domain-based format — resolve from server async
+  // Not yet canonical — trigger async resolution
   _resolveAndCacheClientId(cfg);
 
-  // Return null until resolved — prevents pushing under wrong clientId
-  // which would create a split-brain in the dashboard store
-  if (isMemberIdFormat === false && cfg.bitrixClientId) {
-    logger.warn('[Agent] Stale domain-based clientId detected — suppressing push until canonical ID resolved', {
-      stale: cfg.bitrixClientId,
-    });
-    return null;
+  // Use domain as temporary push key so dashboard receives heartbeats immediately
+  // The server cross-stores under canonical clientId once resolution completes
+  if (cfg.bitrixDomain) {
+    logger.warn('[Agent] Canonical clientId not yet resolved — pushing under domain key: ' + cfg.bitrixDomain);
+    return cfg.bitrixDomain;
   }
+
   return null;
 }
 
@@ -1205,7 +1213,7 @@ async function _resolveAndCacheClientId(cfg) {
       return;
     }
 
-    logger.info('[Agent] Resolving canonical clientId from server', { domain });
+    logger.info('[Agent] Resolving canonical clientId from server — domain: ' + domain + ' | url: https://tally-bitrix-middleware.onrender.com/api/license/status?bitrixDomain=' + encodeURIComponent(domain));
 
     const data = await new Promise((resolve) => {
       const req = https.request({
