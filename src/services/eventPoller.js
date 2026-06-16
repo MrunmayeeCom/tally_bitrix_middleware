@@ -6,18 +6,14 @@ const POLL_INTERVAL_MS = 5000;
 
 // CLIENT_ID must be a function — reads env at call time, not module load time
 function getClientId() {
-  if (process.env.CLIENT_ID) return process.env.CLIENT_ID;
-  const email = (process.env.CUSTOMER_EMAIL || '').replace(/@.*/, '');
-  return email ? `${os.hostname()}-${email}` : os.hostname();function getClientId() {
-  // Must be the canonical bx-{memberId} format set by Electron after OAuth.
-  // Hostname-based fallbacks cause clientId mismatch with the OAuthToken collection
-  // and result in events being queued under a key no one polls.
   const id = process.env.CLIENT_ID || '';
-  if (/^bx-[0-9a-f]{20,}$/.test(id)) return id;
-  // Not yet resolved — return empty string so registration is deferred
-  // rather than registering under a wrong key
+
+  // Only accept canonical Bitrix client IDs
+  if (/^bx-[0-9a-f]{20,}$/i.test(id)) {
+    return id;
+  }
+
   return '';
-}
 }
 
 // Process-level singleton guard — survives multiple require() calls
@@ -246,6 +242,7 @@ async function startPoller(cfg) {
     return;
   }
 
+  logger.info('[DEBUG] process.env.CLIENT_ID=' + (process.env.CLIENT_ID || '(empty)'));
   logger.info(`[Poller] Starting event poller | clientId: ${getClientId()}`);
 
   await registerClient(cfg);
