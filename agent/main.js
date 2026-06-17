@@ -29,10 +29,21 @@ function loadConfig() {
 
 function saveConfig(cfg) {
   try {
+    console.log('[SaveConfig] Writing config to: ' + CONFIG_PATH);
+    console.log('[SaveConfig] Config data keys: ' + Object.keys(cfg).join(', '));
     const dir = path.dirname(CONFIG_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    console.log('[SaveConfig] Config dir: ' + dir);
+    console.log('[SaveConfig] Dir exists? ' + fs.existsSync(dir));
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+      console.log('[SaveConfig] Created dir: ' + dir);
+    }
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+    console.log('[SaveConfig] File written successfully');
+    console.log('[SaveConfig] File exists after write? ' + fs.existsSync(CONFIG_PATH));
   } catch (e) {
+    console.error('[SaveConfig] FAILED: ' + e.message);
+    console.error('[SaveConfig] Stack: ' + e.stack);
     logger.error('Config save failed: ' + e.message);
   }
 }
