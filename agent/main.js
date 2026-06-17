@@ -55,6 +55,13 @@ function isConfigured() {
   return !!(cfg && hasBitrix && cfg.tallyHost && cfg.tallyPort && hasCompany);
 }
 
+const DEFAULT_RENDER_URL = 'https://tally-bitrix-middleware.onrender.com';
+
+function getRenderServerUrl() {
+  const cfg = loadConfig();
+  return (cfg && cfg.renderServerUrl) || DEFAULT_RENDER_URL;
+}
+
 function getCompanies(cfg) {
   if (!cfg) return [];
   // Support both old single company and new array format
@@ -151,7 +158,7 @@ function spawnServer(cfg) {
     TALLY_COMPANY:       getActiveCompany(cfg),
     TALLY_COMPANIES:     getCompanies(cfg).join(','),
     CUSTOMER_EMAIL:      cfg.customerEmail || '',
-    RENDER_SERVER_URL:   'https://tally-bitrix-middleware.onrender.com',
+    RENDER_SERVER_URL:   getRenderServerUrl(),
     // CLIENT_ID must be the canonical bx-{memberId} format.
     // Never fall back to hostname-based IDs — they cause clientId mismatch in event poller.
     // Use _canonicalClientId (in-memory from async resolution) as first priority.
@@ -1177,8 +1184,10 @@ async function pushStatusToRender() {
       } catch {}
       const body2    = JSON.stringify(minPayload);
       logger.info('[Push] Sending heartbeat-only push (local service offline) — clientId: ' + clientId);
+      const renderUrl = new URL(getRenderServerUrl());
       const pushReq2 = https.request({
-        hostname: 'tally-bitrix-middleware.onrender.com',
+        hostname: renderUrl.hostname,
+        port:     renderUrl.port || 443,
         path:     `/dashboard/push?clientId=${encodeURIComponent(clientId)}`,
         method:   'POST',
         headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body2) },
@@ -1230,11 +1239,14 @@ async function pushStatusToRender() {
     };
 
     const body    = JSON.stringify(payload);
-    const pushUrl = `https://tally-bitrix-middleware.onrender.com/dashboard/push?clientId=${encodeURIComponent(clientId)}`;
+    const renderBase = getRenderServerUrl();
+    const pushUrl   = `${renderBase}/dashboard/push?clientId=${encodeURIComponent(clientId)}`;
     logger.info('[Push] POST ' + pushUrl + ' — payload size: ' + Buffer.byteLength(body) + ' bytes');
     logger.info('[Push] Payload agentLive: ' + payload.agentLive + ' | customerEmail: ' + (payload.customerEmail || 'none') + ' | domain: ' + (payload.domain || 'none'));
+    const renderUrl2 = new URL(renderBase);
     const pushReq = https.request({
-      hostname: 'tally-bitrix-middleware.onrender.com',
+      hostname: renderUrl2.hostname,
+      port:     renderUrl2.port || 443,
       path:     `/dashboard/push?clientId=${encodeURIComponent(clientId)}`,
       method:   'POST',
       headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
@@ -1269,9 +1281,11 @@ async function pollTriggersFromRender() {
     if (!clientId) return;
 
     const https = require('https');
+    const pollUrl = new URL(getRenderServerUrl());
     const data  = await new Promise((resolve) => {
       const req = https.request({
-        hostname: 'tally-bitrix-middleware.onrender.com',
+        hostname: pollUrl.hostname,
+        port:     pollUrl.port || 443,
         path:     `/dashboard/triggers?clientId=${encodeURIComponent(clientId)}`,
         method:   'GET',
         timeout:  5000,
@@ -1348,14 +1362,17 @@ async function _resolveAndCacheClientId(cfg) {
       return;
     }
 
-    logger.info('[Agent] Resolving canonical clientId from server — domain: ' + domain + ' | url: https://tally-bitrix-middleware.onrender.com/api/license/status?bitrixDomain=' + encodeURIComponent(domain));
+    const resolveBase = getRenderServerUrl();
+    logger.info('[Agent] Resolving canonical clientId from server — domain: ' + domain + ' | url: ' + resolveBase + '/api/license/status?bitrixDomain=' + encodeURIComponent(domain));
 
-    const resolveUrl = 'https://tally-bitrix-middleware.onrender.com/api/license/status?bitrixDomain=' + encodeURIComponent(domain);
+    const resolveUrl = resolveBase + '/api/license/status?bitrixDomain=' + encodeURIComponent(domain);
     logger.info('[Agent] Resolving canonical clientId — GET ' + resolveUrl);
 
+    const resolveParsed = new URL(resolveBase);
     const data = await new Promise((resolve) => {
       const req = https.request({
-        hostname: 'tally-bitrix-middleware.onrender.com',
+        hostname: resolveParsed.hostname,
+        port:     resolveParsed.port || 443,
         path: `/api/license/status?bitrixDomain=${encodeURIComponent(domain)}`,
         method: 'GET', timeout: 8000,
       }, (res) => {
