@@ -126,6 +126,8 @@ function spawnServer(cfg) {
     }
   } catch {}
 
+  logger.info('[spawnServer] LICENSE_FEATURES length: ' + licenseFeatures.length + ' | LICENSE_PLAN: "' + licensePlan + '" | CUSTOMER_EMAIL: "' + (cfg.customerEmail || '') + '"');
+
   const env = Object.assign({}, process.env, {
     NODE_ENV:            'production',
     PORT:                '5050',
@@ -743,6 +745,7 @@ app.whenReady().then(async () => {
       userStoppedService = true;
       // Push a "connecting" status immediately so dashboard shows agent is alive
       setTimeout(pushStatusToRender, 2000);
+      setTimeout(pushStatusToRender, 6000);
       setTimeout(() => bootstrapLicense(cfg), 1000);
     }
     createMainWindow('dashboard');
@@ -848,6 +851,8 @@ async function bootstrapLicense(cfg) {
       setFeatures(result.features, result.plan, result.valid);
       // Push status immediately after license validates — don't wait for 30s interval
       setTimeout(pushStatusToRender, 2000);
+      setTimeout(pushStatusToRender, 8000);   // second push after server has fully started
+      setTimeout(pushStatusToRender, 20000);  // third push to ensure dashboard sees LIVE
 
       // Kill any existing server before spawning fresh with correct license env
       if (serverProcess) {
@@ -857,6 +862,22 @@ async function bootstrapLicense(cfg) {
       }
       exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5050\') do taskkill /F /PID %a', () => {});
       await new Promise(r => setTimeout(r, 500));
+
+      // Persist validated features to cache so spawnServer can read them from disk
+      try {
+        const { saveLicenseCache } = require('../src/services/lmsService');
+        saveLicenseCache({
+          valid:         result.valid,
+          plan:          result.plan,
+          status:        'active',
+          features:      result.features,
+          customerEmail: cfg.customerEmail,
+          licenseId:     result.licenseId,
+        });
+        logger.info('[Bootstrap] License cache written before spawnServer — plan: ' + result.plan);
+      } catch(e) {
+        logger.warn('[Bootstrap] Could not write license cache before spawn: ' + e.message);
+      }
 
       // License confirmed — spawn server NOW with features baked into env
       userStoppedService = false;
@@ -1045,6 +1066,12 @@ async function pushStatusToRender() {
       return;
     }
     const clientId = getAgentClientId();
+
+    logger.info('[Push] ===== PUSH DIAGNOSTIC =====');
+    logger.info('[Push] config.bitrixClientId: "' + (cfg.bitrixClientId || 'EMPTY') + '"');
+    logger.info('[Push] config.bitrixDomain:   "' + (cfg.bitrixDomain || 'EMPTY') + '"');
+    logger.info('[Push] getAgentClientId() returned: "' + (clientId || 'NULL') + '"');
+
     if (!clientId) {
       logger.warn('[Push] Skipped — getAgentClientId() returned null. bitrixClientId=' + (cfg.bitrixClientId || 'EMPTY') + ' bitrixDomain=' + (cfg.bitrixDomain || 'EMPTY'));
       return;
@@ -1141,6 +1168,7 @@ async function pushStatusToRender() {
     const body    = JSON.stringify(payload);
     const pushUrl = `https://tally-bitrix-middleware.onrender.com/dashboard/push?clientId=${encodeURIComponent(clientId)}`;
     logger.info('[Push] POST ' + pushUrl + ' — payload size: ' + Buffer.byteLength(body) + ' bytes');
+    logger.info('[Push] Payload agentLive: ' + payload.agentLive + ' | customerEmail: ' + (payload.customerEmail || 'none') + ' | domain: ' + (payload.domain || 'none'));
     const pushReq = https.request({
       hostname: 'tally-bitrix-middleware.onrender.com',
       path:     `/dashboard/push?clientId=${encodeURIComponent(clientId)}`,
@@ -1150,7 +1178,14 @@ async function pushStatusToRender() {
     }, (r) => {
       let d = '';
       r.on('data', c => d += c);
-      r.on('end', () => logger.info('[Push] Response ' + r.statusCode + ': ' + d.slice(0, 200)));
+      r.on('end', () => {
+        logger.info('[Push] Response HTTP ' + r.statusCode + ': ' + d.slice(0, 200));
+        if (r.statusCode !== 200) {
+          logger.error('[Push] NON-200 response — push may have failed');
+        } else {
+          logger.info('[Push] SUCCESS — dashboard store updated for clientId: ' + clientId);
+        }
+      });
     });
     pushReq.on('error', (e) => logger.error('[Push] HTTP error: ' + e.message + ' | code: ' + e.code));
     pushReq.on('timeout', () => { logger.error('[Push] Timeout after 8s'); pushReq.destroy(); });
@@ -1209,19 +1244,23 @@ function getAgentClientId() {
 
   logger.info('[ClientId] Reading from config — bitrixClientId: "' + (cfg.bitrixClientId || '') + '" | bitrixDomain: "' + (cfg.bitrixDomain || '') + '"');
 
-  // Reject ANY domain-based clientId (bx-{hostname-with-hyphens} pattern)
-  // Valid canonical format is bx-{32-char-hex-memberId}
+  // Valid canonical format is bx-{20+ hex chars}
   const isMemberIdFormat = cfg.bitrixClientId && /^bx-[0-9a-f]{20,}$/.test(cfg.bitrixClientId);
 
   if (isMemberIdFormat) {
     return cfg.bitrixClientId;
   }
 
-  // Not yet canonical — trigger async resolution
-  _resolveAndCacheClientId(cfg);
+  // Not yet canonical — trigger async resolution, then push immediately after
+  _resolveAndCacheClientId(cfg).then(() => {
+    const fresh = loadConfig();
+    if (fresh && fresh.bitrixClientId && /^bx-[0-9a-f]{20,}$/.test(fresh.bitrixClientId)) {
+      logger.info('[Agent] Canonical clientId now resolved — firing immediate push: ' + fresh.bitrixClientId);
+      pushStatusToRender();
+    }
+  }).catch(() => {});
 
   // Use domain as temporary push key so dashboard receives heartbeats immediately
-  // The server cross-stores under canonical clientId once resolution completes
   if (cfg.bitrixDomain) {
     logger.warn('[Agent] Canonical clientId not yet resolved — pushing under domain key: ' + cfg.bitrixDomain);
     return cfg.bitrixDomain;
@@ -1231,9 +1270,11 @@ function getAgentClientId() {
 }
 
 let _resolvingClientId = false;
+let _resolvePromise = null;
 async function _resolveAndCacheClientId(cfg) {
-  if (_resolvingClientId) return;
+  if (_resolvingClientId && _resolvePromise) return _resolvePromise;
   _resolvingClientId = true;
+  _resolvePromise = (async () => {
   try {
     const https = require('https');
     const domain = cfg.bitrixDomain || '';
@@ -1295,6 +1336,8 @@ async function _resolveAndCacheClientId(cfg) {
     logger.error('[Agent] clientId resolve failed:', e.message);
   }
   _resolvingClientId = false;
+  })();
+  return _resolvePromise;
 }
 
 logger.info('[Agent] Scheduling push interval every 30s and trigger poll every 8s');

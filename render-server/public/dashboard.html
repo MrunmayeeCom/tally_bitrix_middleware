@@ -589,6 +589,9 @@ const params   = new URLSearchParams(location.search);
 const clientId = params.get('clientId') || '';
 const API      = 'https://tally-bitrix-middleware.onrender.com';
 
+console.log('[Dashboard] Page loaded — clientId from URL:', clientId);
+console.log('[Dashboard] Full URL:', location.href);
+
 const HEADERS = {
   'ngrok-skip-browser-warning': '1',
   'Content-Type': 'application/json'
@@ -640,14 +643,18 @@ async function post(path) {
 
 async function loadStatus() {
   try {
+    console.log('[Dashboard] Requesting /dashboard/data with clientId:', clientId);
     const json = await getDashboardData();
     const pushedMs = json.pushedAt ? Date.now() - new Date(json.pushedAt).getTime() : Infinity;
     const live = !!json.agentLive && pushedMs < 5 * 60 * 1000;
+    console.log('[Dashboard] agentLive:', json.agentLive, '| pushedAt:', json.pushedAt, '| pushedMs:', pushedMs, '| live:', live);
+    console.log('[Dashboard] licenseStatus:', json.licenseStatus, '| licensePlan:', json.licensePlan);
     document.getElementById('status-pill').className = live ? 'pill live' : 'pill offline';
     document.getElementById('pill-text').textContent  = live ? 'LIVE' : 'OFFLINE';
     document.getElementById('offline-banner').classList.toggle('show', !live);
     return true;
-  } catch {
+  } catch(err) {
+    console.error('[Dashboard] loadStatus error:', err.message);
     document.getElementById('status-pill').className = 'pill offline';
     document.getElementById('pill-text').textContent = 'OFFLINE';
     document.getElementById('offline-banner').classList.add('show');

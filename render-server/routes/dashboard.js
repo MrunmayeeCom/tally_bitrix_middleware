@@ -105,6 +105,12 @@ router.post('/push', async (req, res) => {
     return res.json({ success: true, queued: true });
   }
 
+  console.log('[PUSH RECEIVED] clientId:', clientId);
+  console.log('[PUSH RECEIVED] agentLive:', req.body?.agentLive);
+  console.log('[PUSH RECEIVED] customerEmail:', req.body?.customerEmail || '(none)');
+  console.log('[PUSH RECEIVED] domain:', req.body?.domain || '(none)');
+  console.log('[PUSH RECEIVED] Store keys before:', Object.keys(store));
+
   const payload = {
     ...req.body,
     pushedAt: new Date().toISOString(),
@@ -112,6 +118,7 @@ router.post('/push', async (req, res) => {
 
   // Always store under the incoming clientId first (fast path)
   store[clientId] = payload;
+  console.log('[PUSH STORED] Stored under clientId:', clientId);
 
   // Resolve the canonical OAuthToken clientId (bx-{memberId}) for this portal.
   // Agent may push under a raw bitrixDomain string (e.g. "world.bitrix24.com") while
@@ -131,6 +138,9 @@ router.post('/push', async (req, res) => {
       const canonicalId = token.clientId;
       const mongoId     = token._id?.toString();
       const tokenDomain = token.bitrixDomain;
+      const tokenEmail  = token.customerEmail || '';
+
+      console.log('[PUSH CROSS-STORE] Token found — canonicalId:', canonicalId, '| mongoId:', mongoId, '| domain:', tokenDomain, '| email:', tokenEmail);
 
       // Store under canonical memberId-based clientId (the one dashboard uses after OAuth login)
       if (canonicalId && canonicalId !== clientId) {
@@ -140,11 +150,22 @@ router.post('/push', async (req, res) => {
       // Store under MongoDB _id (used by marketplace app iframe after login)
       if (mongoId && mongoId !== clientId) {
         store[mongoId] = { ...payload };
+        console.log(`[Dashboard] Cross-stored push: ${clientId} → mongoId: ${mongoId}`);
       }
       // Store under raw domain string (agent pushes under domain while clientId resolving)
       if (tokenDomain && tokenDomain !== clientId) {
         store[tokenDomain] = { ...payload };
         console.log(`[Dashboard] Cross-stored push: ${clientId} → domain key: ${tokenDomain}`);
+      }
+      // Store under customerEmail as additional fallback key
+      if (tokenEmail && tokenEmail !== clientId) {
+        store[tokenEmail] = { ...payload };
+        console.log(`[Dashboard] Cross-stored push: ${clientId} → email key: ${tokenEmail}`);
+      }
+      // Store under customerEmail so /dashboard/data can find data even when clientId varies
+      const pushEmail = req.body?.customerEmail || token.customerEmail || '';
+      if (pushEmail && pushEmail !== clientId) {
+        store[pushEmail] = { ...payload };
       }
 
       // Persist latest license fields back to OAuthToken so they survive Render restarts
@@ -174,8 +195,13 @@ router.get('/data', async (req, res) => {
   const { clientId } = req.query;
   if (!clientId) return res.status(400).json({ success: false, message: 'clientId required' });
 
+  console.log('[DATA REQUEST] clientId:', clientId);
+  console.log('[DATA REQUEST] Store keys:', Object.keys(store));
+  console.log('[DATA REQUEST] Direct hit:', !!store[clientId]);
+
   const data = store[clientId];
   if (!data) {
+    console.log('[DATA REQUEST] No direct match — falling back to DB lookup for clientId:', clientId);
     try {
       const OAuthToken = require('../models/OAuthToken');
       let token = await OAuthToken.findOne({ clientId }).lean();
@@ -185,10 +211,13 @@ router.get('/data', async (req, res) => {
       }
       if (token) {
         // Check store under all known keys for this token
-        const altData = store[token.clientId] || store[token._id?.toString()];
+        const altData = store[token.clientId] || store[token._id?.toString()] || store[token.bitrixDomain] || store[token.customerEmail];
+        console.log('[DATA FALLBACK] Token found — trying keys:', token.clientId, token._id?.toString(), token.bitrixDomain, token.customerEmail);
+        console.log('[DATA FALLBACK] altData found:', !!altData);
         if (altData) {
           const pushedAt  = new Date(altData.pushedAt);
           const agentLive = (Date.now() - pushedAt.getTime()) < 5 * 60 * 1000;
+          console.log('[DATA FALLBACK] pushedAt:', altData.pushedAt, '| agentLive:', agentLive);
           return res.json({
             success: true, agentLive,
             licenseStatus: token.licenseStatus || altData.licenseStatus || 'inactive',
@@ -203,11 +232,12 @@ router.get('/data', async (req, res) => {
             companies: altData.companies || { companies: [], active: '' },
           });
         }
+        console.log('[DATA FALLBACK] No store data found for any key of this token — agent has never pushed or Render restarted');
       }
       // Last resort — use latest token's store data
       const latest = await OAuthToken.findOne({}).sort({ updatedAt: -1 }).lean();
       if (latest) {
-        const altData = store[latest.clientId] || store[latest._id?.toString()];
+        const altData = store[latest.clientId] || store[latest._id?.toString()] || store[latest.bitrixDomain] || store[latest.customerEmail];
         if (altData) {
           const pushedAt  = new Date(altData.pushedAt);
           const agentLive = (Date.now() - pushedAt.getTime()) < 5 * 60 * 1000;
@@ -233,6 +263,8 @@ router.get('/data', async (req, res) => {
   // Mark agent as offline if no push in last 5 minutes
   const pushedAt  = new Date(data.pushedAt);
   const agentLive = (Date.now() - pushedAt.getTime()) < 5 * 60 * 1000;
+
+  console.log('[DATA RESPONSE] clientId:', clientId, '| pushedAt:', data.pushedAt, '| agentLive:', agentLive, '| msSincePush:', Date.now() - pushedAt.getTime());
 
   // Pull licenseStatus + customerEmail from OAuthToken — source of truth
   let licenseStatus    = data.licenseStatus    || 'inactive';
