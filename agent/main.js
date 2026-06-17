@@ -148,6 +148,10 @@ function spawnServer(cfg) {
     BITRIX_CLIENT_SECRET: process.env.BITRIX_CLIENT_SECRET || '',
   });
 
+  console.log('[SPAWN DEBUG] env.CLIENT_ID=', env.CLIENT_ID);
+  console.log('[SPAWN DEBUG] env.LICENSE_FEATURES=', env.LICENSE_FEATURES ? env.LICENSE_FEATURES.substring(0, 80) + '...' : '(empty)');
+  console.log('[SPAWN DEBUG] env.LICENSE_PLAN=', env.LICENSE_PLAN);
+
   serverProcess = spawn(nodePath, [scriptPath], {
     env,
     detached: false,
@@ -435,6 +439,33 @@ ipcMain.handle('test-connections', async (_, cfg) => {
 ipcMain.handle('install-service', async (_, cfg) => {
   saveConfig(cfg);
   const savedCfg = loadConfig() || cfg; // reload from disk after save
+
+  // Validate license and write cache BEFORE spawning, so child process
+  // receives populated LICENSE_FEATURES / LICENSE_PLAN env vars
+  try {
+    const { validateLicense, saveLicenseCache } = require('../src/services/lmsService');
+    const { setFeatures } = require('../src/services/featureGate');
+    const result = await validateLicense(savedCfg.customerEmail);
+    if (result.valid) {
+      setFeatures(result.features, result.plan, result.valid);
+      _licensePlan = result.plan || '';
+      _licenseValid = true;
+      saveLicenseCache({
+        valid:         result.valid,
+        plan:          result.plan,
+        status:        'active',
+        features:      result.features,
+        customerEmail: savedCfg.customerEmail,
+        licenseId:     result.licenseId,
+      });
+      process.env.CUSTOMER_EMAIL = savedCfg.customerEmail || '';
+      logger.info('[Install] License validated — plan: ' + result.plan);
+    } else {
+      logger.warn('[Install] License invalid — server will start without license features: ' + (result.reason || 'unknown'));
+    }
+  } catch(e) {
+    logger.warn('[Install] License validation error (non-fatal): ' + e.message);
+  }
 
   if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
   exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5050\') do taskkill /F /PID %a', () => {});
@@ -881,7 +912,14 @@ async function bootstrapLicense(cfg) {
 
       // License confirmed — spawn server NOW with features baked into env
       userStoppedService = false;
-      spawnServer(cfg);
+
+      // Re-read fresh config from disk — cfg param may be stale (bitrixClientId may
+      // have been resolved by _resolveAndCacheClientId after bootstrapLicense started)
+      const bootCfg = loadConfig() || cfg;
+      console.log('[SPAWN DEBUG] cfg.bitrixClientId=', bootCfg.bitrixClientId);
+      console.log('[SPAWN DEBUG] cfg.bitrixDomain=', bootCfg.bitrixDomain);
+      console.log('[SPAWN DEBUG] cfg.customerEmail=', bootCfg.customerEmail);
+      spawnServer(bootCfg);
 
       startHeartbeat(result.licenseId);
       logger.info(`[LMS] Heartbeat started for licenseId: ${result.licenseId}`);
