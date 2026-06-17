@@ -11,6 +11,7 @@ let userStoppedService = false;
 let serverProcess = null;
 let _licenseValid = false;
 let _licensePlan  = 'Validating…';
+let _canonicalClientId = null;
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 const LOG_PATH = app.isPackaged
@@ -142,7 +143,9 @@ function spawnServer(cfg) {
     RENDER_SERVER_URL:   'https://tally-bitrix-middleware.onrender.com',
     // CLIENT_ID must be the canonical bx-{memberId} format.
     // Never fall back to hostname-based IDs — they cause clientId mismatch in event poller.
-    CLIENT_ID:           (/^bx-[0-9a-f]{20,}$/.test(cfg.bitrixClientId || '') ? cfg.bitrixClientId : ''),
+    // Use _canonicalClientId (in-memory from async resolution) as first priority.
+    CLIENT_ID:           _canonicalClientId && /^bx-[0-9a-f]{20,}$/.test(_canonicalClientId) ? _canonicalClientId :
+                          (/^bx-[0-9a-f]{20,}$/.test(cfg.bitrixClientId || '') ? cfg.bitrixClientId : ''),
     LICENSE_FEATURES:    licenseFeatures,
     LICENSE_PLAN:        licensePlan,
     BITRIX_CLIENT_SECRET: process.env.BITRIX_CLIENT_SECRET || '',
@@ -467,11 +470,19 @@ ipcMain.handle('install-service', async (_, cfg) => {
     logger.warn('[Install] License validation error (non-fatal): ' + e.message);
   }
 
+  // Resolve canonical clientId eagerly so CLIENT_ID reaches the child process.
+  // Use a timeout to avoid blocking install if Render is unreachable.
+  await Promise.race([
+    _resolveAndCacheClientId(savedCfg),
+    new Promise(r => setTimeout(r, 4000)),
+  ]);
+  const finalCfg = loadConfig() || savedCfg;
+
   if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
   exec('for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5050\') do taskkill /F /PID %a', () => {});
 
   await new Promise(r => setTimeout(r, 1500));
-  spawnServer(savedCfg);
+  spawnServer(finalCfg);
 
   for (let i = 0; i < 10; i++) {
     await new Promise(r => setTimeout(r, 1000));
@@ -913,8 +924,12 @@ async function bootstrapLicense(cfg) {
       // License confirmed — spawn server NOW with features baked into env
       userStoppedService = false;
 
-      // Re-read fresh config from disk — cfg param may be stale (bitrixClientId may
-      // have been resolved by _resolveAndCacheClientId after bootstrapLicense started)
+      // Resolve canonical clientId eagerly so CLIENT_ID reaches the child process.
+      // Use a timeout to avoid blocking spawnServer if Render is unreachable.
+      await Promise.race([
+        _resolveAndCacheClientId(cfg),
+        new Promise(r => setTimeout(r, 4000)),
+      ]);
       const bootCfg = loadConfig() || cfg;
       console.log('[SPAWN DEBUG] cfg.bitrixClientId=', bootCfg.bitrixClientId);
       console.log('[SPAWN DEBUG] cfg.bitrixDomain=', bootCfg.bitrixDomain);
@@ -1350,6 +1365,7 @@ async function _resolveAndCacheClientId(cfg) {
     const isCanonical = resolvedId && /^bx-[0-9a-f]{20,}$/.test(resolvedId);
 
     if (isCanonical && resolvedId !== cfg.bitrixClientId) {
+      _canonicalClientId = resolvedId;
       logger.info('[Agent] Canonical clientId resolved', {
         resolved: resolvedId,
         was: cfg.bitrixClientId || '(none)',
