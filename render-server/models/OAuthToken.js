@@ -14,6 +14,8 @@ const oauthTokenSchema = new mongoose.Schema({
   licenseStatus:   { type: String, default: '' },
   licenseLinkedAt: { type: Date },
   webhooksRegistered: { type: Boolean, default: false },
+  agentLastPushedAt:  { type: Date },
+  agentLive:          { type: Boolean, default: false },
   createdAt:       { type: Date, default: Date.now },
   updatedAt:       { type: Date, default: Date.now },
 });

@@ -168,8 +168,11 @@ router.post('/push', async (req, res) => {
         store[pushEmail] = { ...payload };
       }
 
-      // Persist latest license fields back to OAuthToken so they survive Render restarts
-      const updateFields = {};
+      // Persist to MongoDB so agent status survives Render restarts
+      const updateFields = {
+        agentLastPushedAt: new Date(),
+        agentLive:         !!(req.body?.agentLive),
+      };
       if (req.body?.licenseStatus) updateFields.licenseStatus = req.body.licenseStatus;
       if (req.body?.licensePlan)   updateFields.licensePlan   = req.body.licensePlan;
       if (req.body?.customerEmail) updateFields.customerEmail = req.body.customerEmail;
@@ -200,59 +203,69 @@ router.get('/data', async (req, res) => {
   console.log('[DATA REQUEST] Direct hit:', !!store[clientId]);
 
   const data = store[clientId];
+
+  // Helper: determine agentLive from persisted timestamp
+  function isAgentLiveFromDb(token) {
+    if (!token || !token.agentLastPushedAt) return false;
+    return (Date.now() - new Date(token.agentLastPushedAt).getTime()) < 5 * 60 * 1000;
+  }
+
   if (!data) {
     console.log('[DATA REQUEST] No direct match — falling back to DB lookup for clientId:', clientId);
     try {
       const OAuthToken = require('../models/OAuthToken');
       let token = await OAuthToken.findOne({ clientId }).lean();
-      // clientId from marketplace login is the MongoDB _id of OAuthToken
       if (!token) {
         try { token = await OAuthToken.findById(clientId).lean(); } catch {}
       }
       if (token) {
         // Check store under all known keys for this token
         const altData = store[token.clientId] || store[token._id?.toString()] || store[token.bitrixDomain] || store[token.customerEmail];
-        console.log('[DATA FALLBACK] Token found — trying keys:', token.clientId, token._id?.toString(), token.bitrixDomain, token.customerEmail);
-        console.log('[DATA FALLBACK] altData found:', !!altData);
-        if (altData) {
-          const pushedAt  = new Date(altData.pushedAt);
-          const agentLive = (Date.now() - pushedAt.getTime()) < 5 * 60 * 1000;
-          console.log('[DATA FALLBACK] pushedAt:', altData.pushedAt, '| agentLive:', agentLive);
+
+        // Use DB-persisted agentLive if store has no recent data (survives Render restarts)
+        const dbLive = altData ? false : isAgentLiveFromDb(token);
+        const agentLive = dbLive || (altData ? (Date.now() - new Date(altData.pushedAt).getTime()) < 5 * 60 * 1000 : false);
+
+        console.log('[DATA FALLBACK] Token found — dbLive:', dbLive, '| altData:', !!altData, '| agentLive:', agentLive);
+
+        if (altData || dbLive) {
           return res.json({
             success: true, agentLive,
-            licenseStatus: token.licenseStatus || altData.licenseStatus || 'inactive',
-            customerEmail: token.customerEmail || altData.customerEmail || '',
-            licenseId:     token.licenseId     || altData.licenseId     || '',
-            licensePlan:   token.licensePlan   || altData.licensePlan   || '',
+            licenseStatus: token.licenseStatus || altData?.licenseStatus || 'inactive',
+            customerEmail: token.customerEmail || altData?.customerEmail || '',
+            licenseId:     token.licenseId     || altData?.licenseId     || '',
+            licensePlan:   token.licensePlan   || altData?.licensePlan   || '',
             ...altData,
-            history:   altData.history   || [],
-            lastSync:  altData.lastSync  || null,
-            overdue:   altData.overdue   || [],
-            status:    altData.status    || {},
-            companies: altData.companies || { companies: [], active: '' },
+            pushedAt:  token.agentLastPushedAt || altData?.pushedAt,
+            history:   altData?.history   || [],
+            lastSync:  altData?.lastSync  || null,
+            overdue:   altData?.overdue   || [],
+            status:    altData?.status    || {},
+            companies: altData?.companies || { companies: [], active: '' },
           });
         }
-        console.log('[DATA FALLBACK] No store data found for any key of this token — agent has never pushed or Render restarted');
+        console.log('[DATA FALLBACK] No store data found for any key of this token — agentLastPushedAt in DB:', token.agentLastPushedAt);
       }
-      // Last resort — use latest token's store data
+      // Last resort — use latest token's store or DB data
       const latest = await OAuthToken.findOne({}).sort({ updatedAt: -1 }).lean();
       if (latest) {
         const altData = store[latest.clientId] || store[latest._id?.toString()] || store[latest.bitrixDomain] || store[latest.customerEmail];
-        if (altData) {
-          const pushedAt  = new Date(altData.pushedAt);
-          const agentLive = (Date.now() - pushedAt.getTime()) < 5 * 60 * 1000;
+        const dbLive = altData ? false : isAgentLiveFromDb(latest);
+        const agentLive = dbLive || (altData ? (Date.now() - new Date(altData.pushedAt).getTime()) < 5 * 60 * 1000 : false);
+        if (altData || dbLive) {
           return res.json({
             success: true, agentLive,
-            licenseStatus: latest.licenseStatus || altData.licenseStatus || 'inactive',
-            customerEmail: latest.customerEmail || altData.customerEmail || '',
-            licenseId:     latest.licenseId     || altData.licenseId     || '',
-            licensePlan:   latest.licensePlan   || altData.licensePlan   || '',
+            licenseStatus: latest.licenseStatus || altData?.licenseStatus || 'inactive',
+            customerEmail: latest.customerEmail || altData?.customerEmail || '',
+            licenseId:     latest.licenseId     || altData?.licenseId     || '',
+            licensePlan:   latest.licensePlan   || altData?.licensePlan   || '',
             ...altData,
-            history:   altData.history   || [],
-            lastSync:  altData.lastSync  || null,
-            overdue:   altData.overdue   || [],
-            status:    altData.status    || {},
-            companies: altData.companies || { companies: [], active: '' },
+            pushedAt:  latest.agentLastPushedAt || altData?.pushedAt,
+            history:   altData?.history   || [],
+            lastSync:  altData?.lastSync  || null,
+            overdue:   altData?.overdue   || [],
+            status:    altData?.status    || {},
+            companies: altData?.companies || { companies: [], active: '' },
           });
         }
       }
