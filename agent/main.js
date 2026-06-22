@@ -58,8 +58,7 @@ function isConfigured() {
 const DEFAULT_RENDER_URL = 'https://tally-bitrix-middleware.onrender.com';
 
 function getRenderServerUrl() {
-  const cfg = loadConfig();
-  return (cfg && cfg.renderServerUrl) || DEFAULT_RENDER_URL;
+  return DEFAULT_RENDER_URL;
 }
 
 function getCompanies(cfg) {

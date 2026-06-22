@@ -48,14 +48,8 @@ app.use('/api', eventsRoutes);
 // OAuth
 app.use('/bitrix/oauth', oauthRoutes);
 
-// Dashboard data push/pull API
-app.use('/dashboard/data', dashboardRoutes);
-app.use('/dashboard/push', dashboardRoutes);
-
-// Dashboard UI — serve TSX app for all /dashboard GET requests
-app.get('/dashboard', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+// Dashboard — UI + data push/pull API (router handles path matching internally)
+app.use('/dashboard', dashboardRoutes);
 
 // License management
 app.use('/api/license', licenseRoutes);

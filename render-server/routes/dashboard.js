@@ -182,6 +182,10 @@ router.post('/push', async (req, res) => {
           { $set: updateFields }
         );
       }
+    } else {
+      // No OAuthToken found — still store agent status under incoming clientId
+      // so dashboard can at least show LIVE when querying with same clientId
+      console.log('[PUSH] No OAuthToken matched — storing agentLive only under clientId:', clientId);
     }
   } catch(e) {
     console.error('[Dashboard] cross-store/license update failed:', e.message);
@@ -201,6 +205,7 @@ router.get('/data', async (req, res) => {
   console.log('[DATA REQUEST] clientId:', clientId);
   console.log('[DATA REQUEST] Store keys:', Object.keys(store));
   console.log('[DATA REQUEST] Direct hit:', !!store[clientId]);
+  console.log('[DATA DIAG] clientId bx-format?', /^bx-/.test(clientId), '| mongoId format?', /^[a-f0-9]{24}$/i.test(clientId), '| domain format?', clientId.includes('.'));
 
   const data = store[clientId];
 
