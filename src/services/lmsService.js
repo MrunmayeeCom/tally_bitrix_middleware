@@ -444,4 +444,4 @@ function stopRevalidation() {
   if (_revalidateTimer) { clearInterval(_revalidateTimer); _revalidateTimer = null; }
 }
 
-module.exports = { validateLicense, fetchFeatureRegistry, startHeartbeat, startRevalidation, stopRevalidation, clearHeartbeatInterval, parseFeatures, loadLicenseCache, loadUsageCache, saveUsageCache, syncUsageCacheFromLMS, clearRegistryCache, updateCompanyUsage };
+module.exports = { validateLicense, fetchFeatureRegistry, startHeartbeat, startRevalidation, stopRevalidation, clearHeartbeatInterval, parseFeatures, loadLicenseCache, saveLicenseCache, loadUsageCache, saveUsageCache, syncUsageCacheFromLMS, clearRegistryCache, updateCompanyUsage };

@@ -132,17 +132,44 @@ function spawnServer(cfg) {
   const nodePath   = getNodeExecutable();
   const scriptPath = getServiceScript();
 
-  // Load license features from cache to pass to Node.js process
+  // Load license features — featureGate in-memory first, disk cache as fallback
+  // Load license features — featureGate in-memory first (getAll), disk cache as fallback
   let licenseFeatures = '{}';
   let licensePlan = '';
   try {
-    const { loadLicenseCache } = require('../src/services/lmsService');
-    const cache = loadLicenseCache();
-    if (cache && cache.features) {
-      licenseFeatures = JSON.stringify(cache.features);
-      licensePlan = cache.plan || '';
+    const fg = require('../src/services/featureGate');
+    if (fg.isLicenseActive()) {
+      const gateFeatures = fg.getAll();   // correct export name is getAll, not getFeatures
+      if (gateFeatures && Object.keys(gateFeatures).length > 0) {
+        licenseFeatures = JSON.stringify(gateFeatures);
+        licensePlan     = fg.getPlan() || '';
+      }
     }
   } catch {}
+
+  // Fallback to disk cache if featureGate not yet populated (e.g. cold startup)
+  if (licenseFeatures === '{}') {
+    try {
+      const { loadLicenseCache } = require('../src/services/lmsService');
+      const cache = loadLicenseCache();
+      if (cache && cache.features && Object.keys(cache.features).length > 0) {
+        licenseFeatures = JSON.stringify(cache.features);
+        licensePlan     = cache.plan || '';
+      }
+    } catch {}
+  }
+
+  // Always fall back to disk cache — covers cold-start before featureGate is populated
+  if (licenseFeatures === '{}') {
+    try {
+      const lms   = require('../src/services/lmsService');
+      const cache = (typeof lms.loadLicenseCache === 'function') ? lms.loadLicenseCache() : null;
+      if (cache && cache.features && Object.keys(cache.features).length > 0) {
+        licenseFeatures = JSON.stringify(cache.features);
+        licensePlan     = cache.plan || '';
+      }
+    } catch {}
+  }
 
   logger.info('[spawnServer] LICENSE_FEATURES length: ' + licenseFeatures.length + ' | LICENSE_PLAN: "' + licensePlan + '" | CUSTOMER_EMAIL: "' + (cfg.customerEmail || '') + '"');
 
@@ -924,16 +951,22 @@ async function bootstrapLicense(cfg) {
 
       // Persist validated features to cache so spawnServer can read them from disk
       try {
-        const { saveLicenseCache } = require('../src/services/lmsService');
-        saveLicenseCache({
-          valid:         result.valid,
-          plan:          result.plan,
-          status:        'active',
-          features:      result.features,
-          customerEmail: cfg.customerEmail,
-          licenseId:     result.licenseId,
-        });
-        logger.info('[Bootstrap] License cache written before spawnServer — plan: ' + result.plan);
+        const lms = require('../src/services/lmsService');
+        // Guard: function may be named differently in this build
+        const writeFn = lms.saveLicenseCache || lms.writeCache || lms.saveCache || null;
+        if (typeof writeFn === 'function') {
+          writeFn({
+            valid:         result.valid,
+            plan:          result.plan,
+            status:        'active',
+            features:      result.features,
+            customerEmail: cfg.customerEmail,
+            licenseId:     result.licenseId,
+          });
+          logger.info('[Bootstrap] License cache written before spawnServer — plan: ' + result.plan);
+        } else {
+          logger.warn('[Bootstrap] saveLicenseCache not found in lmsService — available exports: ' + Object.keys(lms).join(', '));
+        }
       } catch(e) {
         logger.warn('[Bootstrap] Could not write license cache before spawn: ' + e.message);
       }
