@@ -9,9 +9,11 @@ let tray = null;
 let serviceRunning = false;
 let userStoppedService = false;
 let serverProcess = null;
-let _licenseValid = false;
-let _licensePlan  = 'Validating…';
+let _licenseValid    = false;
+let _licensePlan     = 'Validating…';
 let _canonicalClientId = null;
+let _cachedFeatures  = {}; // populated by bootstrapLicense — used by spawnServer
+let _cachedPlan      = ''; // populated by bootstrapLicense — used by spawnServer
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 const LOG_PATH = app.isPackaged
@@ -132,38 +134,26 @@ function spawnServer(cfg) {
   const nodePath   = getNodeExecutable();
   const scriptPath = getServiceScript();
 
-  // Load license features — featureGate in-memory first, disk cache as fallback
-  // Load license features — featureGate in-memory first (getAll), disk cache as fallback
+  // Load license features — use module-level cache vars first, then disk cache
+  // NOTE: require('../src/services/featureGate') may be a different instance in packaged app
+  // so we use _licenseFeatureCache/_licensePlanCache set by bootstrapLicense instead
   let licenseFeatures = '{}';
   let licensePlan = '';
-  try {
-    const fg = require('../src/services/featureGate');
-    if (fg.isLicenseActive()) {
-      const gateFeatures = fg.getAll();   // correct export name is getAll, not getFeatures
-      if (gateFeatures && Object.keys(gateFeatures).length > 0) {
-        licenseFeatures = JSON.stringify(gateFeatures);
-        licensePlan     = fg.getPlan() || '';
-      }
-    }
-  } catch {}
 
-  // Fallback to disk cache if featureGate not yet populated (e.g. cold startup)
-  if (licenseFeatures === '{}') {
-    try {
-      const { loadLicenseCache } = require('../src/services/lmsService');
-      const cache = loadLicenseCache();
-      if (cache && cache.features && Object.keys(cache.features).length > 0) {
-        licenseFeatures = JSON.stringify(cache.features);
-        licensePlan     = cache.plan || '';
-      }
-    } catch {}
+  // Primary: use module-level vars populated by bootstrapLicense (same process, same instance)
+  if (_cachedFeatures && Object.keys(_cachedFeatures).length > 0) {
+    licenseFeatures = JSON.stringify(_cachedFeatures);
+    licensePlan     = _cachedPlan || '';
   }
 
-  // Always fall back to disk cache — covers cold-start before featureGate is populated
+  // Fallback: disk cache (covers cold-start and auto-restart after crash)
   if (licenseFeatures === '{}') {
     try {
-      const lms   = require('../src/services/lmsService');
-      const cache = (typeof lms.loadLicenseCache === 'function') ? lms.loadLicenseCache() : null;
+      const cachePath = app.isPackaged
+        ? require('path').join(process.resourcesPath, 'middleware', 'logs', 'license-cache.json')
+        : require('path').join(__dirname, '..', 'logs', 'license-cache.json');
+      const raw = require('fs').readFileSync(cachePath, 'utf8');
+      const cache = JSON.parse(raw);
       if (cache && cache.features && Object.keys(cache.features).length > 0) {
         licenseFeatures = JSON.stringify(cache.features);
         licensePlan     = cache.plan || '';
@@ -935,6 +925,10 @@ async function bootstrapLicense(cfg) {
       process.env.CUSTOMER_EMAIL = cfg.customerEmail || '';
       let previousPlan = getPlan();
       setFeatures(result.features, result.plan, result.valid);
+      // Cache features at module level so spawnServer can read them
+      // regardless of require() module instance differences in packaged app
+      _cachedFeatures = result.features;
+      _cachedPlan     = result.plan;
       // Push status immediately after license validates — don't wait for 30s interval
       setTimeout(pushStatusToRender, 2000);
       setTimeout(pushStatusToRender, 8000);   // second push after server has fully started
