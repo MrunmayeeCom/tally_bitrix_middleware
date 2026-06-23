@@ -3,12 +3,56 @@ const router  = express.Router();
 const path    = require('path');
 const fs      = require('fs');
 
-// In-memory store keyed by clientId
+// In-memory store keyed by clientId — seeded from MongoDB on first access
 // { [clientId]: { stats, history, lastSync, connStatus, pushedAt } }
 const store = {};
 
 // Trigger queue: clientId → [{ trigger, queuedAt }]
 const triggerQueue = {};
+
+// Persist store payload to MongoDB AgentStatus collection
+async function persistStoreToDb(clientId, payload) {
+  try {
+    const AgentStatus = getAgentStatusModel();
+    await AgentStatus.findOneAndUpdate(
+      { clientId },
+      { $set: { clientId, payload, updatedAt: new Date() } },
+      { upsert: true }
+    );
+  } catch(e) {
+    console.error('[Store] DB persist failed:', e.message);
+  }
+}
+
+// Load store entry from MongoDB (called when in-memory miss occurs)
+async function loadStoreFromDb(clientId) {
+  try {
+    const AgentStatus = getAgentStatusModel();
+    const doc = await AgentStatus.findOne({ clientId }).lean();
+    if (doc?.payload) {
+      store[clientId] = doc.payload;
+      return doc.payload;
+    }
+  } catch(e) {
+    console.error('[Store] DB load failed:', e.message);
+  }
+  return null;
+}
+
+// Lazy-load AgentStatus model (avoids circular require issues)
+function getAgentStatusModel() {
+  try {
+    return require('mongoose').model('AgentStatus');
+  } catch {
+    const mongoose = require('mongoose');
+    const schema = new mongoose.Schema({
+      clientId:  { type: String, index: true, unique: true },
+      payload:   { type: mongoose.Schema.Types.Mixed },
+      updatedAt: { type: Date, default: Date.now },
+    });
+    return mongoose.model('AgentStatus', schema);
+  }
+}
 
 // GET /dashboard/info — resolve clientId from member_id or domain
 // (kept for legacy redirect support)
@@ -120,6 +164,9 @@ router.post('/push', async (req, res) => {
   store[clientId] = payload;
   console.log('[PUSH STORED] Stored under clientId:', clientId);
 
+  // Persist to MongoDB so store survives Render restarts
+  persistStoreToDb(clientId, payload);
+
   // Resolve the canonical OAuthToken clientId (bx-{memberId}) for this portal.
   // Agent may push under a raw bitrixDomain string (e.g. "world.bitrix24.com") while
   // canonical clientId is still being resolved — handle that case explicitly.
@@ -145,21 +192,25 @@ router.post('/push', async (req, res) => {
       // Store under canonical memberId-based clientId (the one dashboard uses after OAuth login)
       if (canonicalId && canonicalId !== clientId) {
         store[canonicalId] = { ...payload };
+        persistStoreToDb(canonicalId, { ...payload });
         console.log(`[Dashboard] Cross-stored push: ${clientId} → canonical: ${canonicalId}`);
       }
       // Store under MongoDB _id (used by marketplace app iframe after login)
       if (mongoId && mongoId !== clientId) {
         store[mongoId] = { ...payload };
+        persistStoreToDb(mongoId, { ...payload });
         console.log(`[Dashboard] Cross-stored push: ${clientId} → mongoId: ${mongoId}`);
       }
       // Store under raw domain string (agent pushes under domain while clientId resolving)
       if (tokenDomain && tokenDomain !== clientId) {
         store[tokenDomain] = { ...payload };
+        persistStoreToDb(tokenDomain, { ...payload });
         console.log(`[Dashboard] Cross-stored push: ${clientId} → domain key: ${tokenDomain}`);
       }
       // Store under customerEmail as additional fallback key
       if (tokenEmail && tokenEmail !== clientId) {
         store[tokenEmail] = { ...payload };
+        persistStoreToDb(tokenEmail, { ...payload });
         console.log(`[Dashboard] Cross-stored push: ${clientId} → email key: ${tokenEmail}`);
       }
       // Store under customerEmail so /dashboard/data can find data even when clientId varies
@@ -207,7 +258,11 @@ router.get('/data', async (req, res) => {
   console.log('[DATA REQUEST] Direct hit:', !!store[clientId]);
   console.log('[DATA DIAG] clientId bx-format?', /^bx-/.test(clientId), '| mongoId format?', /^[a-f0-9]{24}$/i.test(clientId), '| domain format?', clientId.includes('.'));
 
-  const data = store[clientId];
+  // Try in-memory first; if miss (after Render restart), load from MongoDB
+  let data = store[clientId];
+  if (!data) {
+    data = await loadStoreFromDb(clientId);
+  }
 
   // Helper: determine agentLive from persisted timestamp
   function isAgentLiveFromDb(token) {
