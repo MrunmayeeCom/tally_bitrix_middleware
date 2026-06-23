@@ -4,6 +4,14 @@ const fs = require('fs');
 const { exec, spawn } = require('child_process');
 const logger = (() => { try { return require('../src/utils/logger'); } catch { return console; } })();
 
+// In packaged app, src/ lives at resources/middleware/src — not ../src
+// This helper resolves the correct path for both dev and packaged modes
+function srcRequire(modulePath) {
+  if (app.isPackaged) {
+    return require(path.join(process.resourcesPath, 'middleware', modulePath));
+  }
+  return require(path.join(__dirname, '..', modulePath));
+}
 let mainWindow = null;
 let tray = null;
 let serviceRunning = false;
@@ -135,7 +143,7 @@ function spawnServer(cfg) {
   const scriptPath = getServiceScript();
 
   // Load license features — use module-level cache vars first, then disk cache
-  // NOTE: require('../src/services/featureGate') may be a different instance in packaged app
+  // NOTE: srcRequire('src/services/featureGate') may be a different instance in packaged app
   // so we use _licenseFeatureCache/_licensePlanCache set by bootstrapLicense instead
   let licenseFeatures = '{}';
   let licensePlan = '';
@@ -327,7 +335,7 @@ function openSettings() {
 
 function startService() {
   try {
-    const { isLicenseActive } = require('../src/services/featureGate');
+    const { isLicenseActive } = srcRequire('src/services/featureGate');
     if (!isLicenseActive()) {
       dialog.showErrorBox('No Active License', 'Cannot start service — no active license found.\nPlease purchase or renew a license.');
       return;
@@ -480,8 +488,8 @@ ipcMain.handle('install-service', async (_, cfg) => {
   // Validate license and write cache BEFORE spawning, so child process
   // receives populated LICENSE_FEATURES / LICENSE_PLAN env vars
   try {
-    const { validateLicense, saveLicenseCache } = require('../src/services/lmsService');
-    const { setFeatures } = require('../src/services/featureGate');
+    const { validateLicense, saveLicenseCache } = srcRequire('src/services/lmsService');
+    const { setFeatures } = srcRequire('src/services/featureGate');
     const result = await validateLicense(savedCfg.customerEmail);
     if (result.valid) {
       setFeatures(result.features, result.plan, result.valid);
@@ -590,7 +598,7 @@ ipcMain.handle('get-status', async () => {
       // Include license cache so Electron dashboard has same data as Bitrix dashboard
       let license = null;
       try {
-        const { loadLicenseCache } = require('../src/services/lmsService');
+        const { loadLicenseCache } = srcRequire('src/services/lmsService');
         const cache = loadLicenseCache();
         if (cache) {
           license = {
@@ -668,7 +676,7 @@ ipcMain.handle('get-logs', async () => {
 
 ipcMain.handle('start-service', async () => {
   try {
-    const { isLicenseActive } = require('../src/services/featureGate');
+    const { isLicenseActive } = srcRequire('src/services/featureGate');
     if (!isLicenseActive()) {
       return { success: false, error: 'No active license — cannot start service' };
     }
@@ -759,7 +767,7 @@ ipcMain.handle('switch-company', async (_, company) => {
 
 ipcMain.handle('update-company-usage', async (_, count) => {
   try {
-    const { updateCompanyUsage } = require('../src/services/lmsService');
+    const { updateCompanyUsage } = srcRequire('src/services/lmsService');
     await updateCompanyUsage(Number(count));
     return { success: true };
   } catch(e) {
@@ -779,7 +787,7 @@ ipcMain.handle('scan-tally-companies', async (_, cfg = {}) => {
     process.env.TALLY_HOST = String(host);
     process.env.TALLY_PORT = String(port);
 
-    const { getCompanyList } = require('../src/connectors/tallyConnector');
+    const { getCompanyList } = srcRequire('src/connectors/tallyConnector');
     const result = await getCompanyList();
 
     // Restore
@@ -848,7 +856,7 @@ async function handlePlanTransition(newResult) {
 
       // Sync corrected count to LMS
       try {
-        const { updateCompanyUsage } = require('../src/services/lmsService');
+        const { updateCompanyUsage } = srcRequire('src/services/lmsService');
         await updateCompanyUsage(trimmed.length);
       } catch(e) {
         logger.warn('[LMS] Company usage sync after plan transition failed: ' + e.message);
@@ -877,7 +885,7 @@ async function handlePlanTransition(newResult) {
 
     // Reset usage cache to match actual company count
     try {
-      const { saveUsageCache } = require('../src/services/lmsService');
+      const { saveUsageCache } = srcRequire('src/services/lmsService');
       saveUsageCache({ companyCount: Math.min(currentCompanies.length, newCompanyLimit) });
     } catch(e) {
       logger.warn('[LMS] Usage cache reset after plan transition failed: ' + e.message);
@@ -891,7 +899,7 @@ async function handlePlanTransition(newResult) {
 async function bootstrapLicense(cfg) {
   // ── Clear stale bundled cache on first run ──────────────────────────
   try {
-    const { loadLicenseCache, clearRegistryCache } = require('../src/services/lmsService');
+    const { loadLicenseCache, clearRegistryCache } = srcRequire('src/services/lmsService');
     const cache = loadLicenseCache();
     // If cached email doesn't match configured email → wipe cache
     if (cache && cache.customerEmail && cfg.customerEmail &&
@@ -902,7 +910,7 @@ async function bootstrapLicense(cfg) {
     // Immediately apply cached license so dashboard shows correct plan
     // even before network validation completes
     if (cache && cache.valid && cache.features) {
-      const { setFeatures } = require('../src/services/featureGate');
+      const { setFeatures } = srcRequire('src/services/featureGate');
       setFeatures(cache.features, cache.plan, cache.valid);
       _licensePlan = cache.plan || 'Cached';
       logger.info('[LMS] Applied cached license on startup — plan: ' + _licensePlan);
@@ -913,8 +921,8 @@ async function bootstrapLicense(cfg) {
   // ───────────────────────────────────────────────────────────────────
 
   try {
-    const { validateLicense, startHeartbeat, startRevalidation } = require('../src/services/lmsService');
-    const { setFeatures, applyStarterFallback, getPlan } = require('../src/services/featureGate');
+    const { validateLicense, startHeartbeat, startRevalidation } = srcRequire('src/services/lmsService');
+    const { setFeatures, applyStarterFallback, getPlan } = srcRequire('src/services/featureGate');
 
     const result = await validateLicense(cfg.customerEmail);
     _licenseValid = result.valid;
@@ -945,7 +953,7 @@ async function bootstrapLicense(cfg) {
 
       // Persist validated features to cache so spawnServer can read them from disk
       try {
-        const lms = require('../src/services/lmsService');
+        const lms = srcRequire('src/services/lmsService');
         // Guard: function may be named differently in this build
         const writeFn = lms.saveLicenseCache || lms.writeCache || lms.saveCache || null;
         if (typeof writeFn === 'function') {
@@ -986,7 +994,7 @@ async function bootstrapLicense(cfg) {
       // On startup: always read fresh config from disk — cfg param may be stale
       // if settings were saved and service restarted before bootstrapLicense ran
       try {
-        const { loadUsageCache, saveUsageCache, updateCompanyUsage } = require('../src/services/lmsService');
+        const { loadUsageCache, saveUsageCache, updateCompanyUsage } = srcRequire('src/services/lmsService');
         const freshCfg    = loadConfig() || cfg;           // always read from disk
         const companies   = getCompanies(freshCfg);
         const usageCache  = loadUsageCache();
@@ -1018,7 +1026,7 @@ async function bootstrapLicense(cfg) {
           userStoppedService = true; // prevents spawnServer auto-restart on exit
           if (serverProcess) { try { serverProcess.kill(); } catch {} serverProcess = null; }
           serviceRunning = false;
-          const { restartScheduler } = require('../src/scheduler');
+          const { restartScheduler } = srcRequire('src/scheduler');
           restartScheduler();
           dialog.showMessageBox(null, {
             type: 'warning', title: 'License Expired',
@@ -1042,7 +1050,7 @@ async function bootstrapLicense(cfg) {
           // Auto-enforce company limit — trim excess if new plan allows fewer
           await handlePlanTransition(newResult);
 
-          const { restartScheduler } = require('../src/scheduler');
+          const { restartScheduler } = srcRequire('src/scheduler');
           restartScheduler();
 
           dialog.showMessageBox(null, {
@@ -1086,7 +1094,7 @@ async function bootstrapLicense(cfg) {
   } catch(e) {
     logger.error('[Bootstrap] FATAL uncaught exception: ' + e.message + '\n' + e.stack);
     try {
-      const { applyStarterFallback } = require('../src/services/featureGate');
+      const { applyStarterFallback } = srcRequire('src/services/featureGate');
       applyStarterFallback(); // locks all features on unexpected error
     } catch(e2) {
       logger.error('[Bootstrap] applyStarterFallback also failed: ' + e2.message);
@@ -1103,7 +1111,7 @@ async function bootstrapLicense(cfg) {
 app.on('before-quit', () => {
   if (serverProcess) { try { serverProcess.kill(); } catch {} }
   try {
-    const { clearHeartbeatInterval } = require('../src/services/lmsService');
+    const { clearHeartbeatInterval } = srcRequire('src/services/lmsService');
     clearHeartbeatInterval();
   } catch {}
 });
@@ -1201,7 +1209,7 @@ async function pushStatusToRender() {
         stats: { total: 0, today: 0, failed: 0, runs: 0 },
       };
       try {
-        const { loadLicenseCache } = require('../src/services/lmsService');
+        const { loadLicenseCache } = srcRequire('src/services/lmsService');
         const cache = loadLicenseCache();
         if (cache) {
           minPayload.licenseStatus = cache.status  || (cache.valid ? 'active' : 'inactive');
@@ -1235,7 +1243,7 @@ async function pushStatusToRender() {
     let licensePlan   = statusRaw?.license?.plan   || '';
     try {
       if (!licenseStatus || !licensePlan) {
-        const { loadLicenseCache } = require('../src/services/lmsService');
+        const { loadLicenseCache } = srcRequire('src/services/lmsService');
         const cache = loadLicenseCache();
         if (cache) {
         licenseStatus = licenseStatus || cache.status || (cache.valid ? 'active' : 'inactive');
